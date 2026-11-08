@@ -1,13 +1,16 @@
 use rune::tok::{self, type_};
-use rune::{App, AppSpec, Color, Cx, El, Icon, NativeSurface, SurfaceFit, TextEdit, Tx, WindowOptions, col, el, icon, row, spacer, text, text_input};
+use rune::{App, AppSpec, Color, Cx, El, Icon, LiveText, NativeSurface, SurfaceFit, TextEdit, Tx, WindowOptions, col, el, icon, row, spacer, text, text_input};
 
 mod engine;
 
 use engine::Engine;
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 
 const BAR_H: f32 = 40.0;
 
 struct Tab {
+    id: u64,
     url: String,
     title: String,
 }
@@ -20,11 +23,17 @@ struct State {
     engine: Option<Engine>,
     surface: NativeSurface,
     last_size: Option<(u32, u32)>,
+    next_tab_id: u64,
+    /// The tab id the engine renders; shared with the frame reader.
+    active_id: Arc<AtomicU64>,
+    /// Live URL/title of the active tab (updated from the engine reader thread).
+    url_live: LiveText,
+    title_live: LiveText,
 }
 
 impl Default for Tab {
     fn default() -> Self {
-        Self { url: String::new(), title: "New Tab".into() }
+        Self { id: 0, url: String::new(), title: "New Tab".into() }
     }
 }
 
@@ -37,12 +46,22 @@ fn state() -> State {
         engine: None,
         surface: NativeSurface::new(),
         last_size: None,
+        next_tab_id: 1,
+        active_id: Arc::new(AtomicU64::new(0)),
+        url_live: LiveText::new(""),
+        title_live: LiveText::new("New Tab"),
     }
 }
 
 fn setup(s: &mut State, wake: rune::Waker) {
     s.surface.set_waker(wake.clone());
-    match Engine::start(s.surface.clone(), wake) {
+    match Engine::start(
+        s.surface.clone(),
+        wake,
+        s.url_live.clone(),
+        s.title_live.clone(),
+        s.active_id.clone(),
+    ) {
         Ok(e) => s.engine = Some(e),
         Err(err) => eprintln!("chrome: engine failed to start: {err}"),
     }
@@ -69,13 +88,11 @@ static ICON_ELLIPSIS: Icon = Icon {
     body: r#"<circle cx="3.6" cy="8" r="1.1" fill="currentColor"/><circle cx="8" cy="8" r="1.1" fill="currentColor"/><circle cx="12.4" cy="8" r="1.1" fill="currentColor"/>"#,
 };
 
-fn icon_btn(id: &'static str, ic: &'static Icon, action: Option<fn(&mut State)>) -> El {
+fn icon_btn(id: &'static str, ic: &'static Icon, action: Option<impl Fn(&mut State) + 'static>) -> El {
     let t = tok::theme(true);
     let e = el().key(id).size(28.0, 28.0).radius(14.0).center_y().child(icon(ic, 16.0));
     if let Some(action) = action {
-        e.fill(Color::TRANSPARENT).hover(t.hover).on_press(move |s: &mut State| {
-            action(s);
-        })
+        e.fill(Color::TRANSPARENT).hover(t.hover).on_press(action)
     } else {
         e.layer_opacity(0.35)
     }
@@ -98,15 +115,27 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         .child(dot("br-min", Color { r: 1.0, g: 0.74, b: 0.18, a: 1.0 }))
         .child(dot("br-max", Color { r: 0.16, g: 0.79, b: 0.25, a: 1.0 }));
 
-    let tab = &s.tabs[s.active];
+    let active_id = s.tabs[s.active].id;
+    // Address pill: shows the page's live URL; click to edit.
     let pill = row().key("address-pill").w(420.0).h(28.0).px(12.0).radius(14.0).center_y()
         .fill(t.card)
-        .child(
+        .on_press(|s: &mut State| {
+            s.editing = true;
+            s.address = TextEdit::new("");
+        })
+        .child(if s.editing {
             text_input(&s.address, type_::BODY.lh(20.0)).key("address").single_line().grow(1.0)
                 .color(t.text)
                 .placeholder("Search or enter website name", t.text_secondary)
                 .on_edit(|s: &mut State| &mut s.address)
                 .on_input_change(|s: &mut State, _| s.editing = true)
+                .on_input_key(|s: &mut State, ev: &rune::KeyEvent, _tx: &mut Tx| {
+                    if ev.key == rune::Key::Escape {
+                        s.editing = false;
+                        return true;
+                    }
+                    false
+                })
                 .on_submit(|s: &mut State, _tx: &mut Tx| {
                     let raw = s.address.text.trim().to_string();
                     if raw.is_empty() { return; }
@@ -117,6 +146,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                     } else {
                         format!("https://duckduckgo.com/?q={raw}")
                     };
+                    let tab_id = s.tabs[s.active].id;
                     let tab = &mut s.tabs[s.active];
                     tab.url = url.clone();
                     tab.title = url
@@ -126,38 +156,77 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                     s.address = TextEdit::new("");
                     s.editing = false;
                     if let Some(engine) = &mut s.engine {
-                        engine.navigate(&url);
+                        engine.navigate(&url, tab_id);
                     }
-                }),
-        );
+                })
+        } else {
+            text(" ").live_text(&s.url_live).grow(1.0)
+                .font(tok::type_::BODY.lh(20.0)).color(t.text)
+        });
 
-    let tab_pill = el().key("tab").h(28.0).px(12.0).radius(14.0).center_y()
-        .fill(t.card)
-        .child(text(tab.title.clone()).font(type_::BODY.lh(20.0)).color(t.text_secondary).truncate());
+    // Tab pills: the active one shows the engine-reported title.
+    let tabs_row = {
+        let mut r = row().gap(6.0).center_y();
+        for (i, tab) in s.tabs.iter().enumerate() {
+            let is_active = i == s.active;
+            let label: El = if is_active {
+                text(" ").live_text(&s.title_live).font(tok::type_::BODY.lh(20.0))
+                    .color(t.text)
+            } else {
+                text(tab.title.clone()).font(tok::type_::BODY.lh(20.0))
+                    .color(t.text_secondary).truncate()
+            };
+            r = r.child(
+                el().key("tab").h(28.0).px(12.0).radius(14.0).center_y()
+                    .fill(if is_active { t.hover } else { t.card })
+                    .child(label)
+                    .on_press(move |s: &mut State| {
+                        if s.active != i {
+                            s.active = i;
+                            s.editing = false;
+                            let id = s.tabs[i].id;
+                            s.active_id.store(id, std::sync::atomic::Ordering::SeqCst);
+                            if let Some(engine) = &mut s.engine {
+                                engine.activate(id);
+                            }
+                        }
+                    }),
+            );
+        }
+        r
+    };
 
     let bar = row().key("bar").h(BAR_H).w_full().px(14.0).gap(10.0).center_y()
         .window_drag()
         .child(controls)
         .child(spacer())
-        .child(icon_btn("br-back", &ICON_BACK, Some(|s: &mut State| {
+        .child(icon_btn("br-back", &ICON_BACK, Some(move |s: &mut State| {
             if let Some(e) = &mut s.engine {
-                e.back();
+                e.back(active_id);
             }
         })))
-        .child(icon_btn("br-fwd", &ICON_FWD, Some(|s: &mut State| {
+        .child(icon_btn("br-fwd", &ICON_FWD, Some(move |s: &mut State| {
             if let Some(e) = &mut s.engine {
-                e.forward();
+                e.forward(active_id);
             }
         })))
         .child(pill)
-        .child(tab_pill)
+        .child(tabs_row)
         .child(icon_btn("br-plus", &ICON_PLUS, Some(|s: &mut State| {
-            s.tabs.push(Tab::default());
+            let id = s.next_tab_id;
+            s.next_tab_id += 1;
+            let tab_id = id; // engine tab id == chrome tab id
+            s.tabs.push(Tab { id, url: String::new(), title: "New Tab".into() });
             s.active = s.tabs.len() - 1;
             s.address = TextEdit::new("");
             s.editing = true;
+            s.active_id.store(tab_id, std::sync::atomic::Ordering::SeqCst);
+            if let Some(engine) = &mut s.engine {
+                engine.new_tab(tab_id);
+                engine.activate(tab_id);
+            }
         })))
-        .child(icon_btn("br-menu", &ICON_ELLIPSIS, None))
+        .child(icon_btn("br-menu", &ICON_ELLIPSIS, None::<fn(&mut State)>))
         .child(spacer())
         .child(el().w(78.0));
 
