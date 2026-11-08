@@ -1,10 +1,9 @@
 use rune::tok::{self, type_};
-use rune::{App, AppSpec, Color, Cx, El, Icon, LiveText, NativeSurface, SurfaceFit, TextEdit, Tx, WindowOptions, col, el, icon, row, spacer, text, text_input};
+use rune::{App, AppSpec, Color, Cx, El, Icon, NativeSurface, SurfaceFit, TextEdit, Tx, WindowOptions, col, el, icon, row, spacer, text, text_input};
 
 mod engine;
 
-use engine::Engine;
-use std::sync::atomic::AtomicU64;
+use engine::{Engine, Ui};
 use std::sync::Arc;
 
 const BAR_H: f32 = 40.0;
@@ -24,11 +23,8 @@ struct State {
     surface: NativeSurface,
     last_size: Option<(u32, u32)>,
     next_tab_id: u64,
-    /// The tab id the engine renders; shared with the frame reader.
-    active_id: Arc<AtomicU64>,
-    /// Live URL/title of the active tab (updated from the engine reader thread).
-    url_live: LiveText,
-    title_live: LiveText,
+    /// Engine-reported UI state shared with the frame reader thread.
+    ui: Arc<Ui>,
 }
 
 impl Default for Tab {
@@ -47,21 +43,13 @@ fn state() -> State {
         surface: NativeSurface::new(),
         last_size: None,
         next_tab_id: 1,
-        active_id: Arc::new(AtomicU64::new(0)),
-        url_live: LiveText::new(""),
-        title_live: LiveText::new("New Tab"),
+        ui: Ui::new(0),
     }
 }
 
 fn setup(s: &mut State, wake: rune::Waker) {
     s.surface.set_waker(wake.clone());
-    match Engine::start(
-        s.surface.clone(),
-        wake,
-        s.url_live.clone(),
-        s.title_live.clone(),
-        s.active_id.clone(),
-    ) {
+    match Engine::start(s.surface.clone(), wake, s.ui.clone()) {
         Ok(e) => s.engine = Some(e),
         Err(err) => eprintln!("chrome: engine failed to start: {err}"),
     }
@@ -87,14 +75,18 @@ static ICON_ELLIPSIS: Icon = Icon {
     view: 16.0,
     body: r#"<circle cx="3.6" cy="8" r="1.1" fill="currentColor"/><circle cx="8" cy="8" r="1.1" fill="currentColor"/><circle cx="12.4" cy="8" r="1.1" fill="currentColor"/>"#,
 };
+static ICON_CLOSE: Icon = Icon {
+    name: "br-tab-close",
+    view: 16.0,
+    body: r#"<path d="M5 5L11 11M11 5L5 11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/>"#,
+};
 
-fn icon_btn(id: &'static str, ic: &'static Icon, action: Option<impl Fn(&mut State) + 'static>) -> El {
+fn icon_btn(id: &'static str, ic: &'static Icon, enabled: bool, action: Option<impl Fn(&mut State) + 'static>) -> El {
     let t = tok::theme(true);
     let e = el().key(id).size(28.0, 28.0).radius(14.0).center_y().child(icon(ic, 16.0));
-    if let Some(action) = action {
-        e.fill(Color::TRANSPARENT).hover(t.hover).on_press(action)
-    } else {
-        e.layer_opacity(0.35)
+    match (enabled, action) {
+        (true, Some(action)) => e.fill(Color::TRANSPARENT).hover(t.hover).on_press(action),
+        _ => e.layer_opacity(0.35),
     }
 }
 
@@ -116,12 +108,17 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         .child(dot("br-max", Color { r: 0.16, g: 0.79, b: 0.25, a: 1.0 }));
 
     let active_id = s.tabs[s.active].id;
+    let shown_url = s.ui.url(active_id).unwrap_or_else(|| s.tabs[s.active].url.clone());
+    let (back_ok, fwd_ok) = s.ui.history(active_id).unwrap_or((false, false));
+
     // Address pill: shows the page's live URL; click to edit.
     let pill = row().key("address-pill").w(420.0).h(28.0).px(12.0).radius(14.0).center_y()
         .fill(t.card)
         .on_press(|s: &mut State| {
-            s.editing = true;
-            s.address = TextEdit::new("");
+            if !s.editing {
+                s.editing = true;
+                s.address = TextEdit::new("");
+            }
         })
         .child(if s.editing {
             text_input(&s.address, type_::BODY.lh(20.0)).key("address").single_line().grow(1.0)
@@ -160,38 +157,74 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                     }
                 })
         } else {
-            text(" ").live_text(&s.url_live).grow(1.0)
-                .font(tok::type_::BODY.lh(20.0)).color(t.text)
+            let placeholder = shown_url.is_empty();
+            text(if placeholder { "Search or enter website name".to_string() } else { shown_url })
+                .grow(1.0)
+                .font(type_::BODY.lh(20.0))
+                .color(if placeholder { t.text_secondary } else { t.text })
         });
 
-    // Tab pills: the active one shows the engine-reported title.
+    // Tab pills: titles come from engine events; an x closes each tab.
     let tabs_row = {
         let mut r = row().gap(6.0).center_y();
         for (i, tab) in s.tabs.iter().enumerate() {
             let is_active = i == s.active;
-            let label: El = if is_active {
-                text(" ").live_text(&s.title_live).font(tok::type_::BODY.lh(20.0))
-                    .color(t.text)
+            let title = if is_active {
+                s.ui.title(tab.id).unwrap_or_else(|| tab.title.clone())
             } else {
-                text(tab.title.clone()).font(tok::type_::BODY.lh(20.0))
-                    .color(t.text_secondary).truncate()
+                s.ui.title(tab.id).unwrap_or_else(|| tab.title.clone())
             };
-            r = r.child(
-                el().key("tab").h(28.0).px(12.0).radius(14.0).center_y()
-                    .fill(if is_active { t.hover } else { t.card })
-                    .child(label)
-                    .on_press(move |s: &mut State| {
-                        if s.active != i {
-                            s.active = i;
-                            s.editing = false;
-                            let id = s.tabs[i].id;
-                            s.active_id.store(id, std::sync::atomic::Ordering::SeqCst);
-                            if let Some(engine) = &mut s.engine {
-                                engine.activate(id);
-                            }
+            let label_color = if is_active { t.text } else { t.text_secondary };
+            let mut pill_el = el().key("tab").h(28.0).px(12.0).radius(14.0).center_y()
+                .fill(if is_active { t.hover } else { t.card })
+                .child(text(title).font(type_::BODY.lh(20.0)).color(label_color))
+                .on_press(move |s: &mut State| {
+                    if s.active != i {
+                        s.active = i;
+                        s.editing = false;
+                        let id = s.tabs[i].id;
+                        s.ui.active.store(id, std::sync::atomic::Ordering::SeqCst);
+                        if let Some(engine) = &mut s.engine {
+                            engine.activate(id);
                         }
-                    }),
-            );
+                    }
+                });
+            if s.tabs.len() > 1 {
+                pill_el = pill_el.child(
+                    el().key("tab-close").size(14.0, 14.0).center_y()
+                        .child(icon(&ICON_CLOSE, 10.0))
+                        .on_press(move |s: &mut State| {
+                            let closed_id = s.tabs[i].id;
+                            s.tabs.remove(i);
+                            if s.tabs.is_empty() {
+                                // Last tab closed: start a fresh one.
+                                let id = s.next_tab_id;
+                                s.next_tab_id += 1;
+                                s.tabs.push(Tab { id, url: String::new(), title: "New Tab".into() });
+                                s.active = 0;
+                                s.address = TextEdit::new("");
+                                s.editing = true;
+                                s.ui.active.store(id, std::sync::atomic::Ordering::SeqCst);
+                                if let Some(engine) = &mut s.engine {
+                                    engine.close_tab(closed_id);
+                                    engine.new_tab(id);
+                                    engine.activate(id);
+                                }
+                            } else {
+                                if s.active >= s.tabs.len() {
+                                    s.active = s.tabs.len() - 1;
+                                }
+                                let new_active = s.tabs[s.active].id;
+                                s.ui.active.store(new_active, std::sync::atomic::Ordering::SeqCst);
+                                if let Some(engine) = &mut s.engine {
+                                    engine.close_tab(closed_id);
+                                    engine.activate(new_active);
+                                }
+                            }
+                        }),
+                );
+            }
+            r = r.child(pill_el);
         }
         r
     };
@@ -200,19 +233,19 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         .window_drag()
         .child(controls)
         .child(spacer())
-        .child(icon_btn("br-back", &ICON_BACK, Some(move |s: &mut State| {
+        .child(icon_btn("br-back", &ICON_BACK, back_ok, Some(move |s: &mut State| {
             if let Some(e) = &mut s.engine {
                 e.back(active_id);
             }
         })))
-        .child(icon_btn("br-fwd", &ICON_FWD, Some(move |s: &mut State| {
+        .child(icon_btn("br-fwd", &ICON_FWD, fwd_ok, Some(move |s: &mut State| {
             if let Some(e) = &mut s.engine {
                 e.forward(active_id);
             }
         })))
         .child(pill)
         .child(tabs_row)
-        .child(icon_btn("br-plus", &ICON_PLUS, Some(|s: &mut State| {
+        .child(icon_btn("br-plus", &ICON_PLUS, true, Some(|s: &mut State| {
             let id = s.next_tab_id;
             s.next_tab_id += 1;
             let tab_id = id; // engine tab id == chrome tab id
@@ -220,13 +253,13 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             s.active = s.tabs.len() - 1;
             s.address = TextEdit::new("");
             s.editing = true;
-            s.active_id.store(tab_id, std::sync::atomic::Ordering::SeqCst);
+            s.ui.active.store(tab_id, std::sync::atomic::Ordering::SeqCst);
             if let Some(engine) = &mut s.engine {
                 engine.new_tab(tab_id);
                 engine.activate(tab_id);
             }
         })))
-        .child(icon_btn("br-menu", &ICON_ELLIPSIS, None::<fn(&mut State)>))
+        .child(icon_btn("br-menu", &ICON_ELLIPSIS, false, None::<fn(&mut State)>))
         .child(spacer())
         .child(el().w(78.0));
 

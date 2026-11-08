@@ -1,17 +1,53 @@
 //! Engine client for the chrome: spawns the engine process, sends commands,
-//! receives frames (pushed into a Rune NativeSurface) and events (url/title,
-//! routed into LiveTexts for the pill and tab title).
+//! receives frames (pushed into a Rune NativeSurface) and events (url/title/
+//! history, stored in a shared Ui map the view reads).
+use std::collections::HashMap;
 use std::io::{BufReader, Read, Write};
 use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use rune::{LiveText, NativeSurface, Waker};
+use rune::{NativeSurface, Waker};
 
 const PORT: u16 = 7411;
 const MAGIC: u32 = 0x46_52_4D_31; // FRM1
 const EV_MAGIC: u32 = 0x45_56_54_31; // EVT1
+
+/// Engine-reported UI state, shared between the reader thread and the view.
+pub struct Ui {
+    /// Which tab the chrome renders (the engine paints this one).
+    pub active: AtomicU64,
+    /// Last reported URL per tab id.
+    pub urls: Mutex<HashMap<u64, String>>,
+    /// Last reported title per tab id.
+    pub titles: Mutex<HashMap<u64, String>>,
+    /// (can_go_back, can_go_forward) per tab id.
+    pub history: Mutex<HashMap<u64, (bool, bool)>>,
+}
+
+impl Ui {
+    pub fn new(active: u64) -> Arc<Ui> {
+        Arc::new(Ui {
+            active: AtomicU64::new(active),
+            urls: Mutex::new(HashMap::new()),
+            titles: Mutex::new(HashMap::new()),
+            history: Mutex::new(HashMap::new()),
+        })
+    }
+
+    pub fn url(&self, tab: u64) -> Option<String> {
+        self.urls.lock().unwrap().get(&tab).cloned()
+    }
+
+    pub fn title(&self, tab: u64) -> Option<String> {
+        self.titles.lock().unwrap().get(&tab).cloned()
+    }
+
+    pub fn history(&self, tab: u64) -> Option<(bool, bool)> {
+        self.history.lock().unwrap().get(&tab).copied()
+    }
+}
 
 pub struct Engine {
     stream: TcpStream,
@@ -21,13 +57,7 @@ pub struct Engine {
 
 impl Engine {
     /// Spawn the engine sibling process and start the frame reader.
-    pub fn start(
-        surface: NativeSurface,
-        waker: Waker,
-        url_live: LiveText,
-        title_live: LiveText,
-        active_tab: Arc<AtomicU64>,
-    ) -> std::io::Result<Engine> {
+    pub fn start(surface: NativeSurface, waker: Waker, ui: Arc<Ui>) -> std::io::Result<Engine> {
         let exe = std::env::var("BROWSERR_ENGINE")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| {
@@ -58,9 +88,7 @@ impl Engine {
         let stream = stream.expect("engine: could not connect");
 
         let reader_stream = stream.try_clone()?;
-        let reader = std::thread::spawn(move || {
-            read_frames(reader_stream, surface, waker, url_live, title_live, active_tab)
-        });
+        let reader = std::thread::spawn(move || read_frames(reader_stream, surface, waker, ui));
 
         Ok(Engine { stream, _child: child, _reader: Some(reader) })
     }
@@ -95,16 +123,13 @@ impl Engine {
     pub fn activate(&mut self, tab: u64) {
         self.send(&format!("{{\"cmd\":\"activate\",\"tab\":{tab}}}"));
     }
+
+    pub fn close_tab(&mut self, tab: u64) {
+        self.send(&format!("{{\"cmd\":\"close_tab\",\"tab\":{tab}}}"));
+    }
 }
 
-fn read_frames(
-    stream: TcpStream,
-    surface: NativeSurface,
-    waker: Waker,
-    url_live: LiveText,
-    title_live: LiveText,
-    active_tab: Arc<AtomicU64>,
-) {
+fn read_frames(stream: TcpStream, surface: NativeSurface, waker: Waker, ui: Arc<Ui>) {
     let mut reader = BufReader::new(stream);
     let counter = AtomicU64::new(1);
     let mut header = [0u8; 20];
@@ -158,20 +183,23 @@ fn read_frames(
                     continue;
                 };
                 let tab = v["tab"].as_u64().unwrap_or(0);
-                if tab == active_tab.load(Ordering::SeqCst) {
-                    match v["ev"].as_str() {
-                        Some("url") => {
-                            if let Some(u) = v["url"].as_str() {
-                                url_live.set(u);
-                            }
+                match v["ev"].as_str() {
+                    Some("url") => {
+                        if let Some(u) = v["url"].as_str() {
+                            ui.urls.lock().unwrap().insert(tab, u.to_string());
                         }
-                        Some("title") => {
-                            if let Some(t) = v["title"].as_str() {
-                                title_live.set(t);
-                            }
-                        }
-                        _ => {}
                     }
+                    Some("title") => {
+                        if let Some(t) = v["title"].as_str() {
+                            ui.titles.lock().unwrap().insert(tab, t.to_string());
+                        }
+                    }
+                    Some("history") => {
+                        let back = v["back"].as_bool().unwrap_or(false);
+                        let forward = v["forward"].as_bool().unwrap_or(false);
+                        ui.history.lock().unwrap().insert(tab, (back, forward));
+                    }
+                    _ => {}
                 }
             }
             _ => {

@@ -63,6 +63,7 @@ struct Update {
     tab: u64,
     url: Option<String>,
     title: Option<String>,
+    history: Option<(bool, bool)>,
 }
 
 struct Shared {
@@ -96,6 +97,7 @@ impl servo::WebViewDelegate for FrameDelegate {
             tab: self.tab,
             url: Some(url.to_string()),
             title: None,
+            history: None,
         });
         self.shared.pump.kick();
     }
@@ -112,6 +114,19 @@ impl servo::WebViewDelegate for FrameDelegate {
             tab: self.tab,
             url: None,
             title,
+            history: None,
+        });
+        self.shared.pump.kick();
+    }
+
+    fn notify_history_changed(&self, _webview: servo::WebView, entries: Vec<url::Url>, current: usize) {
+        let back = current > 0;
+        let forward = current + 1 < entries.len();
+        self.shared.updates.lock().unwrap().push(Update {
+            tab: self.tab,
+            url: None,
+            title: None,
+            history: Some((back, forward)),
         });
         self.shared.pump.kick();
     }
@@ -126,6 +141,7 @@ struct Tab {
     pending_retries: u32,
     last_url: Option<String>,
     last_title: Option<String>,
+    last_history: Option<(bool, bool)>,
 }
 
 fn make_context(size: dpi::PhysicalSize<u32>) -> Option<std::rc::Rc<dyn RenderingContext>> {
@@ -202,6 +218,7 @@ fn main() {
             pending_retries: 0,
             last_url: None,
             last_title: None,
+            last_history: None,
         })
     };
 
@@ -312,6 +329,14 @@ fn main() {
                                         &format!("{{\"ev\":\"title\",\"tab\":{tab_id},\"title\":\"{esc}\"}}"),
                                     );
                                 }
+                                if let Some((b, f)) = tab.last_history {
+                                    event_id += 1;
+                                    send_event(
+                                        &mut out,
+                                        event_id,
+                                        &format!("{{\"ev\":\"history\",\"tab\":{tab_id},\"back\":{b},\"forward\":{f}}}"),
+                                    );
+                                }
                                 shared.frame_ready.store(true, Ordering::SeqCst);
                             }
                             Some("close_tab") => {
@@ -416,6 +441,9 @@ fn main() {
                     if let Some(title) = &u.title {
                         t.last_title = Some(title.clone());
                     }
+                    if let Some(h) = &u.history {
+                        t.last_history = Some(*h);
+                    }
                 }
                 event_id += 1;
                 if let Some(url) = &u.url {
@@ -431,6 +459,13 @@ fn main() {
                         &mut out,
                         event_id,
                         &format!("{{\"ev\":\"title\",\"tab\":{},\"title\":\"{esc}\"}}", u.tab),
+                    );
+                }
+                if let Some((b, f)) = &u.history {
+                    send_event(
+                        &mut out,
+                        event_id,
+                        &format!("{{\"ev\":\"history\",\"tab\":{},\"back\":{},\"forward\":{}}}", u.tab, b, f),
                     );
                 }
             }
