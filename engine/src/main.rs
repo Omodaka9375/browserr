@@ -126,6 +126,7 @@ fn main() {
     let mut current_size = dpi::PhysicalSize::new(1200u32, 760u32);
     let mut frame_id: u64 = 0;
     let mut last_hash: u64 = 0;
+    let mut last_push: Option<std::time::Instant> = None;
     // URL requested by the chrome but not yet acked by notify_url_changed: a LoadUrl
     // sent before the browsing context exists is dropped, so retry until acked.
     let mut pending_url: Option<url::Url> = None;
@@ -213,6 +214,15 @@ fn main() {
         }
 
         if frame_ready.swap(false, Ordering::SeqCst) {
+            // Cap animated pages at ~30fps: beyond that we drop intermediate
+            // frames (latest-wins on the chrome side) to bound IPC traffic.
+            if let Some(elapsed) = last_push {
+                if elapsed.elapsed() < std::time::Duration::from_millis(33) {
+                    frame_ready.store(true, Ordering::SeqCst);
+                    pump.wait(std::time::Duration::from_millis(4));
+                    continue;
+                }
+            }
             let t0 = std::time::Instant::now();
             // Composite the page into the rendering context; without this the
             // context surface stays blank and read_to_image returns white.
@@ -241,6 +251,7 @@ fn main() {
                 let hash = hasher.finish();
                 if hash != last_hash || bgra.is_empty() {
                     last_hash = hash;
+                    last_push = Some(std::time::Instant::now());
                     eprintln!(
                         "engine: frame {}x{} paint={:?} total={:?}",
                         current_size.width,
