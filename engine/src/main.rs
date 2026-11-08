@@ -112,6 +112,7 @@ fn main() {
     let mut out = std::io::BufWriter::new(out);
     let mut current_size = dpi::PhysicalSize::new(1200u32, 760u32);
     let mut frame_id: u64 = 0;
+    let mut last_hash: u64 = 0;
     // URL requested by the chrome but not yet acked by notify_url_changed: a LoadUrl
     // sent before the browsing context exists is dropped, so retry until acked.
     let mut pending_url: Option<url::Url> = None;
@@ -214,18 +215,27 @@ fn main() {
                 ),
             );
             if let Some(image) = rendering_context.read_to_image(rect) {
-                eprintln!("engine: read {}x{} frame", image.width(), image.height());
                 let mut bgra = image.into_raw();
                 for px in bgra.chunks_exact_mut(4) {
                     px.swap(0, 2);
                 }
-                frame_id += 1;
-                out.write_all(&MAGIC.to_le_bytes()).ok();
-                out.write_all(&frame_id.to_le_bytes()).ok();
-                out.write_all(&current_size.width.to_le_bytes()).ok();
-                out.write_all(&current_size.height.to_le_bytes()).ok();
-                out.write_all(&bgra).ok();
-                let _ = out.flush();
+                // Skip identical frames: Servo re-renders even when nothing
+                // changed, and each push forces a full chrome redraw.
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                use std::hash::Hasher;
+                hasher.write(&bgra);
+                let hash = hasher.finish();
+                if hash != last_hash || bgra.is_empty() {
+                    last_hash = hash;
+                    eprintln!("engine: read {}x{} frame", current_size.width, current_size.height);
+                    frame_id += 1;
+                    out.write_all(&MAGIC.to_le_bytes()).ok();
+                    out.write_all(&frame_id.to_le_bytes()).ok();
+                    out.write_all(&current_size.width.to_le_bytes()).ok();
+                    out.write_all(&current_size.height.to_le_bytes()).ok();
+                    out.write_all(&bgra).ok();
+                    let _ = out.flush();
+                }
             }
         }
 
