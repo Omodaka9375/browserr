@@ -69,15 +69,12 @@ static ICON_ELLIPSIS: Icon = Icon {
     body: r#"<circle cx="3.6" cy="8" r="1.1" fill="currentColor"/><circle cx="8" cy="8" r="1.1" fill="currentColor"/><circle cx="12.4" cy="8" r="1.1" fill="currentColor"/>"#,
 };
 
-fn icon_btn(id: &'static str, ic: &'static Icon, enabled: bool) -> El {
+fn icon_btn(id: &'static str, ic: &'static Icon, action: Option<fn(&mut State)>) -> El {
     let t = tok::theme(true);
     let e = el().key(id).size(28.0, 28.0).radius(14.0).center_y().child(icon(ic, 16.0));
-    if enabled {
-        e.fill(Color::TRANSPARENT).hover(t.hover).on_press(|s: &mut State| {
-            s.tabs.push(Tab::default());
-            s.active = s.tabs.len() - 1;
-            s.address = TextEdit::new("");
-            s.editing = true;
+    if let Some(action) = action {
+        e.fill(Color::TRANSPARENT).hover(t.hover).on_press(move |s: &mut State| {
+            action(s);
         })
     } else {
         e.layer_opacity(0.35)
@@ -142,12 +139,25 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         .window_drag()
         .child(controls)
         .child(spacer())
-        .child(icon_btn("br-back", &ICON_BACK, false))
-        .child(icon_btn("br-fwd", &ICON_FWD, false))
+        .child(icon_btn("br-back", &ICON_BACK, Some(|s: &mut State| {
+            if let Some(e) = &mut s.engine {
+                e.back();
+            }
+        })))
+        .child(icon_btn("br-fwd", &ICON_FWD, Some(|s: &mut State| {
+            if let Some(e) = &mut s.engine {
+                e.forward();
+            }
+        })))
         .child(pill)
         .child(tab_pill)
-        .child(icon_btn("br-plus", &ICON_PLUS, true))
-        .child(icon_btn("br-menu", &ICON_ELLIPSIS, false))
+        .child(icon_btn("br-plus", &ICON_PLUS, Some(|s: &mut State| {
+            s.tabs.push(Tab::default());
+            s.active = s.tabs.len() - 1;
+            s.address = TextEdit::new("");
+            s.editing = true;
+        })))
+        .child(icon_btn("br-menu", &ICON_ELLIPSIS, None))
         .child(spacer())
         .child(el().w(78.0));
 

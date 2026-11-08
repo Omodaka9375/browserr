@@ -69,6 +69,14 @@ impl Engine {
     pub fn resize(&mut self, w: u32, h: u32) {
         self.send(&format!("{{\"cmd\":\"resize\",\"w\":{w},\"h\":{h}}}"));
     }
+
+    pub fn back(&mut self) {
+        self.send("{\"cmd\":\"back\"}");
+    }
+
+    pub fn forward(&mut self) {
+        self.send("{\"cmd\":\"forward\"}");
+    }
 }
 
 fn read_frames(stream: TcpStream, surface: NativeSurface, waker: Waker) {

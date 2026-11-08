@@ -130,6 +130,7 @@ fn main() {
     // URL requested by the chrome but not yet acked by notify_url_changed: a LoadUrl
     // sent before the browsing context exists is dropped, so retry until acked.
     let mut pending_url: Option<url::Url> = None;
+    let mut pending_sent = false;
     let mut tick: u64 = 0;
 
     // Watchdog: proves the main thread's state without a debugger.
@@ -173,6 +174,19 @@ fn main() {
                                 {
                                     eprintln!("engine: queue navigate {url}");
                                     pending_url = Some(url);
+                                    pending_sent = false;
+                                }
+                            }
+                            Some("back") => {
+                                if webview.can_go_back() {
+                                    eprintln!("engine: go back");
+                                    let _ = webview.go_back(1);
+                                }
+                            }
+                            Some("forward") => {
+                                if webview.can_go_forward() {
+                                    eprintln!("engine: go forward");
+                                    let _ = webview.go_forward(1);
                                 }
                             }
                             Some("resize") => {
@@ -197,16 +211,17 @@ fn main() {
         }
 
         if let Some(u) = pending_url.clone() {
-            let current = current_url.lock().unwrap().clone();
-            if current.is_none() {
-                // Webview may not exist yet: LoadUrl is dropped, so retry
-                // until Servo reports any URL at all.
+            let acked_ever = current_url.lock().unwrap().is_some();
+            if !pending_sent {
                 eprintln!("engine: load {u}");
                 webview.load(u);
-            } else {
-                // Load is in flight (redirects will report a different URL;
-                // re-loading here would restart the page forever).
+                pending_sent = true;
+            }
+            if acked_ever {
+                // Sent and acked (redirects report their own URLs; do not
+                // re-match or the page restarts forever).
                 pending_url = None;
+                pending_sent = false;
             }
         }
 
