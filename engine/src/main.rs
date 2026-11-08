@@ -196,14 +196,18 @@ fn main() {
             }
         }
 
-        if let Some(u) = pending_url.clone()
-            && current_url.lock().unwrap().as_ref() != Some(&u)
-        {
-            eprintln!("engine: load {u}");
-            webview.load(u);
-            eprintln!("engine: load sent");
-        } else if pending_url.is_some() {
-            pending_url = None;
+        if let Some(u) = pending_url.clone() {
+            let current = current_url.lock().unwrap().clone();
+            if current.is_none() {
+                // Webview may not exist yet: LoadUrl is dropped, so retry
+                // until Servo reports any URL at all.
+                eprintln!("engine: load {u}");
+                webview.load(u);
+            } else {
+                // Load is in flight (redirects will report a different URL;
+                // re-loading here would restart the page forever).
+                pending_url = None;
+            }
         }
 
         servo.spin_event_loop();
