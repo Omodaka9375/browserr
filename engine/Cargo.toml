@@ -1,11 +1,12 @@
 [package]
 name = "engine"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 servo = "0.8.0"
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
 url = "2"
+serde_json = "1"
 webrender_api = "0.70"
 dpi = "0.1"
