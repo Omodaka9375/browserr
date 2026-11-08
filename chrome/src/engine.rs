@@ -28,9 +28,14 @@ impl Engine {
                     .unwrap_or_default();
                 here.join("engine.exe")
             });
+        // Keep the engine's stderr in a log file: it is the only window into
+        // the child process (servo logs, panics, our eprintln trace).
+        let engine_log = std::env::temp_dir().join("browserr-engine.log");
+        let stderr = std::fs::File::create(&engine_log).ok();
+        eprintln!("chrome: engine stderr -> {}", engine_log.display());
         let child = Command::new(exe)
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(stderr.map(Stdio::from).unwrap_or(Stdio::null()))
             .spawn()?;
 
         // Connect with retries while the engine boots.
@@ -51,6 +56,7 @@ impl Engine {
     }
 
     fn send(&mut self, json: &str) {
+        eprintln!("chrome: -> engine {json}");
         let _ = writeln!(&mut self.stream, "{json}");
         let _ = self.stream.flush();
     }
@@ -72,10 +78,12 @@ fn read_frames(stream: TcpStream, surface: NativeSurface, waker: Waker) {
 
     loop {
         if reader.read_exact(&mut header).is_err() {
+            eprintln!("chrome: frame reader: header read failed (engine gone?)");
             return;
         }
         let magic = u32::from_le_bytes(header[0..4].try_into().unwrap());
         if magic != MAGIC {
+            eprintln!("chrome: frame reader: bad magic {magic:#x}");
             return;
         }
         let _id = u64::from_le_bytes(header[4..12].try_into().unwrap());
@@ -84,23 +92,29 @@ fn read_frames(stream: TcpStream, surface: NativeSurface, waker: Waker) {
         let len = w as usize * h as usize * 4;
         let mut pixels = vec![0u8; len];
         if reader.read_exact(&mut pixels).is_err() {
+            eprintln!("chrome: frame reader: pixel read failed");
             return;
         }
         let id = counter.fetch_add(1, Ordering::SeqCst);
-        if surface
-            .push_bytes(
-                rune::native_surface::ByteFrame {
-                    width: w,
-                    height: h,
-                    format: rune::native_surface::Format::Bgra,
-                    color: Default::default(),
-                    planes: [pixels, Vec::new()],
-                },
-                id,
-            )
-            .is_err()
-        {
+        if let Err(e) = surface.push_bytes(
+            rune::native_surface::ByteFrame {
+                width: w,
+                height: h,
+                format: rune::native_surface::Format::Bgra,
+                color: Default::default(),
+                planes: [pixels, Vec::new()],
+            },
+            id,
+        ) {
+            eprintln!("chrome: push_bytes failed: {e:?}");
             return;
+        }
+        if id % 10 == 1 {
+            let (submitted, completed) = surface.counts();
+            eprintln!(
+                "chrome: frame {id} {w}x{h} pushed (drawn submitted={submitted} completed={completed}) err={:?}",
+                surface.last_error()
+            );
         }
         waker();
     }

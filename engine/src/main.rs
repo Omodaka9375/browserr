@@ -92,7 +92,10 @@ fn main() {
             return;
         }
     };
-    let _ = rendering_context.make_current();
+    match rendering_context.make_current() {
+        Ok(()) => eprintln!("engine: context made current"),
+        Err(e) => eprintln!("engine: make_current FAILED: {e:?}"),
+    }
 
     let servo = servo::ServoBuilder::default()
         .event_loop_waker(Box::new(ServoWaker(pump.clone())))
@@ -196,7 +199,13 @@ fn main() {
         }
 
         if frame_ready.swap(false, Ordering::SeqCst) {
-            eprintln!("engine: frame flag set, reading back");
+            eprintln!("engine: frame flag set, painting");
+            // Composite the page into the rendering context; without this the
+            // context surface stays blank and read_to_image returns white.
+            webview.paint();
+            // Servo's render machinery runs GL on its own threads and steals
+            // currentness from us; a software GL context reads blank otherwise.
+            let _ = rendering_context.make_current();
             let rect = webrender_api::units::DeviceIntRect::new(
                 webrender_api::units::DeviceIntPoint::zero(),
                 webrender_api::units::DeviceIntPoint::new(
