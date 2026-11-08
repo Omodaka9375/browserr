@@ -4,6 +4,9 @@
 //!   out: frames: u32 magic 'FRM1', u64 id, u32 w, u32 h, w*h*4 BGRA bytes
 use std::io::{BufRead, BufReader, Write};
 use servo::RenderingContext;
+
+mod hw;
+use hw::HardwareRenderingContext;
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -85,13 +88,23 @@ fn main() {
     };
     let delegate = std::rc::Rc::new(delegate);
 
-    let rendering_context = match servo::SoftwareRenderingContext::new(dpi::PhysicalSize::new(1200, 760)) {
-        Ok(c) => std::rc::Rc::new(c),
-        Err(e) => {
-            eprintln!("engine: no rendering context: {e:?}");
-            return;
-        }
-    };
+    let rendering_context: std::rc::Rc<dyn RenderingContext> =
+        match HardwareRenderingContext::new(dpi::PhysicalSize::new(1200, 760)) {
+            Ok(c) => {
+                eprintln!("engine: hardware (GPU) rendering context");
+                std::rc::Rc::new(c)
+            }
+            Err(e) => {
+                eprintln!("engine: hardware context failed ({e:?}), falling back to software");
+                match servo::SoftwareRenderingContext::new(dpi::PhysicalSize::new(1200, 760)) {
+                    Ok(c) => std::rc::Rc::new(c),
+                    Err(e) => {
+                        eprintln!("engine: no rendering context: {e:?}");
+                        return;
+                    }
+                }
+            }
+        };
     match rendering_context.make_current() {
         Ok(()) => eprintln!("engine: context made current"),
         Err(e) => eprintln!("engine: make_current FAILED: {e:?}"),
@@ -200,10 +213,11 @@ fn main() {
         }
 
         if frame_ready.swap(false, Ordering::SeqCst) {
-            eprintln!("engine: frame flag set, painting");
+            let t0 = std::time::Instant::now();
             // Composite the page into the rendering context; without this the
             // context surface stays blank and read_to_image returns white.
             webview.paint();
+            let t_paint = t0.elapsed();
             // Servo's render machinery runs GL on its own threads and steals
             // currentness from us; a software GL context reads blank otherwise.
             let _ = rendering_context.make_current();
@@ -227,7 +241,13 @@ fn main() {
                 let hash = hasher.finish();
                 if hash != last_hash || bgra.is_empty() {
                     last_hash = hash;
-                    eprintln!("engine: read {}x{} frame", current_size.width, current_size.height);
+                    eprintln!(
+                        "engine: frame {}x{} paint={:?} total={:?}",
+                        current_size.width,
+                        current_size.height,
+                        t_paint,
+                        t0.elapsed()
+                    );
                     frame_id += 1;
                     out.write_all(&MAGIC.to_le_bytes()).ok();
                     out.write_all(&frame_id.to_le_bytes()).ok();
