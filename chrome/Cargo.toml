@@ -1,0 +1,10 @@
+[package]
+name = "chrome"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rune = { git = "https://github.com/anomalyco/rune", rev = "7256c7c2afb605862ccfe600a469df7330509efb" }
+
+[profile.dev]
+opt-level = 1
