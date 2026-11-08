@@ -19,6 +19,7 @@ struct State {
     editing: bool,
     engine: Option<Engine>,
     surface: NativeSurface,
+    last_size: Option<(u32, u32)>,
 }
 
 impl Default for Tab {
@@ -35,6 +36,7 @@ fn state() -> State {
         editing: false,
         engine: None,
         surface: NativeSurface::new(),
+        last_size: None,
     }
 }
 
@@ -153,7 +155,16 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         .child(bar)
         .child(
             el().key("page").grow(1.0).min_h(0.0).fill(t.bg)
-                .native_surface(&s.surface, SurfaceFit::Fit),
+                .native_surface(&s.surface, SurfaceFit::Fit)
+                .on_layout(|s: &mut State, rect: [f32; 4]| {
+                    let (w, h) = (rect[2].max(1.0) as u32, rect[3].max(1.0) as u32);
+                    if Some((w, h)) != s.last_size {
+                        s.last_size = Some((w, h));
+                        if let Some(engine) = &mut s.engine {
+                            engine.resize(w, h);
+                        }
+                    }
+                }),
         )
 }
 
