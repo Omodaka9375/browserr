@@ -2,6 +2,7 @@ use rune::tok::{self, type_};
 use rune::{App, AppSpec, Color, Cx, El, Icon, NativeSurface, SurfaceFit, TextEdit, Tx, WindowOptions, col, el, icon, row, spacer, text, text_input};
 
 mod engine;
+mod creds;
 mod store;
 
 use engine::{Engine, Ui};
@@ -44,6 +45,11 @@ struct State {
     /// Editable copies of the text settings for the panel.
     settings_home: TextEdit,
     settings_ua: TextEdit,
+    /// Password capture fields for the current host (menu panel).
+    cred_user: TextEdit,
+    cred_pass: TextEdit,
+    /// Whether a password is already saved for the current host.
+    cred_saved: bool,
 }
 
 impl Default for Tab {
@@ -97,7 +103,53 @@ fn state() -> State {
         settings,
         settings_home,
         settings_ua,
+        cred_user: TextEdit::new(""),
+        cred_pass: TextEdit::new(""),
+        cred_saved: false,
     }
+}
+
+/// Load the current host's saved password state into the panel fields.
+fn refresh_creds(s: &mut State) {
+    let url = s.ui.url(s.tabs[s.active].id).unwrap_or_default();
+    let host = host(&url);
+    match creds::load(&host) {
+        Some((user, _)) => {
+            s.cred_user = TextEdit::new(user);
+            s.cred_pass = TextEdit::new("");
+            s.cred_saved = true;
+        }
+        None => {
+            s.cred_user = TextEdit::new("");
+            s.cred_pass = TextEdit::new("");
+            s.cred_saved = false;
+        }
+    }
+}
+
+/// Fill the page's login form via the engine's eval command.
+fn fill_password(s: &mut State) {
+    let url = s.ui.url(s.tabs[s.active].id).unwrap_or_default();
+    let host = host(&url);
+    if host.is_empty() {
+        return;
+    }
+    if let Some((user, pass)) = creds::load(&host) {
+        let tab_id = s.tabs[s.active].id;
+        if let Some(engine) = &mut s.engine {
+            engine.eval(tab_id, &fill_js(&user, &pass));
+        }
+    }
+}
+
+/// JS that fills the first username-ish input and the first password input.
+/// Dispatches input/change events so framework listeners notice.
+fn fill_js(user: &str, pass: &str) -> String {
+    let u = serde_json::to_string(user).unwrap_or_else(|_| "\"\"".into());
+    let p = serde_json::to_string(pass).unwrap_or_else(|_| "\"\"".into());
+    format!(
+        r#"(()=>{{const u={u},p={p};const set=(i,v)=>{{i.value=v;i.dispatchEvent(new Event('input',{{bubbles:true}}));i.dispatchEvent(new Event('change',{{bubbles:true}}));}};const pw=document.querySelector('input[type=password]');if(pw)set(pw,p);const re=/(user|email|login|account)/i;for(const t of document.querySelectorAll('input')){{if(t.type==='password')continue;const k=(t.name||'')+' '+(t.id||'')+' '+(t.type||'')+' '+(t.autocomplete||'');if((!t.type||t.type==='text'||t.type==='email')&&re.test(k)){{set(t,u);break;}}}}}})()"#
+    )
 }
 
 /// Pull the panel's TextEdits into s.settings and persist them.
@@ -208,6 +260,11 @@ static ICON_STAR_FILLED: Icon = Icon {
     name: "br-star-filled",
     view: 16.0,
     body: r#"<path d="M8 2.8l1.6 3.3 3.6.5-2.6 2.5.6 3.6L8 11l-3.2 1.7.6-3.6L2.8 6.6l3.6-.5z" fill="currentColor"/>"#,
+};
+static ICON_KEY: Icon = Icon {
+    name: "br-key",
+    view: 16.0,
+    body: r#"<circle cx="5.5" cy="10.5" r="2.7" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M7.5 8.5L13 3M10.5 3.5L12.5 5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/>"#,
 };
 
 fn icon_btn(id: &'static str, ic: &'static Icon, enabled: bool, action: Option<impl Fn(&mut State) + 'static>) -> El {
@@ -338,6 +395,45 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                     s.menu_open = false;
                 })),
         );
+        p = p.child(text("Passwords").font(type_::BODY.lh(20.0)).color(t.text_secondary));
+        let pw_host = host(&shown_url);
+        if pw_host.is_empty() {
+            p = p.child(text("Open a site first").font(type_::BODY.lh(16.0)).color(t.text_secondary));
+        } else {
+            p = p.child(
+                text(if s.cred_saved { format!("Saved for {pw_host}") } else { format!("Not saved for {pw_host}") })
+                    .font(type_::BODY.lh(16.0)).color(t.text_secondary),
+            );
+            p = p.child(
+                row().gap(8.0).center_y()
+                    .child(text_input(&s.cred_user, type_::BODY.lh(20.0)).key("cred-user").single_line().w(180.0)
+                        .color(t.text).placeholder("Username", t.text_secondary)
+                        .on_edit(|s: &mut State| &mut s.cred_user))
+                    .child(text_input(&s.cred_pass, type_::BODY.lh(20.0)).key("cred-pass").single_line().w(180.0)
+                        .color(t.text).placeholder("Password (shown)", t.text_secondary)
+                        .on_edit(|s: &mut State| &mut s.cred_pass)),
+            );
+            p = p.child(
+                row().gap(8.0).center_y()
+                    .child(text_btn("pw-save", "Save".to_string(), |s: &mut State| {
+                        let url = s.ui.url(s.tabs[s.active].id).unwrap_or_default();
+                        let host = host(&url);
+                        if host.is_empty() { return; }
+                        creds::save(&host, s.cred_user.text.trim(), &s.cred_pass.text);
+                        refresh_creds(s);
+                    }))
+                    .child(text_btn("pw-fill", "Fill now".to_string(), |s: &mut State| {
+                        fill_password(s);
+                    }))
+                    .child(text_btn("pw-forget", "Forget".to_string(), |s: &mut State| {
+                        let url = s.ui.url(s.tabs[s.active].id).unwrap_or_default();
+                        let host = host(&url);
+                        if host.is_empty() { return; }
+                        creds::forget(&host);
+                        refresh_creds(s);
+                    })),
+            );
+        }
         p
     };
 
@@ -480,6 +576,17 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 }
                 store::save_bookmarks(&s.bookmarks);
             })))
+        .child(icon_btn("br-key", &ICON_KEY, !shown_url.is_empty(), Some(|s: &mut State| {
+            // Saved password: fill. None: open the panel to save one.
+            let url = s.ui.url(s.tabs[s.active].id).unwrap_or_default();
+            if url.is_empty() { return; }
+            if creds::load(&host(&url)).is_some() {
+                fill_password(s);
+            } else {
+                s.menu_open = true;
+                refresh_creds(s);
+            }
+        })))
         .child(pill)
         .child(tabs_row)
         .child(icon_btn("br-plus", &ICON_PLUS, true, Some(|s: &mut State| {
@@ -501,6 +608,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             s.menu_open = !s.menu_open;
             if s.menu_open {
                 s.history_view = store::read_history(15);
+                refresh_creds(s);
             }
         })))
         .child(spacer())

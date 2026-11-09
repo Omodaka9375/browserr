@@ -97,6 +97,17 @@ letters, digits, dashes and underscores.
 Settings are edited in the menu panel (ellipsis button): homepage, user agent
 and an adblock toggle. User agent and adblock apply on restart.
 
+## Passwords
+
+Passwords are stored per profile in the Windows Credential Manager (encrypted
+at rest under the logged-in user), one entry per site host. The key button
+fills the current page's login form; the menu panel's Passwords section saves,
+fills or forgets the credential for the current host. Fill runs a small script
+in the page via the engine's eval command (loopback-only, chrome -> engine).
+Known limits: the password field in the panel is shown in plain text, and
+form detection is heuristic (first password input + first username-like
+input); no automatic save-on-submit yet.
+
 ## Adblock
 
 The engine implements `load_web_resource` (Servo's request interception hook)

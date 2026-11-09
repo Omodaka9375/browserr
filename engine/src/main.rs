@@ -502,6 +502,16 @@ fn main() {
                                     let _ = tab.webview.go_forward(1);
                                 }
                             }
+                            Some("eval") => {
+                                // Trusted: the socket is loopback and only the
+                                // chrome connects. Used for password autofill.
+                                if let Some(js) = v["js"].as_str()
+                                    && let Some(tab) = tabs.get(&tab_id)
+                                {
+                                    eprintln!("engine: eval (tab {tab_id})");
+                                    tab.webview.evaluate_javascript(js.to_string(), |_| {});
+                                }
+                            }
                             Some("resize") => {
                                 let (w, h) = (
                                     v["w"].as_u64().unwrap_or(1200) as u32,

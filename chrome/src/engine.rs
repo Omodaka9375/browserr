@@ -188,6 +188,12 @@ impl Engine {
     pub fn close_tab(&mut self, tab: u64) {
         self.send(&format!("{{\"cmd\":\"close_tab\",\"tab\":{tab}}}"));
     }
+
+    /// Run JS in a tab's main frame (password autofill; json-escaped here).
+    pub fn eval(&mut self, tab: u64, js: &str) {
+        let json = serde_json::json!({ "cmd": "eval", "tab": tab, "js": js }).to_string();
+        self.send(&json);
+    }
 }
 
 fn read_frames(stream: TcpStream, surface: NativeSurface, waker: Waker, ui: Arc<Ui>) {
