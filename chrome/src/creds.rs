@@ -4,8 +4,8 @@
 
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Security::Credentials::{
-    CredDeleteW, CredFree, CredReadW, CredWriteW, CREDENTIALW, CRED_FLAGS, CRED_PERSIST_LOCAL_MACHINE,
-    CRED_TYPE_GENERIC,
+    CredDeleteW, CredEnumerateW, CredFree, CredReadW, CredWriteW, CREDENTIALW, CRED_FLAGS,
+    CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
 };
 
 use crate::store;
@@ -65,4 +65,37 @@ pub fn load(host: &str) -> Option<(String, String)> {
 pub fn forget(host: &str) -> bool {
     let t = target(host);
     unsafe { CredDeleteW(PCWSTR(t.as_ptr()), CRED_TYPE_GENERIC, None).is_ok() }
+}
+
+/// All saved (host, username) pairs for this profile, unordered.
+pub fn list() -> Vec<(String, String)> {
+    unsafe {
+        let filter = to_wide(&format!("Browserr:{}:*", store::profile()));
+        let mut count: u32 = 0;
+        let mut buf: *mut *mut CREDENTIALW = std::ptr::null_mut();
+        if CredEnumerateW(PCWSTR(filter.as_ptr()), None, &mut count, &mut buf).is_err() {
+            return Vec::new();
+        }
+        let creds = std::slice::from_raw_parts(buf, count as usize);
+        let mut out = Vec::new();
+        for c in creds {
+            let c: &CREDENTIALW = &**c;
+            let name = c.TargetName.to_string().unwrap_or_default();
+            // Target name is Browserr:<profile>:<host>.
+            let Some(host) = name.split(':').nth(2) else {
+                continue;
+            };
+            if c.CredentialBlob.is_null() {
+                continue;
+            }
+            let blob = std::slice::from_raw_parts(c.CredentialBlob, c.CredentialBlobSize as usize);
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(blob))
+            else {
+                continue;
+            };
+            out.push((host.to_string(), v["u"].as_str().unwrap_or("").to_string()));
+        }
+        CredFree(buf as *const _);
+        out
+    }
 }

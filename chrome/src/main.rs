@@ -1,5 +1,5 @@
 use rune::tok::{self, type_};
-use rune::{App, AppSpec, Color, Cx, El, Icon, NativeSurface, SurfaceFit, TextEdit, Tx, WindowOptions, col, el, icon, row, spacer, text, text_input};
+use rune::{App, AppSpec, Color, Cx, El, Icon, NativeSurface, ScrollSpec, SurfaceFit, TextEdit, Tx, WindowOptions, col, el, icon, row, spacer, text, text_input};
 
 mod engine;
 mod creds;
@@ -53,6 +53,10 @@ struct State {
     cred_saved: bool,
     /// Host whose capture was already saved or dismissed.
     pw_handled: Option<String>,
+    /// True while the full settings page is open (replaces the browser view).
+    settings_open: bool,
+    /// Saved (host, username) pairs shown on the settings page.
+    creds_view: Vec<(String, String)>,
 }
 
 impl Default for Tab {
@@ -135,6 +139,8 @@ fn state() -> State {
         cred_pass: TextEdit::new("").secure(),
         cred_saved: false,
         pw_handled: None,
+        settings_open: false,
+        creds_view: Vec::new(),
     }
 }
 
@@ -320,6 +326,79 @@ fn text_btn(id: &'static str, label: String, action: impl Fn(&mut State) + 'stat
 fn view(s: &State, _: &mut Cx<State>) -> El {
     let t = tok::theme(true);
 
+    // Full settings page: opened from the menu, closed by its back button.
+    if s.settings_open {
+        let label = |txt: String| text(txt).font(type_::BODY.lh(16.0)).color(t.text_secondary);
+        let section = |txt: &str| text(txt).font(type_::BODY.lh(24.0)).color(t.text);
+
+        let mut c = col().key("settings-page").w_full().grow(1.0).min_h(0.0)
+            .px(28.0).py(18.0).gap(14.0).scroll(ScrollSpec { stick_bottom: false });
+        c = c.child(section("General"));
+        c = c.child(label("Homepage".into()));
+        c = c.child(
+            text_input(&s.settings_home, type_::BODY.lh(20.0)).key("set-home").single_line().w(420.0)
+                .color(t.text)
+                .placeholder("Homepage url", t.text_secondary)
+                .on_edit(|s: &mut State| &mut s.settings_home),
+        );
+        c = c.child(label("Search engine (for searches typed in the address bar)".into()));
+        c = c.child(
+            text_btn("set-search", format!("Use {}", search_name(&s.settings.search)), |s: &mut State| {
+                let next = SEARCHES.iter().position(|t| *t == s.settings.search)
+                    .map(|i| (i + 1) % SEARCHES.len())
+                    .unwrap_or(0);
+                s.settings.search = SEARCHES[next].to_string();
+                save_settings_ui(s);
+            }),
+        );
+
+        c = c.child(section("Privacy and network"));
+        c = c.child(
+            row().gap(8.0).center_y()
+                .child(text_btn("set-adblock", format!("Adblock: {}", if s.settings.adblock { "on" } else { "off" }), |s: &mut State| {
+                    s.settings.adblock = !s.settings.adblock;
+                    save_settings_ui(s);
+                }))
+                .child(label("(restart to apply)".into())),
+        );
+        c = c.child(label("User agent (restart to apply)".into()));
+        c = c.child(
+            text_input(&s.settings_ua, type_::BODY.lh(20.0)).key("set-ua").single_line().w(420.0)
+                .color(t.text)
+                .placeholder("Leave empty for default", t.text_secondary)
+                .on_edit(|s: &mut State| &mut s.settings_ua),
+        );
+
+        c = c.child(section("Passwords"));
+        if s.creds_view.is_empty() {
+            c = c.child(label("No passwords saved yet.".into()));
+        }
+        for (h, u) in s.creds_view.clone() {
+            c = c.child(
+                row().key(format!("cred-{h}")).w_full().py(4.0).gap(12.0).center_y()
+                    .child(text(h.clone()).font(type_::BODY.lh(18.0)).color(t.text).grow(1.0))
+                    .child(label(u))
+                    .child(text_btn("pw-forget", "Forget".to_string(), move |s: &mut State| {
+                        creds::forget(&h);
+                        s.creds_view = creds::list();
+                    })),
+            );
+        }
+        c = c.child(label("New logins are offered for saving when you submit a login form.".into()));
+
+        c = c.child(section("About"));
+        c = c.child(label(format!("Profile: {}", store::profile())));
+        c = c.child(label("Browserr 0.1.0".into()));
+
+        let header = row().key("settings-header").h(BAR_H).w_full().px(14.0).gap(10.0).center_y()
+            .window_drag()
+            .child(icon_btn("set-back", &ICON_BACK, true, Some(|s: &mut State| {
+                s.settings_open = false;
+            })))
+            .child(text("Settings").font(type_::BODY.lh(24.0)).color(t.text));
+        return col().w_full().h_full().fill(t.bg).child(header).child(c);
+    }
+
     // Profile picker: pick an existing profile or type a new name + Enter.
     if s.picker {
         let mut p = col().w_full().h_full().fill(t.bg).px(20.0).py(14.0).gap(6.0).window_drag();
@@ -403,41 +482,12 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             );
         }
         p = p.child(text("Settings").font(type_::BODY.lh(20.0)).color(t.text_secondary));
-        p = p.child(text("Homepage").font(type_::BODY.lh(16.0)).color(t.text_secondary));
         p = p.child(
-            text_input(&s.settings_home, type_::BODY.lh(20.0)).key("set-home").single_line()
-                .color(t.text)
-                .placeholder("Homepage url", t.text_secondary)
-                .on_edit(|s: &mut State| &mut s.settings_home),
-        );
-        p = p.child(text("User agent (restart to apply)").font(type_::BODY.lh(16.0)).color(t.text_secondary));
-        p = p.child(
-            text_input(&s.settings_ua, type_::BODY.lh(20.0)).key("set-ua").single_line()
-                .color(t.text)
-                .placeholder("Leave empty for default", t.text_secondary)
-                .on_edit(|s: &mut State| &mut s.settings_ua),
-        );
-        p = p.child(text("Search engine").font(type_::BODY.lh(16.0)).color(t.text_secondary));
-        p = p.child(
-            text_btn("set-search", format!("Use {}", search_name(&s.settings.search)), |s: &mut State| {
-                let next = SEARCHES.iter().position(|t| *t == s.settings.search)
-                    .map(|i| (i + 1) % SEARCHES.len())
-                    .unwrap_or(0);
-                s.settings.search = SEARCHES[next].to_string();
-                save_settings_ui(s);
+            text_btn("open-settings", "Open settings".to_string(), |s: &mut State| {
+                s.menu_open = false;
+                s.settings_open = true;
+                s.creds_view = creds::list();
             }),
-        );
-        p = p.child(
-            row().gap(8.0).center_y()
-                .child(text_btn("set-adblock", format!("Adblock: {}", if s.settings.adblock { "on" } else { "off" }), |s: &mut State| {
-                    s.settings.adblock = !s.settings.adblock;
-                    save_settings_ui(s);
-                }))
-                .child(text("(restart to apply)").font(type_::BODY.lh(16.0)).color(t.text_secondary))
-                .child(text_btn("set-save", "Save settings".to_string(), |s: &mut State| {
-                    save_settings_ui(s);
-                    s.menu_open = false;
-                })),
         );
         p = p.child(text("Passwords").font(type_::BODY.lh(20.0)).color(t.text_secondary));
         let pw_host = host(&shown_url);
