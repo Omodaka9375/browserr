@@ -4,11 +4,12 @@ A minimal, Safari-like browser for Windows.
 
 ```text
 chrome/  Rust + Rune (GPU-drawn UI: 40px top bar, address pill, tabs, traffic lights)
-engine/  Rust + Servo (page engine child process, renders offscreen, streams BGRA frames)
+engine/  Rust + Servo (page engine child process: per-tab webviews, GPU render, BGRA frames)
 ```
 
 The chrome and the engine are separate processes (their dependency trees conflict:
-Rune needs ICU 2.3+, Servo's mozjs pins ICU 2.1). They talk over 127.0.0.1:7411.
+Rune's parley needs icu_normalizer 2.3+, Servo's mozjs_sys pins icu_capi =2.1.2).
+They talk over 127.0.0.1:7411.
 
 ## Build
 
@@ -17,23 +18,60 @@ cd engine; cargo build --release
 cd chrome; cargo build --release
 ```
 
-## Run
+## Run (dev)
 
 ```powershell
 $env:BROWSERR_ENGINE = "D:\Code\2026\Browserr\engine\target\release\engine.exe"
-D:\Code\2026\Browserr\chrome\target\release\chrome.exe
+D:\Code\2026\Browserr\chrome\target\debug\chrome.exe
 ```
 
-## Status / v1 scope
+The engine's stderr goes to `%TEMP%\browserr-engine.log`; the chrome logs
+commands and frame pushes to its own console.
+
+## Run (dist)
+
+```powershell
+powershell -File scripts\dist.ps1   # release-builds both into dist\
+.\dist\chrome.exe                   # finds engine.exe next to itself
+```
+
+## Protocol (v2)
+
+Commands (chrome -> engine, newline JSON, all tab-addressed):
+
+```text
+{"cmd":"navigate","url":"...","tab":N}
+{"cmd":"back"|"forward","tab":N}
+{"cmd":"new_tab"|"activate"|"close_tab","tab":N}
+{"cmd":"resize","w":N,"h":N}
+```
+
+Responses (engine -> chrome, 20-byte header + payload):
+
+```text
+FRM1 + id + w + h      -> w*h*4 BGRA pixels (active tab, deduped, capped at 30fps)
+EVT1 + id + len + 0    -> JSON events: {"ev":"url"|"title"|"history","tab":N,...}
+```
+
+Only the active tab is painted; switching tabs re-sends that tab's url/title/
+history. Tab 0 exists from startup.
+
+## Status / v2 scope (done)
 
 - Frameless Rune window, drag region, traffic-light close/minimize
-- Centered address pill (URL or DuckDuckGo search), Enter navigates
-- Multi-tab model in the chrome (tab pill + new tab)
-- Servo renders pages offscreen; frames composite into the chrome via Rune NativeSurface
-- Fixed 1200x760 viewport (resize wiring pending)
-- Back/forward/menu buttons drawn but not wired (pending Servo history API)
+- Address pill: live page URL, click to edit (URL or DuckDuckGo search), Enter navigates
+- Real multi-tab: one Servo webview + GPU context per tab, per-tab history,
+  tab pills with live titles and close buttons
+- Back/forward wired to Servo history, greyed out per active tab
+- GPU rendering: surfman WGL hardware context (software fallback), ~3-20ms per
+  frame cycle; identical frames skipped, animated pages capped at 30fps
+- Two-exe distribution via scripts/dist.ps1 (side-by-side, no env var needed)
 
 ## Known limitations
 
-- Software rendering for v1 (CPU readback of frames); GPU shared-texture path planned
-- No bookmarks, downloads, history persistence, settings
+- Frames stream over loopback TCP (~4MB each); a GPU shared-texture path would
+  remove the copy
+- No favicon, no scroll position persistence across tab switches, no bookmarks,
+  downloads, history persistence, settings
+- Engine exits with a cosmetic surfman panic on shutdown ("Should have
+  destroyed the surface first")
