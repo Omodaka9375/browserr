@@ -45,7 +45,9 @@ Commands (chrome -> engine, newline JSON, all tab-addressed):
 {"cmd":"new_tab"|"activate"|"close_tab","tab":N}
 {"cmd":"resize","w":N,"h":N}
 {"cmd":"input"|"wheel"|"key","tab":N,...}   page input forwarding
-{"cmd":"eval","tab":N,"js":"..."}          run JS (password autofill)
+{"cmd":"eval","tab":N,"js":"..."}          run JS (password autofill; discarded)
+{"cmd":"eval","tab":N,"js":"...","id":X}   run JS, report result as an evalresult event
+{"cmd":"screenshot","tab":N}              paint + answer with a SHT1 frame
 {"cmd":"zoom","tab":N,"zoom":F}           page zoom (chrome: Ctrl+wheel)
 ```
 
@@ -53,7 +55,8 @@ Responses (engine -> chrome, 20-byte header + payload):
 
 ```text
 FRM1 + id + w + h      -> w*h*4 BGRA pixels (active tab, deduped, capped at 30fps)
-EVT1 + id + len + 0    -> JSON events: {"ev":"url"|"title"|"history"|"cursor"|"favicon"|"pwcapture","tab":N,...}
+EVT1 + id + len + 0    -> JSON events: {"ev":"url"|"title"|"history"|"cursor"|"favicon"|"pwcapture"|"evalresult","tab":N,...}
+SHT1 + id + w + h      -> w*h*4 BGRA pixels (screenshot answer, automation only)
 ```
 
 Only the active tab is painted; switching tabs re-sends that tab's url/title/
@@ -112,6 +115,30 @@ homepage, search engine cycle, default page zoom (applies to new tabs), user
 agent, adblock toggle, clear browsing history, clear cookies and site data,
 and the saved-password list. User agent and adblock restart the engine in
 place; so does clearing site data (tabs are reloaded afterwards).
+
+## Automation (driver)
+
+The engine is fully drivable from an external script - not via CDP (servo has
+no CDP server), but over its own loopback protocol. `tools/driver.py` wraps it:
+
+```python
+import sys; sys.path.insert(0, "tools")
+from driver import Driver, save_png
+
+d = Driver(log="engine.log")   # spawns engine.exe headless
+try:
+    d.navigate("https://example.com"); d.wait_load(); d.wait_ready()
+    title = d.eval_js("document.title")       # results returned (any JSON value)
+    w, h, bgra = d.screenshot(); save_png("shot.png", w, h, bgra)
+    d.click(300, 300); d.type_text("hi")
+finally:
+    d.close()
+```
+
+Notes: the engine accepts exactly one connection, so the driver talks to a
+headless engine it spawns, not to a running Browserr UI. The url event fires
+when navigation commits, before the page accepts input - call `wait_ready()`
+after `wait_load()` before clicking or typing. See `tools/test_driver.py`.
 
 ## Passwords
 

@@ -17,6 +17,8 @@
 //! Options: --user-agent=STRING overrides the HTTP user agent (from settings.json).
 //!           --profile-dir=PATH gives Servo a per-profile config/storage dir.
 //!           --adblock-list=PATH enables request blocking against an EasyList-format file.
+//! Automation: eval with an "id" reports {"ev":"evalresult","tab","id","value"};
+//! {"cmd":"screenshot","tab":N} answers with a SHT1 frame (magic, id, w, h, w*h*4 BGRA).
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use servo::RenderingContext;
@@ -31,6 +33,7 @@ use std::sync::{Arc, Condvar, Mutex};
 const PORT: u16 = 7411;
 const MAGIC: u32 = 0x46_52_4D_31; // FRM1
 const EV_MAGIC: u32 = 0x45_56_54_31; // EVT1
+const SHOT_MAGIC: u32 = 0x53_48_54_31; // SHT1 (screenshot)
 
 #[derive(Clone)]
 struct Pump(Arc<(Mutex<bool>, Condvar)>);
@@ -77,6 +80,8 @@ struct Update {
     icon: Option<(String, u32, u32, Vec<u8>)>,
     /// Page-requested cursor shape (servo's Debug name, lowercase).
     cursor: Option<String>,
+    /// Result of an eval-with-id: (request id, JSON-encoded value).
+    eval: Option<(u64, serde_json::Value)>,
 }
 
 /// Runs on load complete: if the page has a password field, capture its
@@ -193,6 +198,7 @@ impl FrameDelegate {
                         pw: Some(data),
                         icon: None,
                         cursor: None,
+                        eval: None,
                     });
                     shared.pump.kick();
                 }
@@ -223,6 +229,7 @@ impl FrameDelegate {
                     pw: None,
                     icon: Some((origin, 16, 16, rgba)),
                 cursor: None,
+                eval: None,
                 });
                 shared.pump.kick();
                 return;
@@ -240,6 +247,7 @@ impl FrameDelegate {
                         pw: None,
                         icon: Some((origin, w, h, rgba)),
                 cursor: None,
+                eval: None,
                     });
                     shared.pump.kick();
                 }
@@ -285,6 +293,7 @@ impl servo::WebViewDelegate for FrameDelegate {
             pw: None,
             icon: None,
             cursor: None,
+            eval: None,
         });
         // Pick up a capture that a submitted form left behind.
         self.eval_pw(webview, PW_READ_JS);
@@ -317,6 +326,7 @@ impl servo::WebViewDelegate for FrameDelegate {
             pw: None,
             icon: None,
             cursor: Some(name),
+            eval: None,
         });
         self.shared.pump.kick();
     }
@@ -330,6 +340,7 @@ impl servo::WebViewDelegate for FrameDelegate {
             pw: None,
             icon: None,
             cursor: None,
+            eval: None,
         });
         self.shared.pump.kick();
     }
@@ -345,6 +356,7 @@ impl servo::WebViewDelegate for FrameDelegate {
             pw: None,
             icon: None,
             cursor: None,
+            eval: None,
         });
         self.shared.pump.kick();
     }
@@ -384,6 +396,35 @@ struct Tab {
 const EASYLIST_URL: &str = "https://easylist.to/easylist/easylist.txt";
 /// Re-download after a week.
 const FILTER_LIST_MAX_AGE_SECS: u64 = 7 * 24 * 3600;
+
+/// Serialize a servo JS evaluation result to JSON for the automation driver.
+fn jsvalue_to_json(result: Result<servo::JSValue, servo::JavaScriptEvaluationError>) -> serde_json::Value {
+    use servo::JSValue;
+    fn conv(v: JSValue) -> serde_json::Value {
+        match v {
+            JSValue::Undefined | JSValue::Null => serde_json::Value::Null,
+            JSValue::Boolean(b) => serde_json::Value::Bool(b),
+            JSValue::Number(n) => serde_json::Number::from_f64(n)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null),
+            JSValue::String(s) => serde_json::Value::String(s),
+            // Handles (element/shadow root/frame/window) are opaque strings;
+            // tag them so callers can tell them apart from plain strings.
+            JSValue::Element(s) => serde_json::json!({ "__kind": "element", "handle": s }),
+            JSValue::ShadowRoot(s) => serde_json::json!({ "__kind": "shadowroot", "handle": s }),
+            JSValue::Frame(s) => serde_json::json!({ "__kind": "frame", "handle": s }),
+            JSValue::Window(s) => serde_json::json!({ "__kind": "window", "handle": s }),
+            JSValue::Array(items) => serde_json::Value::Array(items.into_iter().map(conv).collect()),
+            JSValue::Object(map) => serde_json::Value::Object(
+                map.into_iter().map(|(k, v)| (k, conv(v))).collect(),
+            ),
+        }
+    }
+    match result {
+        Ok(v) => conv(v),
+        Err(e) => serde_json::json!({ "__error": format!("{e:?}") }),
+    }
+}
 
 /// Download the EasyList-format filter file if missing or stale. Best effort:
 /// a failed download keeps any existing file and just logs.
@@ -830,12 +871,63 @@ fn main() {
                             }
                             Some("eval") => {
                                 // Trusted: the socket is loopback and only the
-                                // chrome connects. Used for password autofill.
+                                // chrome connects. With an "id" the result is
+                                // reported back as an evalresult event
+                                // (automation driver); without one it is
+                                // discarded (password autofill).
                                 if let Some(js) = v["js"].as_str()
                                     && let Some(tab) = tabs.get(&tab_id)
                                 {
                                     eprintln!("engine: eval (tab {tab_id})");
-                                    tab.webview.evaluate_javascript(js.to_string(), |_| {});
+                                    if let Some(req) = v["id"].as_u64() {
+                                        let shared = shared.clone();
+                                        tab.webview.evaluate_javascript(js.to_string(), move |result| {
+                                            let value = jsvalue_to_json(result);
+                                            shared.updates.lock().unwrap().push(Update {
+                                                tab: tab_id,
+                                                url: None,
+                                                title: None,
+                                                history: None,
+                                                pw: None,
+                                                icon: None,
+                                                cursor: None,
+                                                eval: Some((req, value)),
+                                            });
+                                            shared.pump.kick();
+                                        });
+                                    } else {
+                                        tab.webview.evaluate_javascript(js.to_string(), |_| {});
+                                    }
+                                    shared.pump.kick();
+                                }
+                            }
+                            Some("screenshot") => {
+                                // Automation driver: paint the tab and return its
+                                // pixels as a SHT1 frame (BGRA).
+                                if let Some(tab) = tabs.get(&tab_id) {
+                                    eprintln!("engine: screenshot (tab {tab_id})");
+                                    tab.webview.paint();
+                                    let _ = tab.context.make_current();
+                                    let rect = webrender_api::units::DeviceIntRect::new(
+                                        webrender_api::units::DeviceIntPoint::zero(),
+                                        webrender_api::units::DeviceIntPoint::new(
+                                            current_size.width as i32,
+                                            current_size.height as i32,
+                                        ),
+                                    );
+                                    if let Some(image) = tab.context.read_to_image(rect) {
+                                        let mut bgra = image.into_raw();
+                                        for px in bgra.chunks_exact_mut(4) {
+                                            px.swap(0, 2);
+                                        }
+                                        frame_id += 1;
+                                        out.write_all(&SHOT_MAGIC.to_le_bytes()).ok();
+                                        out.write_all(&frame_id.to_le_bytes()).ok();
+                                        out.write_all(&current_size.width.to_le_bytes()).ok();
+                                        out.write_all(&current_size.height.to_le_bytes()).ok();
+                                        out.write_all(&bgra).ok();
+                                        let _ = out.flush();
+                                    }
                                 }
                             }
                             Some("input") => {
@@ -1065,6 +1157,13 @@ fn main() {
                         &mut out,
                         event_id,
                         &format!("{{\"ev\":\"cursor\",\"tab\":{},\"cursor\":\"{}\"}}", u.tab, c),
+                    );
+                }
+                if let Some((req, value)) = &u.eval {
+                    send_event(
+                        &mut out,
+                        event_id,
+                        &format!("{{\"ev\":\"evalresult\",\"tab\":{},\"id\":{},\"value\":{}}}", u.tab, req, value),
                     );
                 }
                 if let Some(data) = &u.pw {
