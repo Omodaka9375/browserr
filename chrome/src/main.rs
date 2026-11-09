@@ -517,7 +517,10 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
 
     // Bookmarks + history panel, opened by the ellipsis button.
     let menu_panel = {
-        let mut p = col().key("menu-panel").w_full().px(14.0).py(10.0).gap(4.0).fill(t.card);
+        // Compact dropdown: fixed width, capped height, scrolls when long.
+        let mut p = col().key("menu-panel").w(340.0).max_h(440.0).min_h(0.0)
+            .px(14.0).py(10.0).gap(4.0).fill(t.card)
+            .scroll(ScrollSpec { stick_bottom: false });
         p = p.child(text("Bookmarks").font(type_::BODY.lh(20.0)).color(t.text_secondary));
         if s.bookmarks.is_empty() {
             p = p.child(text("No bookmarks yet").font(type_::BODY.lh(18.0)).color(t.text_secondary));
@@ -525,9 +528,13 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         for (url, title) in s.bookmarks.clone() {
             let label = if title.is_empty() { host(&url) } else { title };
             p = p.child(
-                el().w_full().py(2.0)
-                    .on_press(move |s: &mut State| go(s, url.clone()))
-                    .child(text(label).font(type_::BODY.lh(20.0)).color(t.text)),
+                el().w_full().py(4.0).px(8.0).radius(6.0)
+                    .fill(Color::TRANSPARENT).hover(t.hover)
+                    .on_press(move |s: &mut State| {
+                        s.menu_open = false;
+                        go(s, url.clone());
+                    })
+                    .child(text(label).font(type_::BODY.lh(18.0)).color(t.text)),
             );
         }
         p = p.child(text("History").font(type_::BODY.lh(20.0)).color(t.text_secondary));
@@ -537,8 +544,12 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         for url in s.history_view.clone() {
             let u = url.clone();
             p = p.child(
-                el().w_full().py(2.0)
-                    .on_press(move |s: &mut State| go(s, u.clone()))
+                el().w_full().py(4.0).px(8.0).radius(6.0)
+                    .fill(Color::TRANSPARENT).hover(t.hover)
+                    .on_press(move |s: &mut State| {
+                        s.menu_open = false;
+                        go(s, u.clone());
+                    })
                     .child(text(url).font(type_::BODY.lh(18.0)).color(t.text_secondary)),
             );
         }
@@ -561,10 +572,11 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             );
             p = p.child(
                 row().gap(8.0).center_y()
-                    .child(text_input(&s.cred_user, type_::BODY.lh(20.0)).key("cred-user").single_line().w(180.0)
+                    .child(text_input(&s.cred_user, type_::BODY.lh(20.0)).key("cred-user").single_line()
+                        .grow(1.0).min_w(80.0)
                         .color(t.text).placeholder("Username", t.text_secondary)
                         .on_edit(|s: &mut State| &mut s.cred_user))
-                    .child(text_input(&s.cred_pass, type_::BODY.lh(20.0)).key("cred-pass").single_line().w(150.0)
+                    .child(text_input(&s.cred_pass, type_::BODY.lh(20.0)).key("cred-pass").single_line().w(110.0)
                         .color(t.text).placeholder("Password", t.text_secondary)
                         .on_edit(|s: &mut State| &mut s.cred_pass))
                     .child(icon_btn("cred-reveal", &ICON_EYE, true, Some(|s: &mut State| {
@@ -596,7 +608,8 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
     };
 
     // Address pill: shows the page's live URL; click to edit.
-    let pill = row().key("address-pill").w(420.0).h(28.0).px(12.0).radius(14.0).center_y()
+    let pill = row().key("address-pill").h(28.0).min_w(120.0).max_w(460.0).grow(1.0)
+        .px(12.0).radius(14.0).center_y()
         .fill(t.card)
         .on_press(|s: &mut State| {
             if !s.editing {
@@ -645,7 +658,9 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
 
     // Tab pills: titles come from engine events; an x closes each tab.
     let tabs_row = {
-        let mut r = row().gap(6.0).center_y();
+        // Shrinkable + horizontally scrollable so many tabs never push the
+        // rest of the bar off-window.
+        let mut r = row().gap(6.0).center_y().min_w(0.0).max_w(320.0).scroll_x();
         for (i, tab) in s.tabs.iter().enumerate() {
             let is_active = i == s.active;
             let title = if is_active {
@@ -725,7 +740,11 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         .child(icon_btn("br-menu", &ICON_HAMBURGER, true, Some(|s: &mut State| {
             s.menu_open = !s.menu_open;
             if s.menu_open {
-                s.history_view = store::read_history(15);
+                // Skip about:blank noise from redirects; keep the newest real pages.
+                s.history_view = store::read_history(60).into_iter()
+                    .filter(|u| !u.starts_with("about:") && !u.is_empty())
+                    .take(15)
+                    .collect();
                 refresh_creds(s);
             }
         })))
