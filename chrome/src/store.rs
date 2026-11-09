@@ -27,6 +27,19 @@ fn profile_from_args() -> Option<String> {
     None
 }
 
+/// --driver-port=N argument: TCP port for the automation driver (computer-use
+/// mode). None (default) keeps the chrome closed to external control.
+pub fn driver_port() -> Option<u16> {
+    for a in std::env::args().skip(1) {
+        if let Some(rest) = a.strip_prefix("--driver-port=") {
+            if let Ok(p) = rest.parse() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
 pub fn sanitize_profile(v: &str) -> String {
     v.chars()
         .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')

@@ -118,8 +118,11 @@ place; so does clearing site data (tabs are reloaded afterwards).
 
 ## Automation (driver)
 
-The engine is fully drivable from an external script - not via CDP (servo has
-no CDP server), but over its own loopback protocol. `tools/driver.py` wraps it:
+The browser is fully drivable from an external script - not via CDP (servo has
+no CDP server), but over its own loopback protocol. `tools/driver.py` wraps it
+in two modes:
+
+**Headless** - spawn a bare engine, no UI:
 
 ```python
 import sys; sys.path.insert(0, "tools")
@@ -128,17 +131,42 @@ from driver import Driver, save_png
 d = Driver(log="engine.log")   # spawns engine.exe headless
 try:
     d.navigate("https://example.com"); d.wait_load(); d.wait_ready()
-    title = d.eval_js("document.title")       # results returned (any JSON value)
+    print(d.eval_js("document.title"))       # results returned (any JSON value)
     w, h, bgra = d.screenshot(); save_png("shot.png", w, h, bgra)
     d.click(300, 300); d.type_text("hi")
 finally:
     d.close()
 ```
 
-Notes: the engine accepts exactly one connection, so the driver talks to a
-headless engine it spawns, not to a running Browserr UI. The url event fires
-when navigation commits, before the page accepts input - call `wait_ready()`
-after `wait_load()` before clicking or typing. See `tools/test_driver.py`.
+**Computer use** - start the browser with a driver port and attach; the window
+stays visible and interactive while the script drives it:
+
+```text
+chrome.exe --driver-port=7412 --profile=test
+```
+
+```python
+d = Driver.attach(7412)       # same API as headless
+d.navigate("https://example.com"); d.wait_ready()
+w, h, bgra = d.screenshot()   # what the window shows
+...
+d.close()                     # detaches; the window keeps running
+```
+
+The driver port is opt-in (`--driver-port=N`), loopback-only, and accepts
+multiple drivers: commands are forwarded to the engine and engine events and
+screenshot answers are mirrored to every attached driver. Only page-level
+commands are allowed through; resize and the frame-stream controls stay
+chrome-owned. Input coordinates are page-relative - in attach mode the page
+starts below the 40px toolbar.
+
+Notes: the bare engine accepts exactly one connection, which is why headless
+mode spawns its own engine. The url event fires when navigation commits,
+before the page accepts input - call `wait_ready()` after `wait_load()`
+before clicking or typing. In attach mode the driver port opens before the
+engine finishes booting - wait for the first `url` event before navigating
+(`tools/test_attach.py` shows the pattern). See `tools/test_driver.py` and
+`tools/test_attach.py` for complete examples.
 
 ## Passwords
 

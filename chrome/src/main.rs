@@ -356,6 +356,12 @@ fn setup(s: &mut State, wake: rune::Waker) {
         String::new()
     };
     let profile_dir = store::data_dir().join("engine");
+    // Computer-use mode: expose the driver port before the engine connects
+    // so an automation client can attach from the first frame on.
+    let hub = engine::DriverHub::new();
+    if let Some(port) = store::driver_port() {
+        engine::start_driver_listener(port, hub.clone());
+    }
     match Engine::start(
         s.surface.clone(),
         wake,
@@ -363,6 +369,7 @@ fn setup(s: &mut State, wake: rune::Waker) {
         &user_agent,
         &profile_dir.to_string_lossy(),
         &adblock_list,
+        hub.clone(),
     ) {
         Ok(mut e) => {
             s.engine_ua = user_agent.clone();

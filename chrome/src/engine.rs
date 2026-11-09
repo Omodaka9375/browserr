@@ -2,8 +2,8 @@
 //! receives frames (pushed into a Rune NativeSurface) and events (url/title/
 //! history, stored in a shared Ui map the view reads).
 use std::collections::HashMap;
-use std::io::{BufReader, Read, Write};
-use std::net::TcpStream;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -46,6 +46,7 @@ fn bind_job(child: &Child) -> Option<windows::Win32::Foundation::HANDLE> {
 const PORT: u16 = 7411;
 const MAGIC: u32 = 0x46_52_4D_31; // FRM1
 const EV_MAGIC: u32 = 0x45_56_54_31; // EVT1
+const SHOT_MAGIC: u32 = 0x53_48_54_31; // SHT1 (screenshot answer)
 
 /// A login captured from a submitted password form.
 #[derive(Clone, Debug)]
@@ -127,10 +128,11 @@ struct StartArgs {
     user_agent: String,
     profile_dir: String,
     adblock_list: String,
+    /// Attached-driver fan-out hub (computer-use automation).
+    hub: Arc<DriverHub>,
 }
 
 pub struct Engine {
-    stream: TcpStream,
     child: Child,
     /// Job object handle; the engine is killed when this is dropped (chrome exit).
     #[cfg(windows)]
@@ -151,6 +153,7 @@ impl Engine {
         user_agent: &str,
         profile_dir: &str,
         adblock_list: &str,
+        hub: Arc<DriverHub>,
     ) -> std::io::Result<Engine> {
         let args = StartArgs {
             surface,
@@ -159,6 +162,7 @@ impl Engine {
             user_agent: user_agent.to_string(),
             profile_dir: profile_dir.to_string(),
             adblock_list: adblock_list.to_string(),
+            hub,
         };
         Engine::spawn(args)
     }
@@ -208,13 +212,16 @@ impl Engine {
         })?;
 
         let reader_stream = stream.try_clone()?;
+        // Driver commands share this socket: keep a write clone in the hub
+        // (all writers go through it, so lines can never interleave).
+        args.hub.set_engine(stream.try_clone().ok());
         let surface = args.surface.clone();
         let waker = args.waker.clone();
         let ui = args.ui.clone();
-        let reader = std::thread::spawn(move || read_frames(reader_stream, surface, waker, ui));
+        let hub = args.hub.clone();
+        let reader = std::thread::spawn(move || read_frames(reader_stream, surface, waker, ui, hub));
 
         Ok(Engine {
-            stream,
             child,
             #[cfg(windows)]
             job,
@@ -245,6 +252,7 @@ impl Engine {
     }
 
     fn kill_and_wait(&mut self) {
+        self.args.hub.set_engine(None);
         let _ = self.child.kill();
         let _ = self.child.wait();
         #[cfg(windows)]
@@ -265,8 +273,8 @@ impl Engine {
             user_agent: self.args.user_agent.clone(),
             profile_dir: self.args.profile_dir.clone(),
             adblock_list: self.args.adblock_list.clone(),
+            hub: self.args.hub.clone(),
         })?;
-        self.stream = fresh.stream;
         self.child = fresh.child;
         #[cfg(windows)]
         {
@@ -279,8 +287,7 @@ impl Engine {
 
     fn send(&mut self, json: &str) {
         eprintln!("chrome: -> engine {json}");
-        let _ = writeln!(&mut self.stream, "{json}");
-        let _ = self.stream.flush();
+        self.args.hub.send_command(json);
     }
 
     pub fn navigate(&mut self, url: &str, tab: u64) {
@@ -349,7 +356,132 @@ impl Engine {
     }
 }
 
-fn read_frames(stream: TcpStream, surface: NativeSurface, waker: Waker, ui: Arc<Ui>) {
+/// Hub for attached automation drivers ("computer use" mode). Driver clients
+/// connect to the chrome's driver port; their commands are serialized onto
+/// the engine socket and engine events/screenshots are mirrored back to
+/// them. The chrome UI keeps working normally while a driver is attached.
+pub struct DriverHub {
+    clients: Mutex<Vec<TcpStream>>,
+    /// Write half of the engine connection (a clone of the UI's stream);
+    /// None while the engine is being restarted.
+    engine_out: Mutex<Option<TcpStream>>,
+}
+
+impl DriverHub {
+    pub fn new() -> Arc<DriverHub> {
+        Arc::new(DriverHub {
+            clients: Mutex::new(Vec::new()),
+            engine_out: Mutex::new(None),
+        })
+    }
+
+    fn set_engine(&self, stream: Option<TcpStream>) {
+        *self.engine_out.lock().unwrap() = stream;
+    }
+
+    pub fn has_clients(&self) -> bool {
+        !self.clients.lock().unwrap().is_empty()
+    }
+
+    /// Mirror a framed engine message (EVT1/SHT1) to every attached driver;
+    /// clients that went away are dropped.
+    fn broadcast(&self, bytes: &[u8]) {
+        let mut clients = self.clients.lock().unwrap();
+        clients.retain_mut(|c| {
+            let ok = c.write_all(bytes).is_ok();
+            let ok = ok && c.flush().is_ok();
+            ok
+        });
+    }
+
+    /// Send one command line to the engine. A single write, so the UI thread
+    /// and driver clients can never interleave mid-line.
+    fn send_command(&self, line: &str) -> bool {
+        let mut buf = line.as_bytes().to_vec();
+        buf.push(b'\n');
+        let mut guard = self.engine_out.lock().unwrap();
+        match guard.as_mut() {
+            Some(s) => s.write_all(&buf).is_ok(),
+            None => false,
+        }
+    }
+}
+
+/// Commands an attached driver may send; all are tab-addressed and forwarded
+/// to the engine 1:1. resize/frames are chrome-owned and rejected.
+const DRIVER_CMDS: [&str; 12] = [
+    "navigate", "back", "forward", "new_tab", "activate", "close_tab",
+    "input", "wheel", "key", "eval", "screenshot", "zoom",
+];
+
+/// Accept automation-driver connections on 127.0.0.1:port (opt-in via
+/// --driver-port=N; loopback only, like the engine port).
+pub fn start_driver_listener(port: u16, hub: Arc<DriverHub>) {
+    std::thread::spawn(move || {
+        let listener = match TcpListener::bind(("127.0.0.1", port)) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("chrome: driver port bind failed: {e}");
+                return;
+            }
+        };
+        eprintln!("chrome: driver port listening on 127.0.0.1:{port}");
+        for client in listener.incoming() {
+            let Ok(stream) = client else { return; };
+            // A driver that stops reading must not wedge the frame reader.
+            let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(2)));
+            if let Ok(clone) = stream.try_clone() {
+                let mut clients = hub.clients.lock().unwrap();
+                clients.push(clone);
+                eprintln!("chrome: driver attached ({} open)", clients.len());
+            }
+            let hub = hub.clone();
+            std::thread::spawn(move || driver_client_loop(stream, hub));
+        }
+    });
+}
+
+/// Read JSON command lines from one driver and forward the allowed ones to
+/// the engine. Exits on disconnect (broadcast prunes the socket later).
+fn driver_client_loop(stream: TcpStream, hub: Arc<DriverHub>) {
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let v: serde_json::Value = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let cmd = match v["cmd"].as_str() {
+            Some(c) => c,
+            None => continue,
+        };
+        if !DRIVER_CMDS.contains(&cmd) {
+            eprintln!("chrome: driver command rejected: {cmd}");
+            continue;
+        }
+        if !hub.send_command(trimmed) {
+            eprintln!("chrome: driver command dropped (engine down)");
+        }
+    }
+    eprintln!("chrome: driver detached");
+}
+
+fn read_frames(
+    stream: TcpStream,
+    surface: NativeSurface,
+    waker: Waker,
+    ui: Arc<Ui>,
+    hub: Arc<DriverHub>,
+) {
     let mut reader = BufReader::new(stream);
     let counter = AtomicU64::new(1);
     let mut header = [0u8; 20];
@@ -410,6 +542,18 @@ fn read_frames(stream: TcpStream, surface: NativeSurface, waker: Waker, ui: Arc<
                     waker();
                     continue;
                 };
+                // Mirror engine events to attached drivers, except the
+                // chrome-internal GPU frame notifications (drivers ask for
+                // screenshots explicitly instead of getting the live stream).
+                if hub.has_clients() && v["ev"].as_str() != Some("frame") {
+                    let mut frame = Vec::with_capacity(20 + json.len());
+                    frame.extend_from_slice(&EV_MAGIC.to_le_bytes());
+                    frame.extend_from_slice(&_id.to_le_bytes());
+                    frame.extend_from_slice(&(json.len() as u32).to_le_bytes());
+                    frame.extend_from_slice(&0u32.to_le_bytes());
+                    frame.extend_from_slice(&json);
+                    hub.broadcast(&frame);
+                }
                 let tab = v["tab"].as_u64().unwrap_or(0);
                 match v["ev"].as_str() {
                     Some("url") => {
@@ -485,6 +629,26 @@ fn read_frames(stream: TcpStream, surface: NativeSurface, waker: Waker, ui: Arc<
                         }
                     }
                     _ => {}
+                }
+            }
+            SHOT_MAGIC => {
+                // Screenshot answer for an attached driver (the UI never
+                // asks the engine for screenshots itself).
+                let (w, h) = (a, b);
+                let len = w as usize * h as usize * 4;
+                let mut pixels = vec![0u8; len];
+                if reader.read_exact(&mut pixels).is_err() {
+                    eprintln!("chrome: frame reader: screenshot read failed");
+                    return;
+                }
+                if hub.has_clients() {
+                    let mut frame = Vec::with_capacity(20 + len);
+                    frame.extend_from_slice(&SHOT_MAGIC.to_le_bytes());
+                    frame.extend_from_slice(&_id.to_le_bytes());
+                    frame.extend_from_slice(&w.to_le_bytes());
+                    frame.extend_from_slice(&h.to_le_bytes());
+                    frame.extend_from_slice(&pixels);
+                    hub.broadcast(&frame);
                 }
             }
             _ => {

@@ -1,21 +1,28 @@
-"""Browserr automation driver (engine-level, like CDP for chrome.exe).
+"""Browserr automation driver (like CDP for chrome.exe, but our own protocol).
 
-Speaks the engine's loopback JSON protocol directly: spawn engine.exe, then
-navigate, eval JS (results returned), inject input, and take screenshots.
+Two modes sharing one API:
 
+Headless (spawn a bare engine):
     from driver import Driver
     d = Driver()
-    try:
-        d.navigate("https://example.com")
-        d.wait_load()
-        print(d.eval_js("document.title"))
-        w, h, bgra = d.screenshot()
-        d.save_png("shot.png", w, h, bgra)
-    finally:
-        d.close()
+    d.navigate("https://example.com"); d.wait_load(); d.wait_ready()
+    print(d.eval_js("document.title"))
 
-Note: the engine accepts exactly one connection (the chrome's), so a Driver
-talks to a headless engine it spawns itself - not to a running Browserr UI.
+Computer use (drive a real browser window; the UI keeps working):
+    chrome.exe --driver-port=7412 --profile=test
+    from driver import Driver
+    d = Driver.attach(7412)
+    d.navigate("https://example.com"); d.wait_ready()
+    w, h, bgra = d.screenshot()   # what the window shows
+
+Capabilities: navigate, wait_load/wait_ready, eval_js (results returned as
+JSON values), screenshot (BGRA buffer, save_png helper), click, move, wheel,
+key, type_text, new_tab, activate. Input coordinates are page-relative; in
+attach mode the page starts below the 40px toolbar.
+
+The headless engine accepts exactly one connection (the chrome's), which is
+why the driver spawns its own engine there. The chrome's driver port accepts
+multiple drivers and mirrors engine events/screenshots to all of them.
 """
 import json
 import socket
@@ -52,20 +59,39 @@ def save_png(path: str, w: int, h: int, bgra: bytes) -> None:
 
 
 class Driver:
-    """Drives a headless Browserr engine process over its automation protocol."""
+    """Drives Browserr over its automation protocol.
+
+    Two modes:
+      - Headless (default): spawns engine.exe and talks to it directly.
+      - Computer use: Driver.attach(port=N) connects to a running
+        chrome.exe --driver-port=N window instead - same API, but it drives
+        the visible browser (and the UI keeps working).
+    """
+
+    @classmethod
+    def attach(cls, port=7412, log=None):
+        """Attach to a running Browserr window started with --driver-port=N."""
+        self = cls.__new__(cls)
+        self._init_common(port, log=log)
+        last = None
+        for _ in range(50):
+            try:
+                self.sock = socket.create_connection(("127.0.0.1", self.port), timeout=1)
+                break
+            except OSError as e:
+                last = e
+                time.sleep(0.1)
+        if self.sock is None:
+            raise ConnectionError(f"no driver port on {self.port} (is the "
+                                  f"browser running with --driver-port={port}?): {last}")
+        threading.Thread(target=self._read_loop, daemon=True).start()
+        return self
 
     def __init__(self, engine_path=None, profile_dir=None, port=7411,
                  width=1200, height=760, log=None):
-        self.port = port
+        self._init_common(port, log=log)
         self.width = width
         self.height = height
-        self.events = []            # all EVT1 events, newest last
-        self.shots = []             # (w, h, bgra) screenshots, newest last
-        self._next_id = 1
-        self._cond = threading.Condition()
-        self._stop = False
-        self.proc = None
-        self.sock = None
 
         engine_path = engine_path or os.environ.get(
             "BROWSERR_ENGINE",
@@ -73,7 +99,6 @@ class Driver:
         args = [engine_path]
         if profile_dir:
             args.append(f"--profile-dir={profile_dir}")
-        self._log = open(log, "w") if log else None
         self.proc = subprocess.Popen(args, stderr=self._log or subprocess.DEVNULL)
 
         last = None
@@ -90,6 +115,20 @@ class Driver:
 
         self.cmd({"cmd": "resize", "w": width, "h": height})
         threading.Thread(target=self._read_loop, daemon=True).start()
+
+    def _init_common(self, port, log=None):
+        """Shared state for both modes (headless spawn vs attach)."""
+        self.port = port
+        self.events = []            # all EVT1 events, newest last
+        self.shots = []             # (w, h, bgra) screenshots, newest last
+        self._next_id = 1
+        self._cond = threading.Condition()
+        self._stop = False
+        self.proc = None
+        self.sock = None
+        self._log = open(log, "w") if log else None
+        self.width = None
+        self.height = None
 
     # -- protocol ---------------------------------------------------------
 
@@ -227,6 +266,7 @@ class Driver:
         self.cmd({"cmd": "activate", "tab": tab})
 
     def close(self) -> None:
+        """Detach (attach mode leaves the browser running) or stop the engine."""
         self._stop = True
         if self.sock:
             try:
