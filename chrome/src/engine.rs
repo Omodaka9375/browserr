@@ -8,7 +8,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use rune::{NativeSurface, Waker};
+use rune::{NativeSurface, Pixels, Waker};
 
 #[cfg(windows)]
 use rune::native_surface::windows::SharedTexture;
@@ -68,6 +68,8 @@ pub struct Ui {
     pub history: Mutex<HashMap<u64, (bool, bool)>>,
     /// Latest password-form capture (replaced by newer ones).
     pub pw: Mutex<Option<PwCapture>>,
+    /// Decoded favicons keyed by page origin host.
+    pub icons: Mutex<HashMap<String, Pixels>>,
 }
 
 impl Ui {
@@ -78,11 +80,16 @@ impl Ui {
             titles: Mutex::new(HashMap::new()),
             history: Mutex::new(HashMap::new()),
             pw: Mutex::new(None),
+            icons: Mutex::new(HashMap::new()),
         })
     }
 
     pub fn peek_pw(&self) -> Option<PwCapture> {
         self.pw.lock().unwrap().clone()
+    }
+
+    pub fn icon(&self, host: &str) -> Option<Pixels> {
+        self.icons.lock().unwrap().get(host).cloned()
     }
 
     pub fn url(&self, tab: u64) -> Option<String> {
@@ -299,6 +306,27 @@ fn read_frames(stream: TcpStream, surface: NativeSurface, waker: Waker, ui: Arc<
                         let back = v["back"].as_bool().unwrap_or(false);
                         let forward = v["forward"].as_bool().unwrap_or(false);
                         ui.history.lock().unwrap().insert(tab, (back, forward));
+                    }
+                    Some("favicon") => {
+                        let origin = v["origin"].as_str().unwrap_or("");
+                        let w = v["w"].as_u64().unwrap_or(0) as u32;
+                        let h = v["h"].as_u64().unwrap_or(0) as u32;
+                        let host = store::host(origin);
+                        if !host.is_empty() && w > 0 && h > 0 {
+                            let rgba: Vec<u8> = v["rgba"]
+                                .as_array()
+                                .map(|a| {
+                                    a.iter()
+                                        .filter_map(|x| x.as_u64().map(|n| n as u8))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            if rgba.len() == (w * h * 4) as usize {
+                                let px = Pixels::new();
+                                px.set(w, h, rgba);
+                                ui.icons.lock().unwrap().insert(host, px);
+                            }
+                        }
                     }
                     Some("pwcapture") => {
                         let d = &v["data"];

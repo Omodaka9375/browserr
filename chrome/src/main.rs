@@ -61,10 +61,8 @@ impl Default for Tab {
     }
 }
 
-fn host(url: &str) -> String {
-    url.split("://").nth(1).unwrap_or(url)
-        .split('/').next().unwrap_or(url)
-        .to_string()
+pub fn host(url: &str) -> String {
+    crate::store::host(url)
 }
 
 fn state() -> State {
@@ -270,6 +268,11 @@ static ICON_KEY: Icon = Icon {
     view: 16.0,
     body: r#"<circle cx="5.5" cy="10.5" r="2.7" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M7.5 8.5L13 3M10.5 3.5L12.5 5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/>"#,
 };
+static ICON_EYE: Icon = Icon {
+    name: "br-eye",
+    view: 16.0,
+    body: r#"<path d="M2.5 8s2-4 5.5-4 5.5 4 5.5 4-2 4-5.5 4S2.5 8 2.5 8z" stroke="currentColor" stroke-width="1.2" fill="none"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/>"#,
+};
 
 fn icon_btn(id: &'static str, ic: &'static Icon, enabled: bool, action: Option<impl Fn(&mut State) + 'static>) -> El {
     let t = tok::theme(true);
@@ -413,9 +416,12 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                     .child(text_input(&s.cred_user, type_::BODY.lh(20.0)).key("cred-user").single_line().w(180.0)
                         .color(t.text).placeholder("Username", t.text_secondary)
                         .on_edit(|s: &mut State| &mut s.cred_user))
-                    .child(text_input(&s.cred_pass, type_::BODY.lh(20.0)).key("cred-pass").single_line().w(180.0)
+                    .child(text_input(&s.cred_pass, type_::BODY.lh(20.0)).key("cred-pass").single_line().w(150.0)
                         .color(t.text).placeholder("Password", t.text_secondary)
-                        .on_edit(|s: &mut State| &mut s.cred_pass)),
+                        .on_edit(|s: &mut State| &mut s.cred_pass))
+                    .child(icon_btn("cred-reveal", &ICON_EYE, true, Some(|s: &mut State| {
+                        s.cred_pass.set_revealed(!s.cred_pass.is_revealed());
+                    }))),
             );
             p = p.child(
                 row().gap(8.0).center_y()
@@ -496,9 +502,13 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 s.ui.title(tab.id).unwrap_or_else(|| tab.title.clone())
             };
             let label_color = if is_active { t.text } else { t.text_secondary };
+            let tab_host = s.ui.url(tab.id).map(|u| host(&u)).unwrap_or_default();
             let mut pill_el = el().key("tab").h(28.0).px(12.0).radius(14.0).center_y()
-                .fill(if is_active { t.hover } else { t.card })
-                .child(text(title).font(type_::BODY.lh(20.0)).color(label_color))
+                .fill(if is_active { t.hover } else { t.card });
+            if let Some(px) = s.ui.icon(&tab_host) {
+                pill_el = pill_el.child(el().size(14.0, 14.0).center_y().pixels(&px).px(4.0));
+            }
+            pill_el = pill_el.child(text(title).font(type_::BODY.lh(20.0)).color(label_color))
                 .on_press(move |s: &mut State| {
                     if s.active != i {
                         s.active = i;

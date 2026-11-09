@@ -70,6 +70,8 @@ struct Update {
     history: Option<(bool, bool)>,
     /// Captured login data (JSON {u,p,o}) from a submitted password form.
     pw: Option<String>,
+    /// Decoded favicon: (page origin, width, height, RGBA bytes).
+    icon: Option<(String, u32, u32, Vec<u8>)>,
 }
 
 /// Runs on load complete: if the page has a password field, capture its
@@ -100,6 +102,12 @@ var d=sessionStorage.getItem('browserr');
 if(d){sessionStorage.removeItem('browserr');return d;}
 }catch(e){} return '';})()"#;
 
+/// Returns JSON {icon, origin}: the page's favicon url (or '') and its origin.
+const FAVICON_JS: &str = r#"(function(){try{
+var l=document.querySelector('link[rel~="icon"]')||document.querySelector('link[rel="shortcut icon"]');
+return JSON.stringify({icon:l?l.href:'',origin:location.origin});
+}catch(e){return '';}})()"#;
+
 struct Shared {
     pump: Pump,
     /// A new frame is ready on the active tab.
@@ -110,6 +118,8 @@ struct Shared {
     updates: Mutex<Vec<Update>>,
     /// Tabs whose current load has reported LoadStatus::Started.
     started: Mutex<std::collections::HashSet<u64>>,
+    /// Decoded favicons keyed by icon URL (16x16 RGBA), filled by fetch threads.
+    icons: Mutex<std::collections::HashMap<String, Vec<u8>>>,
 }
 
 struct ServoAdblockDelegate {
@@ -176,12 +186,77 @@ impl FrameDelegate {
                         title: None,
                         history: None,
                         pw: Some(data),
+                        icon: None,
                     });
                     shared.pump.kick();
                 }
             }
         });
     }
+
+    /// Eval the favicon lookup; fetch + decode the icon off-thread if new.
+    fn eval_favicon(&self, webview: servo::WebView) {
+        let shared = self.shared.clone();
+        let tab = self.tab;
+        webview.evaluate_javascript(FAVICON_JS, move |result| {
+            let Ok(servo::JSValue::String(data)) = result else { return };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) else { return };
+            let icon = v["icon"].as_str().unwrap_or("").to_string();
+            let origin = v["origin"].as_str().unwrap_or("").to_string();
+            if icon.is_empty() || origin.is_empty() {
+                return;
+            }
+            // Already decoded for this icon URL: report the cached copy.
+            if let Some(rgba) = shared.icons.lock().unwrap().get(&icon) {
+                let rgba = rgba.clone();
+                shared.updates.lock().unwrap().push(Update {
+                    tab,
+                    url: None,
+                    title: None,
+                    history: None,
+                    pw: None,
+                    icon: Some((origin, 16, 16, rgba)),
+                });
+                shared.pump.kick();
+                return;
+            }
+            // Fetch + decode on a worker thread; the result lands in updates.
+            let shared = shared.clone();
+            std::thread::spawn(move || {
+                if let Some((rgba, w, h)) = fetch_favicon(&icon) {
+                    shared.icons.lock().unwrap().insert(icon, rgba.clone());
+                    shared.updates.lock().unwrap().push(Update {
+                        tab,
+                        url: None,
+                        title: None,
+                        history: None,
+                        pw: None,
+                        icon: Some((origin, w, h, rgba)),
+                    });
+                    shared.pump.kick();
+                }
+            });
+        });
+    }
+}
+
+/// Fetch and decode an icon into 16x16 RGBA. Any failure returns None.
+fn fetch_favicon(url: &str) -> Option<(Vec<u8>, u32, u32)> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return None;
+    }
+    let resp = ureq::get(url).call().ok()?;
+    let mut bytes = Vec::new();
+    use std::io::Read as _;
+    std::io::Read::take(resp.into_reader(), 1 << 20)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    let img = image::load_from_memory(&bytes).ok()?;
+    let rgba = img
+        .resize_exact(16, 16, image::imageops::FilterType::Lanczos3)
+        .into_rgba8()
+        .into_raw();
+    Some((rgba, 16, 16))
 }
 
 impl servo::WebViewDelegate for FrameDelegate {
@@ -200,6 +275,7 @@ impl servo::WebViewDelegate for FrameDelegate {
             title: None,
             history: None,
             pw: None,
+            icon: None,
         });
         // Pick up a capture that a submitted form left behind.
         self.eval_pw(webview, PW_READ_JS);
@@ -211,9 +287,15 @@ impl servo::WebViewDelegate for FrameDelegate {
             self.shared.started.lock().unwrap().insert(self.tab);
             self.shared.pump.kick();
         } else if matches!(status, servo::LoadStatus::Complete) {
-            // Page is ready: arm the submit capture if it has a password field.
-            self.eval_pw(webview, PW_INSTALL_JS);
+            // Page is ready: arm the submit capture if it has a password field,
+            // and look up the favicon.
+            self.eval_pw(webview.clone(), PW_INSTALL_JS);
+            self.eval_favicon(webview);
         }
+    }
+
+    fn notify_favicon_changed(&self, webview: servo::WebView) {
+        self.eval_favicon(webview);
     }
 
     fn notify_page_title_changed(&self, _webview: servo::WebView, title: Option<String>) {
@@ -223,6 +305,7 @@ impl servo::WebViewDelegate for FrameDelegate {
             title,
             history: None,
             pw: None,
+            icon: None,
         });
         self.shared.pump.kick();
     }
@@ -236,6 +319,7 @@ impl servo::WebViewDelegate for FrameDelegate {
             title: None,
             history: Some((back, forward)),
             pw: None,
+            icon: None,
         });
         self.shared.pump.kick();
     }
@@ -365,6 +449,7 @@ fn main() {
         active: AtomicU64::new(0),
         updates: Mutex::new(Vec::new()),
         started: Mutex::new(std::collections::HashSet::new()),
+        icons: Mutex::new(std::collections::HashMap::new()),
     });
 
     let mut opts = servo::Opts::default();
@@ -701,6 +786,21 @@ fn main() {
                         &mut out,
                         event_id,
                         &format!("{{\"ev\":\"pwcapture\",\"tab\":{},\"data\":{}}}", u.tab, data),
+                    );
+                }
+                if let Some((origin, w, h, rgba)) = &u.icon {
+                    let pixels: Vec<String> = rgba.iter().map(|b| b.to_string()).collect();
+                    send_event(
+                        &mut out,
+                        event_id,
+                        &format!(
+                            "{{\"ev\":\"favicon\",\"tab\":{},\"origin\":\"{}\",\"w\":{},\"h\":{},\"rgba\":[{}]}}",
+                            u.tab,
+                            origin.replace('\\', "\\\\").replace('"', "\\\""),
+                            w,
+                            h,
+                            pixels.join(",")
+                        ),
                     );
                 }
             }

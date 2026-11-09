@@ -46,6 +46,13 @@ pub fn profile() -> &'static str {
     })
 }
 
+/// Host portion of a URL ("https://a.b/c" -> "a.b"); "" when unparseable.
+pub fn host(url: &str) -> String {
+    url.split("://").nth(1).unwrap_or(url)
+        .split('/').next().unwrap_or(url)
+        .to_string()
+}
+
 /// %APPDATA%\browserr (falls back to %TEMP% if APPDATA is unset).
 pub fn root_dir() -> std::path::PathBuf {
     std::env::var("APPDATA")

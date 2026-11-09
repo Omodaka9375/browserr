@@ -145,6 +145,11 @@ data never reaches other sites. Limitations: SPA logins without a submit
 event or navigation are not captured, and the prompt's username is not
 editable (use the menu panel for that).
 
+Favicons: the engine reads the page's `<link rel=icon>` via JS after load,
+fetches and decodes the image (PNG/ICO/JPEG/WebP/BMP/GIF), resizes it to
+16x16 RGBA and sends it once per icon url; the chrome renders it in tab
+pills. `--probe-shared` on the engine tests the shared-frame path.
+
 ## Known limitations
 
 - Frames stream over loopback TCP (~4MB each); a GPU shared-texture path would
