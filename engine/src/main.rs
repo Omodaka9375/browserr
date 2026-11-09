@@ -12,6 +12,7 @@
 //!                 {"ev":"url","tab":N,"url":"..."} | {"ev":"title","tab":N,"title":"..."}
 //! Only the active tab is painted; switching tabs re-sends that tab's url/title.
 //! Options: --user-agent=STRING overrides the HTTP user agent (from settings.json).
+//!           --profile-dir=PATH gives Servo a per-profile config/storage dir.
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use servo::RenderingContext;
@@ -176,9 +177,12 @@ fn main() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let mut user_agent = None;
+    let mut profile_dir = None;
     for a in std::env::args().skip(1) {
         if let Some(v) = a.strip_prefix("--user-agent=") {
             user_agent = Some(v.to_string());
+        } else if let Some(v) = a.strip_prefix("--profile-dir=") {
+            profile_dir = Some(std::path::PathBuf::from(v));
         }
     }
 
@@ -198,6 +202,11 @@ fn main() {
         started: Mutex::new(std::collections::HashSet::new()),
     });
 
+    let mut opts = servo::Opts::default();
+    if let Some(dir) = profile_dir {
+        eprintln!("engine: profile dir {}", dir.display());
+        opts.config_dir = Some(dir);
+    }
     let mut prefs = servo::Preferences::default();
     if let Some(ua) = user_agent {
         eprintln!("engine: custom user agent set");
@@ -205,6 +214,7 @@ fn main() {
     }
     let servo = servo::ServoBuilder::default()
         .event_loop_waker(Box::new(ServoWaker(pump.clone())))
+        .opts(opts)
         .preferences(prefs)
         .build();
     servo.setup_logging();

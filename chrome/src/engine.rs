@@ -59,12 +59,14 @@ pub struct Engine {
 
 impl Engine {
     /// Spawn the engine sibling process and start the frame reader.
-    /// `user_agent` (may be empty) is forwarded to the engine as an option.
+    /// `user_agent` (may be empty) is forwarded as an option; `profile_dir`
+    /// gives the engine its own per-profile storage dir (may be empty).
     pub fn start(
         surface: NativeSurface,
         waker: Waker,
         ui: Arc<Ui>,
         user_agent: &str,
+        profile_dir: &str,
     ) -> std::io::Result<Engine> {
         let exe = std::env::var("BROWSERR_ENGINE")
             .map(std::path::PathBuf::from)
@@ -82,6 +84,9 @@ impl Engine {
         let mut cmd = Command::new(exe);
         if !user_agent.is_empty() {
             cmd.arg(format!("--user-agent={user_agent}"));
+        }
+        if !profile_dir.is_empty() {
+            cmd.arg(format!("--profile-dir={profile_dir}"));
         }
         let child = cmd
             .stdout(Stdio::null())

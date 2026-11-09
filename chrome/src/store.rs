@@ -5,13 +5,38 @@
 //!   session.json   { "urls": ["..."], "active": N }  (written on tab changes)
 
 use std::io::Write;
+use std::sync::OnceLock;
 
-/// %APPDATA%\browserr (falls back to %TEMP% if APPDATA is unset).
+/// Profile name from `--profile=X` (sanitized); "default" when absent.
+/// Every file below lives under profiles/<name>/ so profiles are fully
+/// separate data dirs.
+static PROFILE: OnceLock<String> = OnceLock::new();
+
+pub fn profile() -> &'static str {
+    PROFILE.get_or_init(|| {
+        for a in std::env::args().skip(1) {
+            if let Some(v) = a.strip_prefix("--profile=") {
+                let safe: String = v
+                    .chars()
+                    .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+                    .collect();
+                if !safe.is_empty() {
+                    return safe;
+                }
+            }
+        }
+        "default".to_string()
+    })
+}
+
+/// %APPDATA%\browserr\profiles\<name> (falls back to %TEMP% if APPDATA is unset).
 pub fn data_dir() -> std::path::PathBuf {
     std::env::var("APPDATA")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::env::temp_dir())
         .join("browserr")
+        .join("profiles")
+        .join(profile())
 }
 
 pub struct Settings {

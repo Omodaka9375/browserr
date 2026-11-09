@@ -92,7 +92,14 @@ fn go(s: &mut State, url: String) {
 fn setup(s: &mut State, wake: rune::Waker) {
     s.surface.set_waker(wake.clone());
     let settings = store::load_settings();
-    match Engine::start(s.surface.clone(), wake, s.ui.clone(), &settings.user_agent) {
+    let profile_dir = store::data_dir().join("engine");
+    match Engine::start(
+        s.surface.clone(),
+        wake,
+        s.ui.clone(),
+        &settings.user_agent,
+        &profile_dir.to_string_lossy(),
+    ) {
         Ok(mut e) => {
             // Restore open tabs: navigate() creates missing engine tabs on demand.
             let active_id = s.tabs[s.active].id;

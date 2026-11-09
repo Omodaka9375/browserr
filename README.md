@@ -63,22 +63,33 @@ history. Tab 0 exists from startup.
 - Real multi-tab: one Servo webview + GPU context per tab, per-tab history,
   tab pills with live titles and close buttons
 - Back/forward wired to Servo history, greyed out per active tab
-- User data: settings.json (homepage, user agent), history.jsonl, bookmarks
-  (star button), session restore across restarts, bookmarks/history panel
+- User data: per-profile dirs (chrome data + Servo storage via --profile-dir),
+  settings.json (homepage, user agent), history.jsonl, bookmarks (star
+  button), session restore across restarts, bookmarks/history panel
 - GPU rendering: surfman WGL hardware context (software fallback), ~3-20ms per
   frame cycle; identical frames skipped, animated pages capped at 30fps
 - Two-exe distribution via scripts/dist.ps1 (side-by-side, no env var needed)
 
 ## User data (Phase 1)
 
-Everything lives in `%APPDATA%\browserr` as plain files, no UI required:
+Profiles are separate data dirs, selected on the command line:
+
+```text
+chrome.exe --profile work
+```
+
+Everything lives in `%APPDATA%\browserr\profiles\<name>\` as plain files:
 
 ```text
 settings.json   { "homepage": "https://...", "user_agent": "..." }  (hand-edited, restart to apply)
 history.jsonl   appended on every navigation: {"ts": secs, "url": "..."}
 bookmarks.json  [{"url": "...", "title": "..."}]  (star button in the toolbar)
 session.json    {"urls": [...], "active": N}  (written on tab changes, restored on launch)
+engine\         Servo's own storage (cookies, HSTS, auth cache, localStorage), per profile
 ```
+
+No `--profile` argument means the `default` profile. Profile names are
+sanitized to letters, digits, dashes and underscores.
 
 - The chrome passes `user_agent` to the engine as `--user-agent=...`; it
   overrides Servo's preference (engine/src/main.rs).
