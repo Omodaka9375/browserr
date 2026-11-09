@@ -269,6 +269,11 @@ impl servo::WebViewDelegate for FrameDelegate {
 
     fn notify_url_changed(&self, webview: servo::WebView, url: url::Url) {
         eprintln!("engine: url changed (tab {}) {url}", self.tab);
+        // A url change proves the load was received even before
+        // LoadStatus::Started, which slow or redirect-heavy sites may not
+        // reach within the retry window. Without this the retry loop would
+        // re-issue the load and keep resetting the page's progress.
+        self.shared.started.lock().unwrap().insert(self.tab);
         self.shared.updates.lock().unwrap().push(Update {
             tab: self.tab,
             url: Some(url.to_string()),
@@ -414,6 +419,15 @@ fn send_event(out: &mut impl Write, id: u64, json: &str) {
 fn main() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
+    // The tab-drop panic (see close_tab) is expected and contained; keep the
+    // log clean by not printing that one known message.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if !info.to_string().contains("destroyed the surface") {
+            default_hook(info);
+        }
+    }));
+
     let mut user_agent = None;
     let mut profile_dir = None;
     let mut adblock_list = None;
@@ -554,7 +568,9 @@ fn main() {
             match reader.read_line(&mut line) {
                 Ok(0) => {
                     eprintln!("engine: chrome disconnected");
-                    return;
+                    // Exit without running destructors: dropping live tabs would
+                    // trip the surfman surface assertion (cosmetic noise).
+                    std::process::exit(0);
                 }
                 Ok(_) => {
                     let line = line.trim();
@@ -574,7 +590,7 @@ fn main() {
                                             Some(t) => {
                                                 tabs.insert(tab_id, t);
                                             }
-                                            None => return,
+                                            None => std::process::exit(0),
                                         }
                                     }
                                     let tab = tabs.get_mut(&tab_id).unwrap();
@@ -589,7 +605,7 @@ fn main() {
                                         Some(t) => {
                                             tabs.insert(tab_id, t);
                                         }
-                                        None => return,
+                                        None => std::process::exit(0),
                                     }
                                 }
                             }
@@ -599,7 +615,7 @@ fn main() {
                                         Some(t) => {
                                             tabs.insert(tab_id, t);
                                         }
-                                        None => return,
+                                        None => std::process::exit(0),
                                     }
                                 }
                                 eprintln!("engine: activate tab {tab_id}");
@@ -637,7 +653,17 @@ fn main() {
                             }
                             Some("close_tab") => {
                                 eprintln!("engine: close tab {tab_id}");
-                                tabs.remove(&tab_id);
+                                // Dropping a webview + context trips a surfman
+                                // assertion ("should have destroyed the surface
+                                // first"): Servo tears the GL surface down
+                                // asynchronously, after the context's Drop ran.
+                                // Contain the panic so one closed tab can't kill
+                                // the whole engine.
+                                if let Some(tab) = tabs.remove(&tab_id) {
+                                    let _ = std::panic::catch_unwind(
+                                        std::panic::AssertUnwindSafe(|| drop(tab)),
+                                    );
+                                }
                                 shared.started.lock().unwrap().remove(&tab_id);
                                 if shared.active.load(Ordering::SeqCst) == tab_id {
                                     let next = tabs.keys().copied().min().unwrap_or(0);
@@ -700,7 +726,7 @@ fn main() {
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut => break,
-                Err(_) => return,
+                Err(_) => std::process::exit(0),
             }
         }
 
@@ -720,8 +746,9 @@ fn main() {
                     tab.pending_sent = false;
                     tab.pending_retries = 0;
                 } else {
+                    // ~16ms per tick: 120 ticks ~= 2s of patience per attempt.
                     tab.pending_wait += 1;
-                    if tab.pending_wait > 30 {
+                    if tab.pending_wait > 120 {
                         if tab.pending_retries < 3 {
                             tab.pending_sent = false;
                             tab.pending_retries += 1;

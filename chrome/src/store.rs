@@ -1,5 +1,6 @@
 //! User data storage: everything lives in %APPDATA%\browserr as plain files.
-//!   settings.json  { "homepage": "...", "user_agent": "..." }  (hand-edited)
+//!   settings.json  { "homepage": "...", "user_agent": "...", "adblock": bool,
+//!                    "search": "https://duckduckgo.com/?q={}" }
 //!   history.jsonl  one {"ts": secs, "url": "..."} per navigation, appended
 //!   bookmarks.json [ {"url": "...", "title": "..."} ]
 //!   session.json   { "urls": ["..."], "active": N }  (written on tab changes)
@@ -86,6 +87,8 @@ pub struct Settings {
     pub homepage: String,
     pub user_agent: String,
     pub adblock: bool,
+    /// Fallback search url for non-address queries; "{}" is the encoded query.
+    pub search: String,
 }
 
 pub fn load_settings() -> Settings {
@@ -97,6 +100,11 @@ pub fn load_settings() -> Settings {
         homepage: v["homepage"].as_str().unwrap_or("").to_string(),
         user_agent: v["user_agent"].as_str().unwrap_or("").to_string(),
         adblock: v["adblock"].as_bool().unwrap_or(false),
+        search: v["search"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("https://duckduckgo.com/?q={}")
+            .to_string(),
     }
 }
 
@@ -109,6 +117,7 @@ pub fn save_settings(settings: &Settings) {
         "homepage": settings.homepage,
         "user_agent": settings.user_agent,
         "adblock": settings.adblock,
+        "search": settings.search,
     });
     let _ = std::fs::write(
         dir.join("settings.json"),

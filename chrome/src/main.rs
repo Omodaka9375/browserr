@@ -65,6 +65,33 @@ pub fn host(url: &str) -> String {
     crate::store::host(url)
 }
 
+/// Minimal percent-encoding for search query strings.
+fn urlencode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Search presets cycled by the settings panel button; "{}" is the query.
+const SEARCHES: [&str; 3] = [
+    "https://duckduckgo.com/?q={}",
+    "https://www.google.com/search?q={}",
+    "https://www.bing.com/search?q={}",
+];
+
+/// Short label for a search template ("https://www.google.com/..." -> "google.com").
+fn search_name(t: &str) -> String {
+    let h = crate::store::host(t);
+    h.strip_prefix("www.").unwrap_or(&h).to_string()
+}
+
 fn state() -> State {
     // No --profile argument: this window is the profile picker, not a browser.
     let picker = !store::profile_selected();
@@ -308,7 +335,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         for name in &s.profiles {
             let n = name.clone();
             p = p.child(
-                el().key("profile").w_full().py(6.0).px(10.0).radius(8.0).fill(t.card).hover(t.hover)
+                el().key(format!("profile-{name}")).w_full().py(6.0).px(10.0).radius(8.0).fill(t.card).hover(t.hover)
                     .on_press_tx(move |_: &mut State, tx: &mut Tx| launch_profile(tx, &n))
                     .child(text(name.clone()).font(type_::BODY.lh(20.0)).color(t.text)),
             );
@@ -390,6 +417,16 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 .placeholder("Leave empty for default", t.text_secondary)
                 .on_edit(|s: &mut State| &mut s.settings_ua),
         );
+        p = p.child(text("Search engine").font(type_::BODY.lh(16.0)).color(t.text_secondary));
+        p = p.child(
+            text_btn("set-search", format!("Use {}", search_name(&s.settings.search)), |s: &mut State| {
+                let next = SEARCHES.iter().position(|t| *t == s.settings.search)
+                    .map(|i| (i + 1) % SEARCHES.len())
+                    .unwrap_or(0);
+                s.settings.search = SEARCHES[next].to_string();
+                save_settings_ui(s);
+            }),
+        );
         p = p.child(
             row().gap(8.0).center_y()
                 .child(text_btn("set-adblock", format!("Adblock: {}", if s.settings.adblock { "on" } else { "off" }), |s: &mut State| {
@@ -453,7 +490,11 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         .on_press(|s: &mut State| {
             if !s.editing {
                 s.editing = true;
-                s.address = TextEdit::new("");
+                // Start from the current page url so it can be edited or
+                // re-entered, not cleared.
+                let shown = s.ui.url(s.tabs[s.active].id)
+                    .unwrap_or_else(|| s.tabs[s.active].url.clone());
+                s.address = TextEdit::new(&shown);
             }
         })
         .child(if s.editing {
@@ -477,7 +518,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                     } else if raw.contains('.') && !raw.contains(' ') {
                         format!("https://{raw}")
                     } else {
-                        format!("https://duckduckgo.com/?q={raw}")
+                        s.settings.search.replace("{}", &urlencode(&raw))
                     };
                         s.address = TextEdit::new("");
                         s.editing = false;
@@ -503,7 +544,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             };
             let label_color = if is_active { t.text } else { t.text_secondary };
             let tab_host = s.ui.url(tab.id).map(|u| host(&u)).unwrap_or_default();
-            let mut pill_el = el().key("tab").h(28.0).px(12.0).radius(14.0).center_y()
+            let mut pill_el = el().key(format!("tab-{}", tab.id)).h(28.0).px(12.0).radius(14.0).center_y()
                 .fill(if is_active { t.hover } else { t.card });
             if let Some(px) = s.ui.icon(&tab_host) {
                 pill_el = pill_el.child(el().size(14.0, 14.0).center_y().pixels(&px).px(4.0));
@@ -541,6 +582,11 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                                     engine.close_tab(closed_id);
                                     engine.new_tab(id);
                                     engine.activate(id);
+                                }
+                                // New tabs open the homepage (if set); the pill
+                                // stays in edit mode so typing works right away.
+                                if !s.settings.homepage.is_empty() {
+                                    go(s, s.settings.homepage.clone());
                                 }
                                 save_session(s);
                             } else {
@@ -615,6 +661,11 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             if let Some(engine) = &mut s.engine {
                 engine.new_tab(tab_id);
                 engine.activate(tab_id);
+            }
+            // New tabs open the homepage (if set); the pill stays in edit mode
+            // so the user can type right away.
+            if !s.settings.homepage.is_empty() {
+                go(s, s.settings.homepage.clone());
             }
             save_session(s);
         })))

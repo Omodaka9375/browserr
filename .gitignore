@@ -4,3 +4,5 @@ chrome/target/
 Cargo.lock
 *.tmp
 dist/
+
+engine*.log
