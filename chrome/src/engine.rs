@@ -10,6 +10,9 @@ use std::sync::{Arc, Mutex};
 
 use rune::{NativeSurface, Waker};
 
+#[cfg(windows)]
+use rune::native_surface::windows::SharedTexture;
+
 use crate::store;
 
 /// Put the engine in a job object that is killed when the chrome dies. The
@@ -44,6 +47,15 @@ const PORT: u16 = 7411;
 const MAGIC: u32 = 0x46_52_4D_31; // FRM1
 const EV_MAGIC: u32 = 0x45_56_54_31; // EVT1
 
+/// A login captured from a submitted password form.
+#[derive(Clone, Debug)]
+pub struct PwCapture {
+    pub tab: u64,
+    pub user: String,
+    pub pass: String,
+    pub origin: String,
+}
+
 /// Engine-reported UI state, shared between the reader thread and the view.
 pub struct Ui {
     /// Which tab the chrome renders (the engine paints this one).
@@ -54,6 +66,8 @@ pub struct Ui {
     pub titles: Mutex<HashMap<u64, String>>,
     /// (can_go_back, can_go_forward) per tab id.
     pub history: Mutex<HashMap<u64, (bool, bool)>>,
+    /// Latest password-form capture (replaced by newer ones).
+    pub pw: Mutex<Option<PwCapture>>,
 }
 
 impl Ui {
@@ -63,7 +77,12 @@ impl Ui {
             urls: Mutex::new(HashMap::new()),
             titles: Mutex::new(HashMap::new()),
             history: Mutex::new(HashMap::new()),
+            pw: Mutex::new(None),
         })
+    }
+
+    pub fn peek_pw(&self) -> Option<PwCapture> {
+        self.pw.lock().unwrap().clone()
     }
 
     pub fn url(&self, tab: u64) -> Option<String> {
@@ -201,6 +220,14 @@ fn read_frames(stream: TcpStream, surface: NativeSurface, waker: Waker, ui: Arc<
     let counter = AtomicU64::new(1);
     let mut header = [0u8; 20];
 
+    // The engine falls back to socket bytes if we cannot import its textures
+    // (adapter mismatch); ask it to when a push fails.
+    let request_bytes = move |reader: &BufReader<TcpStream>| {
+        if let Ok(mut s) = reader.get_ref().try_clone() {
+            let _ = writeln!(s, "{{\"cmd\":\"frames\",\"mode\":\"bytes\"}}");
+        }
+    };
+
     loop {
         if reader.read_exact(&mut header).is_err() {
             eprintln!("chrome: frame reader: header read failed (engine gone?)");
@@ -272,6 +299,30 @@ fn read_frames(stream: TcpStream, surface: NativeSurface, waker: Waker, ui: Arc<
                         let back = v["back"].as_bool().unwrap_or(false);
                         let forward = v["forward"].as_bool().unwrap_or(false);
                         ui.history.lock().unwrap().insert(tab, (back, forward));
+                    }
+                    Some("pwcapture") => {
+                        let d = &v["data"];
+                        let user = d["u"].as_str().unwrap_or("").to_string();
+                        let pass = d["p"].as_str().unwrap_or("").to_string();
+                        let origin = d["o"].as_str().unwrap_or("").to_string();
+                        if !pass.is_empty() {
+                            *ui.pw.lock().unwrap() = Some(PwCapture { tab, user, pass, origin });
+                        }
+                    }
+                    #[cfg(windows)]
+                    Some("frame") => {
+                        let name = v["name"].as_str().unwrap_or("");
+                        let w = v["w"].as_u64().unwrap_or(0) as u32;
+                        let h = v["h"].as_u64().unwrap_or(0) as u32;
+                        let fence = v["fence"].as_str().unwrap_or("");
+                        let value = v["value"].as_u64().unwrap_or(0);
+                        if !name.is_empty() && w > 0 && h > 0 {
+                            let frame = SharedTexture::named(name, w, h).release_fence(fence, value);
+                            let id = counter.fetch_add(1, Ordering::SeqCst);
+                            if surface.push_shared(frame, id).is_err() {
+                                request_bytes(&reader);
+                            }
+                        }
                     }
                     _ => {}
                 }

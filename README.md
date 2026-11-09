@@ -123,6 +123,28 @@ easylist.to on first run and re-downloaded after a week.
 - Do Not Track and adblocking need a request hook inside Servo's network
   stack, which servo 0.8 does not expose. Parked with the Phase 2 adblock work.
 
+## GPU shared frames
+
+Frames normally cross the engine->chrome socket as ~4MB BGRA buffers. When
+the engine can create a D3D12 device, it instead renders each frame into a
+named shared BGRA8 texture (per size) plus a named shared fence, and sends a
+small {"ev":"frame"} event; the chrome imports the texture via
+`NativeSurface::push_shared` and copies it on its own GPU queue, signaling
+the fence when done. No pixel bytes cross the socket. If anything fails
+(no D3D12, adapter mismatch), the chrome asks the engine to fall back to
+byte frames; `engine --probe-shared` tests the path at startup.
+
+## Save-on-submit password prompt
+
+Pages with a password field get a submit listener installed by the engine
+(capture-phase, stashes username + password + origin into sessionStorage).
+After the next navigation the engine reads and clears it and reports a
+{"ev":"pwcapture"} event; the chrome shows an inline "Save password for
+host?" prompt with Save / Not now. sessionStorage is origin-scoped, so the
+data never reaches other sites. Limitations: SPA logins without a submit
+event or navigation are not captured, and the prompt's username is not
+editable (use the menu panel for that).
+
 ## Known limitations
 
 - Frames stream over loopback TCP (~4MB each); a GPU shared-texture path would

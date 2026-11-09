@@ -50,6 +50,8 @@ struct State {
     cred_pass: TextEdit,
     /// Whether a password is already saved for the current host.
     cred_saved: bool,
+    /// Host whose capture was already saved or dismissed.
+    pw_handled: Option<String>,
 }
 
 impl Default for Tab {
@@ -106,6 +108,7 @@ fn state() -> State {
         cred_user: TextEdit::new(""),
         cred_pass: TextEdit::new(""),
         cred_saved: false,
+        pw_handled: None,
     }
 }
 
@@ -614,6 +617,36 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         .child(spacer())
         .child(el().w(78.0));
 
+    // Save-password prompt: appears when a submitted form left a capture.
+    let pw_prompt = match s.ui.peek_pw() {
+        Some(c) if host(&c.origin) != s.pw_handled.as_deref().unwrap_or("\0") => {
+            let host = host(&c.origin);
+            let user = c.user.clone();
+            let pass = c.pass.clone();
+            Some(
+                row().key("pw-prompt").w_full().px(14.0).py(8.0).gap(10.0).center_y().fill(t.card)
+                    .child(
+                        text(format!("Save password for {host}{}", if user.is_empty() { String::new() } else { format!(" ({user})") }))
+                            .font(type_::BODY.lh(18.0)).color(t.text).grow(1.0),
+                    )
+                    .child(text_btn("pw-prompt-save", "Save".to_string(), {
+                        let host = host.clone();
+                        move |s: &mut State| {
+                            creds::save(&host, &user, &pass);
+                            s.pw_handled = Some(host.clone());
+                        }
+                    }))
+                    .child(text_btn("pw-prompt-no", "Not now".to_string(), {
+                        let host = host.clone();
+                        move |s: &mut State| {
+                            s.pw_handled = Some(host.clone());
+                        }
+                    })),
+            )
+        }
+        _ => None,
+    };
+
     let page = el().key("page").grow(1.0).min_h(0.0).fill(t.bg)
         .native_surface(&s.surface, SurfaceFit::Fit)
         .on_layout(|s: &mut State, rect: [f32; 4]| {
@@ -627,6 +660,9 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         });
 
     let mut root = col().w_full().h_full().fill(t.bg).child(bar);
+    if let Some(prompt) = pw_prompt {
+        root = root.child(prompt);
+    }
     if s.menu_open {
         root = root.child(menu_panel);
     }

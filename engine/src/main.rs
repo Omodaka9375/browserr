@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use servo::RenderingContext;
 
+mod d3d;
 mod hw;
 use hw::HardwareRenderingContext;
 use std::net::TcpListener;
@@ -67,7 +68,37 @@ struct Update {
     url: Option<String>,
     title: Option<String>,
     history: Option<(bool, bool)>,
+    /// Captured login data (JSON {u,p,o}) from a submitted password form.
+    pw: Option<String>,
 }
+
+/// Runs on load complete: if the page has a password field, capture its
+/// (username, password) into sessionStorage when the form is submitted.
+/// sessionStorage is origin-scoped, so the data never leaks to other sites.
+const PW_INSTALL_JS: &str = r#"(function(){try{
+if(!document.querySelector('input[type=password]')) return 0;
+if(window.__browserr_pw) return 1;
+window.__browserr_pw=1;
+addEventListener('submit',function(){
+  try{
+    var pw=document.querySelector('input[type=password]');
+    var form=pw.closest('form')||document;
+    var re=/(user|email|login|account)/i; var u='';
+    for(const t of form.querySelectorAll('input')){
+      if(t.type==='password')continue;
+      var k=(t.name||'')+' '+(t.id||'')+' '+(t.type||'')+' '+(t.autocomplete||'');
+      if((!t.type||t.type==='text'||t.type==='email')&&re.test(k)){u=t.value;break;}
+    }
+    sessionStorage.setItem('browserr',JSON.stringify({u:u,p:pw.value,o:location.origin}));
+  }catch(e){}
+},true);
+}catch(e){}})()"#;
+
+/// Runs after every navigation: read and clear a pending capture.
+const PW_READ_JS: &str = r#"(function(){try{
+var d=sessionStorage.getItem('browserr');
+if(d){sessionStorage.removeItem('browserr');return d;}
+}catch(e){} return '';})()"#;
 
 struct Shared {
     pump: Pump,
@@ -131,6 +162,26 @@ impl FrameDelegate {
             block_if_matching(engine, load);
         }
     }
+
+    /// Eval a password-capture script; a string result is reported to the chrome.
+    fn eval_pw(&self, webview: servo::WebView, script: &'static str) {
+        let shared = self.shared.clone();
+        let tab = self.tab;
+        webview.evaluate_javascript(script, move |result| {
+            if let Ok(servo::JSValue::String(data)) = result {
+                if !data.is_empty() {
+                    shared.updates.lock().unwrap().push(Update {
+                        tab,
+                        url: None,
+                        title: None,
+                        history: None,
+                        pw: Some(data),
+                    });
+                    shared.pump.kick();
+                }
+            }
+        });
+    }
 }
 
 impl servo::WebViewDelegate for FrameDelegate {
@@ -141,21 +192,27 @@ impl servo::WebViewDelegate for FrameDelegate {
         }
     }
 
-    fn notify_url_changed(&self, _webview: servo::WebView, url: url::Url) {
+    fn notify_url_changed(&self, webview: servo::WebView, url: url::Url) {
         eprintln!("engine: url changed (tab {}) {url}", self.tab);
         self.shared.updates.lock().unwrap().push(Update {
             tab: self.tab,
             url: Some(url.to_string()),
             title: None,
             history: None,
+            pw: None,
         });
+        // Pick up a capture that a submitted form left behind.
+        self.eval_pw(webview, PW_READ_JS);
         self.shared.pump.kick();
     }
 
-    fn notify_load_status_changed(&self, _webview: servo::WebView, status: servo::LoadStatus) {
+    fn notify_load_status_changed(&self, webview: servo::WebView, status: servo::LoadStatus) {
         if matches!(status, servo::LoadStatus::Started) {
             self.shared.started.lock().unwrap().insert(self.tab);
             self.shared.pump.kick();
+        } else if matches!(status, servo::LoadStatus::Complete) {
+            // Page is ready: arm the submit capture if it has a password field.
+            self.eval_pw(webview, PW_INSTALL_JS);
         }
     }
 
@@ -165,6 +222,7 @@ impl servo::WebViewDelegate for FrameDelegate {
             url: None,
             title,
             history: None,
+            pw: None,
         });
         self.shared.pump.kick();
     }
@@ -177,6 +235,7 @@ impl servo::WebViewDelegate for FrameDelegate {
             url: None,
             title: None,
             history: Some((back, forward)),
+            pw: None,
         });
         self.shared.pump.kick();
     }
@@ -284,6 +343,14 @@ fn main() {
         }
     }
 
+    // Startup probe: --probe-shared tests Pool::new before anything else.
+    if std::env::args().any(|a| a == "--probe-shared") {
+        match d3d::Pool::new(64, 64) {
+            Ok(p) => eprintln!("engine: probe-shared OK luid={}", p.adapter_luid()),
+            Err(e) => eprintln!("engine: probe-shared FAILED: {e}"),
+        }
+    }
+
     let listener = TcpListener::bind(("127.0.0.1", PORT)).expect("engine: bind failed");
     eprintln!("engine: listening on {PORT}");
     let (stream, _peer) = listener.accept().expect("engine: accept failed");
@@ -380,6 +447,16 @@ fn main() {
             }
         });
     }
+
+    // Shared GPU textures: try first; fall back to socket bytes on any
+    // failure or if the chrome reports it cannot import them.
+    #[derive(Clone, Copy, PartialEq)]
+    enum FrameMode {
+        TryShared,
+        Bytes,
+    }
+    let mut frame_mode = FrameMode::TryShared;
+    let mut shared_pool: Option<d3d::Pool> = None;
 
     loop {
         reader
@@ -526,6 +603,12 @@ fn main() {
                                     }
                                 }
                             }
+                            Some("frames") => {
+                                if v["mode"].as_str() == Some("bytes") {
+                                    eprintln!("engine: chrome requested byte frames");
+                                    frame_mode = FrameMode::Bytes;
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -612,6 +695,14 @@ fn main() {
                         &format!("{{\"ev\":\"history\",\"tab\":{},\"back\":{},\"forward\":{}}}", u.tab, b, f),
                     );
                 }
+                if let Some(data) = &u.pw {
+                    // data is already valid JSON ({u,p,o}); embed it directly.
+                    send_event(
+                        &mut out,
+                        event_id,
+                        &format!("{{\"ev\":\"pwcapture\",\"tab\":{},\"data\":{}}}", u.tab, data),
+                    );
+                }
             }
         }
 
@@ -664,12 +755,54 @@ fn main() {
                             t0.elapsed()
                         );
                         frame_id += 1;
-                        out.write_all(&MAGIC.to_le_bytes()).ok();
-                        out.write_all(&frame_id.to_le_bytes()).ok();
-                        out.write_all(&current_size.width.to_le_bytes()).ok();
-                        out.write_all(&current_size.height.to_le_bytes()).ok();
-                        out.write_all(&bgra).ok();
-                        let _ = out.flush();
+
+                        // Shared-texture path: no pixel bytes over the socket.
+                        let mut sent_shared = false;
+                        if frame_mode == FrameMode::TryShared {
+                            let need_resize = shared_pool
+                                .as_ref()
+                                .map(|p| p.size() != (current_size.width, current_size.height))
+                                .unwrap_or(true);
+                            if need_resize {
+                                match d3d::Pool::new(current_size.width, current_size.height) {
+                                    Ok(p) => shared_pool = Some(p),
+                                    Err(e) => {
+                                        eprintln!("engine: shared frames unavailable ({e}); using bytes");
+                                        frame_mode = FrameMode::Bytes;
+                                    }
+                                }
+                            }
+                        }
+                        if frame_mode == FrameMode::TryShared {
+                            let pool = shared_pool.as_mut().unwrap();
+                            match pool.write(&bgra) {
+                                Ok(()) => {
+                                    let (name, fence, value) = pool.info();
+                                    event_id += 1;
+                                    send_event(
+                                        &mut out,
+                                        event_id,
+                                        &format!(
+                                            "{{\"ev\":\"frame\",\"tab\":{active},\"w\":{},\"h\":{},\"name\":\"{name}\",\"fence\":\"{fence}\",\"value\":{value}}}",
+                                            current_size.width, current_size.height
+                                        ),
+                                    );
+                                    sent_shared = true;
+                                }
+                                Err(e) => {
+                                    eprintln!("engine: shared frame write failed ({e}); using bytes");
+                                    frame_mode = FrameMode::Bytes;
+                                }
+                            }
+                        }
+                        if !sent_shared {
+                            out.write_all(&MAGIC.to_le_bytes()).ok();
+                            out.write_all(&frame_id.to_le_bytes()).ok();
+                            out.write_all(&current_size.width.to_le_bytes()).ok();
+                            out.write_all(&current_size.height.to_le_bytes()).ok();
+                            out.write_all(&bgra).ok();
+                            let _ = out.flush();
+                        }
                     }
                 }
             }
