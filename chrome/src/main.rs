@@ -314,10 +314,25 @@ static ICON_PLUS: Icon = Icon {
     view: 16.0,
     body: r#"<path d="M8 3.5V12.5M3.5 8H12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/>"#,
 };
-static ICON_ELLIPSIS: Icon = Icon {
-    name: "br-ellipsis",
+static ICON_HAMBURGER: Icon = Icon {
+    name: "br-hamburger",
     view: 16.0,
-    body: r#"<circle cx="3.6" cy="8" r="1.1" fill="currentColor"/><circle cx="8" cy="8" r="1.1" fill="currentColor"/><circle cx="12.4" cy="8" r="1.1" fill="currentColor"/>"#,
+    body: r#"<path d="M3 4.5H13M3 8H13M3 11.5H13" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/>"#,
+};
+static ICON_WIN_MIN: Icon = Icon {
+    name: "br-win-min",
+    view: 16.0,
+    body: r#"<path d="M4.5 5.5H11.5L8 10.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/>"#,
+};
+static ICON_WIN_MAX: Icon = Icon {
+    name: "br-win-max",
+    view: 16.0,
+    body: r#"<path d="M4.5 10.5H11.5L8 5.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/>"#,
+};
+static ICON_WIN_CLOSE: Icon = Icon {
+    name: "br-win-close",
+    view: 16.0,
+    body: r#"<path d="M5.5 10.5H10.5V5.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/>"#,
 };
 static ICON_CLOSE: Icon = Icon {
     name: "br-tab-close",
@@ -352,6 +367,15 @@ fn icon_btn(id: &'static str, ic: &'static Icon, enabled: bool, action: Option<i
         (true, Some(action)) => e.fill(Color::TRANSPARENT).hover(t.hover).on_press(action),
         _ => e.layer_opacity(0.35),
     }
+}
+
+/// Windows-style window control: outline triangle glyph, hover highlight.
+fn win_btn(key: &'static str, ic: &'static Icon, action: impl Fn(&mut State, &mut Tx) + 'static) -> El {
+    let t = tok::theme(true);
+    el().key(key).w(32.0).h(24.0).center().radius(6.0)
+        .fill(Color::TRANSPARENT).hover(t.hover).press(t.hover)
+        .on_press_tx(action)
+        .child(icon(ic, 12.0))
 }
 
 fn text_btn(id: &'static str, label: String, action: impl Fn(&mut State) + 'static) -> El {
@@ -439,7 +463,11 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             .child(icon_btn("set-back", &ICON_BACK, true, Some(|s: &mut State| {
                 s.settings_open = false;
             })))
-            .child(text("Settings").font(type_::BODY.lh(24.0)).color(t.text));
+            .child(text("Settings").font(type_::BODY.lh(24.0)).color(t.text))
+            .child(spacer())
+            .child(win_btn("win-min", &ICON_WIN_MIN, |_, tx: &mut Tx| tx.minimize()))
+            .child(win_btn("win-max", &ICON_WIN_MAX, |_, tx: &mut Tx| tx.toggle_maximized()))
+            .child(win_btn("win-close", &ICON_WIN_CLOSE, |_, tx: &mut Tx| tx.close_window()));
         return col().w_full().h_full().fill(t.bg).child(header).child(c);
     }
 
@@ -449,11 +477,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         p = p.child(
             row().w_full().center_y()
                 .child(text("Choose a profile").font(type_::BODY.lh(24.0)).color(t.text).grow(1.0))
-                .child(
-                    el().size(11.0, 11.0).radius(5.5)
-                        .fill(Color { r: 1.0, g: 0.37, b: 0.34, a: 1.0 })
-                        .on_press_tx(|_: &mut State, tx: &mut Tx| tx.close_window()),
-                ),
+                .child(win_btn("picker-close", &ICON_WIN_CLOSE, |_, tx: &mut Tx| tx.close_window())),
         );
         for name in &s.profiles {
             let n = name.clone();
@@ -479,19 +503,12 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         return p;
     }
 
-    // Window controls: minimal traffic lights, macOS style.
-    let dot = |key: &'static str, c: Color| {
-        el().key(key).size(11.0, 11.0).radius(5.5).fill(c)
-            .on_press_tx(move |_: &mut State, tx: &mut Tx| match key {
-                "br-close" => tx.close_window(),
-                "br-min" => tx.minimize(),
-                _ => {}
-            })
-    };
-    let controls = row().gap(7.0).center_y()
-        .child(dot("br-close", Color { r: 1.0, g: 0.37, b: 0.34, a: 1.0 }))
-        .child(dot("br-min", Color { r: 1.0, g: 0.74, b: 0.18, a: 1.0 }))
-        .child(dot("br-max", Color { r: 0.16, g: 0.79, b: 0.25, a: 1.0 }));
+    // Window controls live on the right (Windows style); the menu is a
+    // hamburger on the left.
+    let win_controls = row().gap(2.0).center_y()
+        .child(win_btn("win-min", &ICON_WIN_MIN, |_, tx: &mut Tx| tx.minimize()))
+        .child(win_btn("win-max", &ICON_WIN_MAX, |_, tx: &mut Tx| tx.toggle_maximized()))
+        .child(win_btn("win-close", &ICON_WIN_CLOSE, |_, tx: &mut Tx| tx.close_window()));
 
     let active_id = s.tabs[s.active].id;
     let shown_url = s.ui.url(active_id).unwrap_or_else(|| s.tabs[s.active].url.clone());
@@ -705,7 +722,13 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
 
     let bar = row().key("bar").h(BAR_H).w_full().px(14.0).gap(10.0).center_y()
         .window_drag()
-        .child(controls)
+        .child(icon_btn("br-menu", &ICON_HAMBURGER, true, Some(|s: &mut State| {
+            s.menu_open = !s.menu_open;
+            if s.menu_open {
+                s.history_view = store::read_history(15);
+                refresh_creds(s);
+            }
+        })))
         .child(spacer())
         .child(icon_btn("br-back", &ICON_BACK, back_ok, Some(move |s: &mut State| {
             if let Some(e) = &mut s.engine {
@@ -763,15 +786,8 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             }
             save_session(s);
         })))
-        .child(icon_btn("br-menu", &ICON_ELLIPSIS, true, Some(|s: &mut State| {
-            s.menu_open = !s.menu_open;
-            if s.menu_open {
-                s.history_view = store::read_history(15);
-                refresh_creds(s);
-            }
-        })))
         .child(spacer())
-        .child(el().w(78.0));
+        .child(win_controls);
 
     // Save-password prompt: appears when a submitted form left a capture.
     let pw_prompt = match s.ui.peek_pw() {
