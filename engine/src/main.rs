@@ -449,7 +449,21 @@ fn main() {
         }
     }
 
-    let listener = TcpListener::bind(("127.0.0.1", PORT)).expect("engine: bind failed");
+    // Retry the bind: on an in-place engine restart the previous instance may
+    // still be releasing port 7411 for a moment.
+    let listener = {
+        let mut bound = None;
+        for _ in 0..50 {
+            match TcpListener::bind(("127.0.0.1", PORT)) {
+                Ok(l) => {
+                    bound = Some(l);
+                    break;
+                }
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(100)),
+            }
+        }
+        bound.expect("engine: bind failed")
+    };
     eprintln!("engine: listening on {PORT}");
     let (stream, _peer) = listener.accept().expect("engine: accept failed");
     eprintln!("engine: chrome connected");

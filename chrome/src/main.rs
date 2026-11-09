@@ -57,6 +57,10 @@ struct State {
     settings_open: bool,
     /// Saved (host, username) pairs shown on the settings page.
     creds_view: Vec<(String, String)>,
+    /// User agent and adblock flag the running engine was started with, so
+    /// saves that change them can restart the engine in place.
+    engine_ua: String,
+    engine_adblock: bool,
 }
 
 impl Default for Tab {
@@ -141,6 +145,8 @@ fn state() -> State {
         pw_handled: None,
         settings_open: false,
         creds_view: Vec::new(),
+        engine_ua: String::new(),
+        engine_adblock: false,
     }
 }
 
@@ -187,11 +193,41 @@ fn fill_js(user: &str, pass: &str) -> String {
     )
 }
 
-/// Pull the panel's TextEdits into s.settings and persist them.
+/// Kill and respawn the engine (settings that need a new process), then
+/// re-open every tab on the fresh engine.
+fn restart_engine(s: &mut State) {
+    let Some(e) = &mut s.engine else { return };
+    if e.restart().is_err() {
+        eprintln!("chrome: engine restart failed");
+        return;
+    }
+    let (w, h) = s.last_size.unwrap_or((1200, 760));
+    e.resize(w, h);
+    // Prefer the engine-reported url; fall back to the chrome-side record.
+    let tabs: Vec<(u64, String)> = s.tabs.iter().map(|t| {
+        let url = s.ui.url(t.id).filter(|u| !u.is_empty())
+            .unwrap_or_else(|| t.url.clone());
+        (t.id, url)
+    }).collect();
+    for (id, url) in tabs {
+        if !url.is_empty() {
+            e.navigate(&url, id);
+        }
+    }
+    e.activate(s.tabs[s.active].id);
+    s.engine_ua = s.settings.user_agent.clone();
+    s.engine_adblock = s.settings.adblock;
+}
+
+/// Pull the panel's TextEdits into s.settings and persist them. Restarts the
+/// engine in place if the user agent or adblock flag changed.
 fn save_settings_ui(s: &mut State) {
     s.settings.homepage = s.settings_home.text.trim().to_string();
     s.settings.user_agent = s.settings_ua.text.clone();
     store::save_settings(&s.settings);
+    if s.engine_ua != s.settings.user_agent || s.engine_adblock != s.settings.adblock {
+        restart_engine(s);
+    }
 }
 
 /// Open a new chrome window for `name` and close the picker.
@@ -240,6 +276,8 @@ fn setup(s: &mut State, wake: rune::Waker) {
         &adblock_list,
     ) {
         Ok(mut e) => {
+            s.engine_ua = user_agent.clone();
+            s.engine_adblock = s.settings.adblock;
             // Restore open tabs: navigate() creates missing engine tabs on demand.
             let active_id = s.tabs[s.active].id;
             let restored: Vec<(u64, String)> = s.tabs.iter()
@@ -359,9 +397,15 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                     s.settings.adblock = !s.settings.adblock;
                     save_settings_ui(s);
                 }))
-                .child(label("(restart to apply)".into())),
+                .child(label("(applies on save; the engine restarts)".into())),
         );
-        c = c.child(label("User agent (restart to apply)".into()));
+        c = c.child(
+            text_btn("clear-history", "Clear browsing history".to_string(), |s: &mut State| {
+                store::clear_history();
+                s.history_view = Vec::new();
+            }),
+        );
+        c = c.child(label("User agent (applies on save; the engine restarts)".into()));
         c = c.child(
             text_input(&s.settings_ua, type_::BODY.lh(20.0)).key("set-ua").single_line().w(420.0)
                 .color(t.text)

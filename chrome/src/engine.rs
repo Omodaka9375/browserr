@@ -105,13 +105,25 @@ impl Ui {
     }
 }
 
+/// Everything Engine::start needs, kept around so the engine can be
+/// restarted in place when settings that require a respawn change.
+struct StartArgs {
+    surface: NativeSurface,
+    waker: Waker,
+    ui: Arc<Ui>,
+    user_agent: String,
+    profile_dir: String,
+    adblock_list: String,
+}
+
 pub struct Engine {
     stream: TcpStream,
-    _child: Child,
+    child: Child,
     /// Job object handle; the engine is killed when this is dropped (chrome exit).
     #[cfg(windows)]
-    _job: Option<windows::Win32::Foundation::HANDLE>,
-    _reader: Option<std::thread::JoinHandle<()>>,
+    job: Option<windows::Win32::Foundation::HANDLE>,
+    reader: Option<std::thread::JoinHandle<()>>,
+    args: StartArgs,
 }
 
 impl Engine {
@@ -127,6 +139,18 @@ impl Engine {
         profile_dir: &str,
         adblock_list: &str,
     ) -> std::io::Result<Engine> {
+        let args = StartArgs {
+            surface,
+            waker,
+            ui,
+            user_agent: user_agent.to_string(),
+            profile_dir: profile_dir.to_string(),
+            adblock_list: adblock_list.to_string(),
+        };
+        Engine::spawn(args)
+    }
+
+    fn spawn(args: StartArgs) -> std::io::Result<Engine> {
         let exe = std::env::var("BROWSERR_ENGINE")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| {
@@ -141,14 +165,14 @@ impl Engine {
         let stderr = std::fs::File::create(&engine_log).ok();
         eprintln!("chrome: engine stderr -> {}", engine_log.display());
         let mut cmd = Command::new(exe);
-        if !user_agent.is_empty() {
-            cmd.arg(format!("--user-agent={user_agent}"));
+        if !args.user_agent.is_empty() {
+            cmd.arg(format!("--user-agent={}", args.user_agent));
         }
-        if !profile_dir.is_empty() {
-            cmd.arg(format!("--profile-dir={profile_dir}"));
+        if !args.profile_dir.is_empty() {
+            cmd.arg(format!("--profile-dir={}", args.profile_dir));
         }
-        if !adblock_list.is_empty() {
-            cmd.arg(format!("--adblock-list={adblock_list}"));
+        if !args.adblock_list.is_empty() {
+            cmd.arg(format!("--adblock-list={}", args.adblock_list));
         }
         let child = cmd
             .stdout(Stdio::null())
@@ -166,18 +190,58 @@ impl Engine {
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        let stream = stream.expect("engine: could not connect");
+        let stream = stream.ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "engine: could not connect")
+        })?;
 
         let reader_stream = stream.try_clone()?;
+        let surface = args.surface.clone();
+        let waker = args.waker.clone();
+        let ui = args.ui.clone();
         let reader = std::thread::spawn(move || read_frames(reader_stream, surface, waker, ui));
 
         Ok(Engine {
             stream,
-            _child: child,
+            child,
             #[cfg(windows)]
-            _job: job,
-            _reader: Some(reader),
+            job,
+            reader: Some(reader),
+            args,
         })
+    }
+
+    /// Kill the engine process and respawn it with the current start args
+    /// (used when user agent or adblock settings change). The caller must
+    /// re-navigate the open tabs afterwards.
+    pub fn restart(&mut self) -> std::io::Result<()> {
+        eprintln!("chrome: restarting engine");
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        #[cfg(windows)]
+        if let Some(job) = self.job.take() {
+            unsafe {
+                let _ = windows::Win32::Foundation::CloseHandle(job);
+            }
+        }
+        // The old reader thread exits on its own when the socket closes.
+        self.reader = None;
+        let fresh = Engine::spawn(StartArgs {
+            surface: self.args.surface.clone(),
+            waker: self.args.waker.clone(),
+            ui: self.args.ui.clone(),
+            user_agent: self.args.user_agent.clone(),
+            profile_dir: self.args.profile_dir.clone(),
+            adblock_list: self.args.adblock_list.clone(),
+        })?;
+        self.stream = fresh.stream;
+        self.child = fresh.child;
+        #[cfg(windows)]
+        {
+            self.job = fresh.job;
+        }
+        self.reader = fresh.reader;
+        self.args = fresh.args;
+        Ok(())
     }
 
     fn send(&mut self, json: &str) {

@@ -214,6 +214,11 @@ pub struct Session {
     pub active: usize,
 }
 
+/// Delete the browsing history file.
+pub fn clear_history() {
+    let _ = std::fs::remove_file(data_dir().join("history.jsonl"));
+}
+
 pub fn load_session() -> Option<Session> {
     let v: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(data_dir().join("session.json")).ok()?,
