@@ -385,6 +385,41 @@ fn text_btn(id: &'static str, label: String, action: impl Fn(&mut State) + 'stat
         .child(text(label).font(type_::BODY.lh(18.0)).color(t.text))
 }
 
+/// Map a rune key to (name, text) for the engine protocol; None skips it.
+fn key_name(k: &rune::Key) -> Option<(String, String)> {
+    use rune::Key;
+    Some(match k {
+        Key::Text(t) => ("text".to_string(), t.clone()),
+        Key::Command(c) => ("text".to_string(), c.to_string()),
+        Key::Enter => ("Enter".to_string(), String::new()),
+        Key::Backspace => ("Backspace".to_string(), String::new()),
+        Key::Delete => ("Delete".to_string(), String::new()),
+        Key::Left => ("Left".to_string(), String::new()),
+        Key::Right => ("Right".to_string(), String::new()),
+        Key::Up => ("Up".to_string(), String::new()),
+        Key::Down => ("Down".to_string(), String::new()),
+        Key::Home => ("Home".to_string(), String::new()),
+        Key::End => ("End".to_string(), String::new()),
+        Key::PageUp => ("PageUp".to_string(), String::new()),
+        Key::PageDown => ("PageDown".to_string(), String::new()),
+        Key::Insert => ("Insert".to_string(), String::new()),
+        Key::Escape => ("Escape".to_string(), String::new()),
+        Key::Tab => ("Tab".to_string(), String::new()),
+        Key::Function(n) => (format!("F{n}"), String::new()),
+        _ => return None,
+    })
+}
+
+/// Modifier bitmask for the engine: 1 shift, 2 ctrl, 4 alt, 8 cmd/logo.
+fn key_mods(m: rune::Mods) -> u8 {
+    let mut v = 0u8;
+    if m.shift { v |= 1; }
+    if m.ctrl { v |= 2; }
+    if m.alt { v |= 4; }
+    if m.cmd || m.logo { v |= 8; }
+    v
+}
+
 fn view(s: &State, _: &mut Cx<State>) -> El {
     let t = tok::theme(true);
 
@@ -840,6 +875,57 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
 
     let page = el().key("page").grow(1.0).min_h(0.0).fill(t.bg)
         .native_surface(&s.surface, SurfaceFit::Fit)
+        .focusable(true)
+        .on_drag(|s: &mut State, drag: &mut rune::Drag, _tx: &mut Tx| {
+            if drag.phase == rune::Phase::Down {
+                s.editing = false;
+            }
+            let (kind, button) = match drag.phase {
+                rune::Phase::Down => ("down", "left"),
+                rune::Phase::Up => ("up", "left"),
+                rune::Phase::Move => ("move", "none"),
+            };
+            let id = s.tabs[s.active].id;
+            if let Some(e) = &mut s.engine {
+                e.pointer(id, kind, drag.x, drag.y, button);
+            }
+        })
+        .on_pointer_move_local(|s: &mut State, p: rune::PointerEvent, _tx: &mut Tx| {
+            let id = s.tabs[s.active].id;
+            if let Some(e) = &mut s.engine {
+                e.pointer(id, "move", p.x, p.y, "none");
+            }
+        })
+        .on_secondary_press_local(|s: &mut State, p: rune::PointerEvent, _tx: &mut Tx| {
+            let id = s.tabs[s.active].id;
+            if let Some(e) = &mut s.engine {
+                e.pointer(id, "down", p.x, p.y, "right");
+                e.pointer(id, "up", p.x, p.y, "right");
+            }
+        })
+        .on_wheel(|s: &mut State, we: rune::WheelEvent, _tx: &mut Tx| {
+            let id = s.tabs[s.active].id;
+            if let Some(e) = &mut s.engine {
+                e.wheel(id, we.dx, we.dy, we.x, we.y);
+            }
+            true
+        })
+        .on_key(|s: &mut State, ev: &rune::KeyEvent, _tx: &mut Tx| {
+            let Some((name, text)) = key_name(&ev.key) else { return false };
+            let id = s.tabs[s.active].id;
+            if let Some(e) = &mut s.engine {
+                e.key(id, &name, &text, key_mods(ev.mods), true);
+            }
+            true
+        })
+        .on_key_up(|s: &mut State, ev: &rune::KeyEvent, _tx: &mut Tx| {
+            let Some((name, text)) = key_name(&ev.key) else { return false };
+            let id = s.tabs[s.active].id;
+            if let Some(e) = &mut s.engine {
+                e.key(id, &name, &text, key_mods(ev.mods), false);
+            }
+            true
+        })
         .on_layout(|s: &mut State, rect: [f32; 4]| {
             let (w, h) = (rect[2].max(1.0) as u32, rect[3].max(1.0) as u32);
             if Some((w, h)) != s.last_size {

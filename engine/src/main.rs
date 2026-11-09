@@ -269,11 +269,6 @@ impl servo::WebViewDelegate for FrameDelegate {
 
     fn notify_url_changed(&self, webview: servo::WebView, url: url::Url) {
         eprintln!("engine: url changed (tab {}) {url}", self.tab);
-        // A url change proves the load was received even before
-        // LoadStatus::Started, which slow or redirect-heavy sites may not
-        // reach within the retry window. Without this the retry loop would
-        // re-issue the load and keep resetting the page's progress.
-        self.shared.started.lock().unwrap().insert(self.tab);
         self.shared.updates.lock().unwrap().push(Update {
             tab: self.tab,
             url: Some(url.to_string()),
@@ -331,6 +326,20 @@ impl servo::WebViewDelegate for FrameDelegate {
 
     fn load_web_resource(&self, _webview: servo::WebView, load: servo::WebResourceLoad) {
         self.maybe_block(load);
+    }
+
+    fn notify_input_event_handled(
+        &self,
+        _webview: servo::WebView,
+        _event_id: servo::InputEventId,
+        result: servo::InputEventResult,
+    ) {
+        eprintln!(
+            "engine: input handled: default_prevented={} consumed={} dispatch_failed={}",
+            result.contains(servo::InputEventResult::DefaultPrevented),
+            result.contains(servo::InputEventResult::Consumed),
+            result.contains(servo::InputEventResult::DispatchFailed),
+        );
     }
 }
 
@@ -404,6 +413,86 @@ fn make_context(size: dpi::PhysicalSize<u32>) -> Option<std::rc::Rc<dyn Renderin
             None
         }
     }
+}
+
+/// Map a chrome key event (name, text, modifier bitmask: 1 shift, 2 ctrl,
+/// 4 alt, 8 cmd/logo, down state) to a servo input event.
+fn map_key(name: &str, text: &str, mods: u8, down: bool) -> Option<servo::InputEvent> {
+    use keyboard_types::{Code, Key as K, KeyboardEvent, Location, Modifiers, NamedKey, KeyState};
+    let mut modifiers = Modifiers::empty();
+    if mods & 1 != 0 {
+        modifiers.insert(Modifiers::SHIFT);
+    }
+    if mods & 2 != 0 {
+        modifiers.insert(Modifiers::CONTROL);
+    }
+    if mods & 4 != 0 {
+        modifiers.insert(Modifiers::ALT);
+    }
+    if mods & 8 != 0 {
+        modifiers.insert(Modifiers::META);
+    }
+    let (key, code) = match name {
+        "text" => (K::Character(text.to_string()), Code::Unidentified),
+        "Enter" => (K::Named(NamedKey::Enter), Code::Enter),
+        "Backspace" => (K::Named(NamedKey::Backspace), Code::Backspace),
+        "Delete" => (K::Named(NamedKey::Delete), Code::Delete),
+        "Left" => (K::Named(NamedKey::ArrowLeft), Code::ArrowLeft),
+        "Right" => (K::Named(NamedKey::ArrowRight), Code::ArrowRight),
+        "Up" => (K::Named(NamedKey::ArrowUp), Code::ArrowUp),
+        "Down" => (K::Named(NamedKey::ArrowDown), Code::ArrowDown),
+        "Home" => (K::Named(NamedKey::Home), Code::Home),
+        "End" => (K::Named(NamedKey::End), Code::End),
+        "PageUp" => (K::Named(NamedKey::PageUp), Code::PageUp),
+        "PageDown" => (K::Named(NamedKey::PageDown), Code::PageDown),
+        "Insert" => (K::Named(NamedKey::Insert), Code::Insert),
+        "Escape" => (K::Named(NamedKey::Escape), Code::Escape),
+        "Tab" => (K::Named(NamedKey::Tab), Code::Tab),
+        other => {
+            let Some(n) = other.strip_prefix('F').and_then(|n| n.parse::<u8>().ok()) else {
+                return None;
+            };
+            let named = match n {
+                1..=12 => match n {
+                    1 => NamedKey::F1,
+                    2 => NamedKey::F2,
+                    3 => NamedKey::F3,
+                    4 => NamedKey::F4,
+                    5 => NamedKey::F5,
+                    6 => NamedKey::F6,
+                    7 => NamedKey::F7,
+                    8 => NamedKey::F8,
+                    9 => NamedKey::F9,
+                    10 => NamedKey::F10,
+                    11 => NamedKey::F11,
+                    _ => NamedKey::F12,
+                },
+                _ => return None,
+            };
+            let code = match n {
+                1 => Code::F1,
+                2 => Code::F2,
+                3 => Code::F3,
+                4 => Code::F4,
+                5 => Code::F5,
+                6 => Code::F6,
+                7 => Code::F7,
+                8 => Code::F8,
+                9 => Code::F9,
+                10 => Code::F10,
+                11 => Code::F11,
+                _ => Code::F12,
+            };
+            (K::Named(named), code)
+        }
+    };
+    let mut ev = if down {
+        KeyboardEvent::key_down(key, code)
+    } else {
+        KeyboardEvent::key_up(key, code)
+    };
+    ev.modifiers = modifiers;
+    Some(servo::InputEvent::Keyboard(servo::KeyboardEvent::new(ev)))
 }
 
 fn send_event(out: &mut impl Write, id: u64, json: &str) {
@@ -714,6 +803,101 @@ fn main() {
                                     tab.webview.evaluate_javascript(js.to_string(), |_| {});
                                 }
                             }
+                            Some("input") => {
+                                // Pointer input from the chrome's page area;
+                                // coordinates are the page's device pixels.
+                                if let (Some(kind), Some(tab)) =
+                                    (v["kind"].as_str(), tabs.get(&tab_id))
+                                {
+                                    eprintln!("engine: input (tab {tab_id}) {kind}");
+                                    let x = v["x"].as_f64().unwrap_or(0.0) as f32;
+                                    let y = v["y"].as_f64().unwrap_or(0.0) as f32;
+                                    let point = servo::WebViewPoint::Device(
+                                        webrender_api::units::DevicePoint::new(x, y),
+                                    );
+                                    match kind {
+                                        "down" | "up" => {
+                                            let button = match v["button"].as_str() {
+                                                Some("right") => servo::MouseButton::Secondary,
+                                                _ => servo::MouseButton::Primary,
+                                            };
+                                            let action = if kind == "down" {
+                                                servo::MouseButtonAction::Down
+                                            } else {
+                                                servo::MouseButtonAction::Up
+                                            };
+                                            // A click on the page focuses the webview;
+                                            // keyboard events are dropped without it.
+                                            if kind == "down" {
+                                                tab.webview.set_focused(true);
+                                            }
+                                            tab.webview.notify_input_event(
+                                                servo::InputEvent::MouseButton(
+                                                    servo::MouseButtonEvent {
+                                                        action,
+                                                        button,
+                                                        point,
+                                                        is_compatibility_event_for_touch: false,
+                                                    },
+                                                ),
+                                            );
+                                        }
+                                        "move" => {
+                                            tab.webview.notify_input_event(
+                                                servo::InputEvent::MouseMove(
+                                                    servo::MouseMoveEvent {
+                                                        point,
+                                                        is_compatibility_event_for_touch: false,
+                                                    },
+                                                ),
+                                            );
+                                        }
+                                        _ => {}
+                                    }
+                                    shared.pump.kick();
+                                }
+                            }
+                            Some("wheel") => {
+                                if let Some(tab) = tabs.get(&tab_id) {
+                                    eprintln!("engine: wheel (tab {tab_id})");
+                                    let dx = v["dx"].as_f64().unwrap_or(0.0);
+                                    let dy = v["dy"].as_f64().unwrap_or(0.0);
+                                    let x = v["x"].as_f64().unwrap_or(0.0) as f32;
+                                    let y = v["y"].as_f64().unwrap_or(0.0) as f32;
+                                    let point = servo::WebViewPoint::Device(
+                                        webrender_api::units::DevicePoint::new(x, y),
+                                    );
+                                    // Same sign convention as the chrome: a
+                                    // positive dy means the content moves down,
+                                    // i.e. the view scrolls up (servo agrees).
+                                    tab.webview.notify_input_event(servo::InputEvent::Wheel(
+                                        servo::WheelEvent {
+                                            delta: servo::WheelDelta {
+                                                x: dx,
+                                                y: dy,
+                                                z: 0.0,
+                                                mode: servo::WheelMode::DeltaPixel,
+                                            },
+                                            point,
+                                        },
+                                    ));
+                                    shared.pump.kick();
+                                }
+                            }
+                            Some("key") => {
+                                if let Some(name) = v["name"].as_str()
+                                    && let Some(tab) = tabs.get(&tab_id)
+                                {
+                                    eprintln!("engine: key (tab {tab_id}) {name}");
+                                    let text = v["text"].as_str().unwrap_or("");
+                                    let mods = v["mods"].as_u64().unwrap_or(0) as u8;
+                                    let down = v["down"].as_bool().unwrap_or(true);
+                                    if let Some(ev) = map_key(name, text, mods, down) {
+                                        tab.webview.notify_input_event(ev);
+                                        shared.pump.kick();
+                                    }
+                                }
+                            }
                             Some("resize") => {
                                 let (w, h) = (
                                     v["w"].as_u64().unwrap_or(1200) as u32,
@@ -755,7 +939,12 @@ fn main() {
                     tab.webview.load(u);
                     tab.pending_sent = true;
                     tab.pending_wait = 0;
-                } else if shared.started.lock().unwrap().contains(id) {
+                } else if shared.started.lock().unwrap().contains(id)
+                    || tab.webview.url().map(|v| v == u).unwrap_or(false)
+                {
+                    // Started fired, or the webview's url already matches the
+                    // pending load: it was received, not dropped. (Checking the
+                    // url avoids false positives from the initial about:blank.)
                     tab.pending = None;
                     tab.pending_sent = false;
                     tab.pending_retries = 0;

@@ -284,6 +284,31 @@ impl Engine {
         let json = serde_json::json!({ "cmd": "eval", "tab": tab, "js": js }).to_string();
         self.send(&json);
     }
+
+    /// Forward pointer input on the page area: kind is "down", "up" or "move",
+    /// button "left", "right" or "none". Coordinates are page-local points.
+    pub fn pointer(&mut self, tab: u64, kind: &str, x: f32, y: f32, button: &str) {
+        self.send(&format!(
+            "{{\"cmd\":\"input\",\"tab\":{tab},\"kind\":\"{kind}\",\"x\":{x},\"y\":{y},\"button\":\"{button}\"}}"
+        ));
+    }
+
+    /// Forward a wheel event (rune's convention: positive dy moves content down).
+    pub fn wheel(&mut self, tab: u64, dx: f32, dy: f32, x: f32, y: f32) {
+        self.send(&format!(
+            "{{\"cmd\":\"wheel\",\"tab\":{tab},\"dx\":{dx},\"dy\":{dy},\"x\":{x},\"y\":{y}}}"
+        ));
+    }
+
+    /// Forward a keyboard event: name from key_name(), text for text keys,
+    /// mods bitmask (1 shift, 2 ctrl, 4 alt, 8 cmd).
+    pub fn key(&mut self, tab: u64, name: &str, text: &str, mods: u8, down: bool) {
+        let json = serde_json::json!({
+            "cmd": "key", "tab": tab, "name": name, "text": text,
+            "mods": mods, "down": down,
+        });
+        self.send(&json.to_string());
+    }
 }
 
 fn read_frames(stream: TcpStream, surface: NativeSurface, waker: Waker, ui: Arc<Ui>) {
