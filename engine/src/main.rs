@@ -11,6 +11,7 @@
 //!        events:  u32 magic 'EVT1', u64 id, u32 len, u32 0, len bytes JSON
 //!                 {"ev":"url","tab":N,"url":"..."} | {"ev":"title","tab":N,"title":"..."}
 //! Only the active tab is painted; switching tabs re-sends that tab's url/title.
+//! Options: --user-agent=STRING overrides the HTTP user agent (from settings.json).
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use servo::RenderingContext;
@@ -174,6 +175,13 @@ fn send_event(out: &mut impl Write, id: u64, json: &str) {
 fn main() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
+    let mut user_agent = None;
+    for a in std::env::args().skip(1) {
+        if let Some(v) = a.strip_prefix("--user-agent=") {
+            user_agent = Some(v.to_string());
+        }
+    }
+
     let listener = TcpListener::bind(("127.0.0.1", PORT)).expect("engine: bind failed");
     eprintln!("engine: listening on {PORT}");
     let (stream, _peer) = listener.accept().expect("engine: accept failed");
@@ -190,8 +198,14 @@ fn main() {
         started: Mutex::new(std::collections::HashSet::new()),
     });
 
+    let mut prefs = servo::Preferences::default();
+    if let Some(ua) = user_agent {
+        eprintln!("engine: custom user agent set");
+        prefs.user_agent = ua;
+    }
     let servo = servo::ServoBuilder::default()
         .event_loop_waker(Box::new(ServoWaker(pump.clone())))
+        .preferences(prefs)
         .build();
     servo.setup_logging();
 

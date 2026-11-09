@@ -63,15 +63,36 @@ history. Tab 0 exists from startup.
 - Real multi-tab: one Servo webview + GPU context per tab, per-tab history,
   tab pills with live titles and close buttons
 - Back/forward wired to Servo history, greyed out per active tab
+- User data: settings.json (homepage, user agent), history.jsonl, bookmarks
+  (star button), session restore across restarts, bookmarks/history panel
 - GPU rendering: surfman WGL hardware context (software fallback), ~3-20ms per
   frame cycle; identical frames skipped, animated pages capped at 30fps
 - Two-exe distribution via scripts/dist.ps1 (side-by-side, no env var needed)
+
+## User data (Phase 1)
+
+Everything lives in `%APPDATA%\browserr` as plain files, no UI required:
+
+```text
+settings.json   { "homepage": "https://...", "user_agent": "..." }  (hand-edited, restart to apply)
+history.jsonl   appended on every navigation: {"ts": secs, "url": "..."}
+bookmarks.json  [{"url": "...", "title": "..."}]  (star button in the toolbar)
+session.json    {"urls": [...], "active": N}  (written on tab changes, restored on launch)
+```
+
+- The chrome passes `user_agent` to the engine as `--user-agent=...`; it
+  overrides Servo's preference (engine/src/main.rs).
+- The ellipsis button opens a panel with bookmarks and the last 15 history
+  entries; click an entry to navigate.
+- Do Not Track and adblocking need a request hook inside Servo's network
+  stack, which servo 0.8 does not expose. Parked with the Phase 2 adblock work.
 
 ## Known limitations
 
 - Frames stream over loopback TCP (~4MB each); a GPU shared-texture path would
   remove the copy
-- No favicon, no scroll position persistence across tab switches, no bookmarks,
-  downloads, history persistence, settings
+- No favicon, no scroll position persistence across tab switches, no
+  downloads; settings are hand-edited, no settings UI yet
+- History is url-only (no page titles stored)
 - Engine exits with a cosmetic surfman panic on shutdown ("Should have
   destroyed the surface first")

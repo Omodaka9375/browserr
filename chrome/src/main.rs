@@ -2,6 +2,7 @@ use rune::tok::{self, type_};
 use rune::{App, AppSpec, Color, Cx, El, Icon, NativeSurface, SurfaceFit, TextEdit, Tx, WindowOptions, col, el, icon, row, spacer, text, text_input};
 
 mod engine;
+mod store;
 
 use engine::{Engine, Ui};
 use std::sync::Arc;
@@ -25,6 +26,12 @@ struct State {
     next_tab_id: u64,
     /// Engine-reported UI state shared with the frame reader thread.
     ui: Arc<Ui>,
+    /// Saved bookmarks: (url, title).
+    bookmarks: Vec<(String, String)>,
+    /// Whether the bookmarks/history panel is open.
+    menu_open: bool,
+    /// History urls shown in the panel (refreshed when it opens).
+    history_view: Vec<String>,
 }
 
 impl Default for Tab {
@@ -33,24 +40,77 @@ impl Default for Tab {
     }
 }
 
+fn host(url: &str) -> String {
+    url.split("://").nth(1).unwrap_or(url)
+        .split('/').next().unwrap_or(url)
+        .to_string()
+}
+
 fn state() -> State {
+    // Restore the last session, or start with a single empty tab.
+    let (tabs, active, next_id) = match store::load_session() {
+        Some(s) => {
+            let tabs: Vec<Tab> = s.urls.iter().enumerate()
+                .map(|(i, u)| Tab { id: i as u64, url: u.clone(), title: host(u) })
+                .collect();
+            (tabs, s.active, s.urls.len() as u64)
+        }
+        None => (vec![Tab::default()], 0, 1),
+    };
     State {
-        tabs: vec![Tab::default()],
-        active: 0,
+        tabs,
+        active,
         address: TextEdit::new(""),
         editing: false,
         engine: None,
         surface: NativeSurface::new(),
         last_size: None,
-        next_tab_id: 1,
-        ui: Ui::new(0),
+        next_tab_id: next_id,
+        ui: Ui::new(active as u64),
+        bookmarks: store::load_bookmarks(),
+        menu_open: false,
+        history_view: Vec::new(),
     }
+}
+
+fn save_session(s: &State) {
+    let urls: Vec<String> = s.tabs.iter().map(|t| t.url.clone()).collect();
+    store::save_session(&urls, s.active);
+}
+
+/// Navigate the active tab (address bar, bookmarks, history all land here).
+fn go(s: &mut State, url: String) {
+    let tab_id = s.tabs[s.active].id;
+    s.tabs[s.active].url = url.clone();
+    s.tabs[s.active].title = host(&url);
+    if let Some(engine) = &mut s.engine {
+        engine.navigate(&url, tab_id);
+    }
+    save_session(s);
 }
 
 fn setup(s: &mut State, wake: rune::Waker) {
     s.surface.set_waker(wake.clone());
-    match Engine::start(s.surface.clone(), wake, s.ui.clone()) {
-        Ok(e) => s.engine = Some(e),
+    let settings = store::load_settings();
+    match Engine::start(s.surface.clone(), wake, s.ui.clone(), &settings.user_agent) {
+        Ok(mut e) => {
+            // Restore open tabs: navigate() creates missing engine tabs on demand.
+            let active_id = s.tabs[s.active].id;
+            let restored: Vec<(u64, String)> = s.tabs.iter()
+                .map(|t| (t.id, t.url.clone()))
+                .filter(|(_, u)| !u.is_empty())
+                .collect();
+            if !restored.is_empty() {
+                for (id, url) in restored {
+                    e.navigate(&url, id);
+                }
+                e.activate(active_id);
+                s.ui.active.store(active_id, std::sync::atomic::Ordering::SeqCst);
+            } else if !settings.homepage.is_empty() {
+                e.navigate(&settings.homepage, 0);
+            }
+            s.engine = Some(e);
+        }
         Err(err) => eprintln!("chrome: engine failed to start: {err}"),
     }
 }
@@ -79,6 +139,16 @@ static ICON_CLOSE: Icon = Icon {
     name: "br-tab-close",
     view: 16.0,
     body: r#"<path d="M5 5L11 11M11 5L5 11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/>"#,
+};
+static ICON_STAR: Icon = Icon {
+    name: "br-star",
+    view: 16.0,
+    body: r#"<path d="M8 2.8l1.6 3.3 3.6.5-2.6 2.5.6 3.6L8 11l-3.2 1.7.6-3.6L2.8 6.6l3.6-.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/>"#,
+};
+static ICON_STAR_FILLED: Icon = Icon {
+    name: "br-star-filled",
+    view: 16.0,
+    body: r#"<path d="M8 2.8l1.6 3.3 3.6.5-2.6 2.5.6 3.6L8 11l-3.2 1.7.6-3.6L2.8 6.6l3.6-.5z" fill="currentColor"/>"#,
 };
 
 fn icon_btn(id: &'static str, ic: &'static Icon, enabled: bool, action: Option<impl Fn(&mut State) + 'static>) -> El {
@@ -110,6 +180,37 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
     let active_id = s.tabs[s.active].id;
     let shown_url = s.ui.url(active_id).unwrap_or_else(|| s.tabs[s.active].url.clone());
     let (back_ok, fwd_ok) = s.ui.history(active_id).unwrap_or((false, false));
+    let starred = !shown_url.is_empty() && s.bookmarks.iter().any(|(u, _)| u == &shown_url);
+
+    // Bookmarks + history panel, opened by the ellipsis button.
+    let menu_panel = {
+        let mut p = col().key("menu-panel").w_full().px(14.0).py(10.0).gap(4.0).fill(t.card);
+        p = p.child(text("Bookmarks").font(type_::BODY.lh(20.0)).color(t.text_secondary));
+        if s.bookmarks.is_empty() {
+            p = p.child(text("No bookmarks yet").font(type_::BODY.lh(18.0)).color(t.text_secondary));
+        }
+        for (url, title) in s.bookmarks.clone() {
+            let label = if title.is_empty() { host(&url) } else { title };
+            p = p.child(
+                el().w_full().py(2.0)
+                    .on_press(move |s: &mut State| go(s, url.clone()))
+                    .child(text(label).font(type_::BODY.lh(20.0)).color(t.text)),
+            );
+        }
+        p = p.child(text("History").font(type_::BODY.lh(20.0)).color(t.text_secondary));
+        if s.history_view.is_empty() {
+            p = p.child(text("Nothing yet").font(type_::BODY.lh(18.0)).color(t.text_secondary));
+        }
+        for url in s.history_view.clone() {
+            let u = url.clone();
+            p = p.child(
+                el().w_full().py(2.0)
+                    .on_press(move |s: &mut State| go(s, u.clone()))
+                    .child(text(url).font(type_::BODY.lh(18.0)).color(t.text_secondary)),
+            );
+        }
+        p
+    };
 
     // Address pill: shows the page's live URL; click to edit.
     let pill = row().key("address-pill").w(420.0).h(28.0).px(12.0).radius(14.0).center_y()
@@ -143,22 +244,13 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                     } else {
                         format!("https://duckduckgo.com/?q={raw}")
                     };
-                    let tab_id = s.tabs[s.active].id;
-                    let tab = &mut s.tabs[s.active];
-                    tab.url = url.clone();
-                    tab.title = url
-                        .split("://").nth(1).unwrap_or(&url)
-                        .split('/').next().unwrap_or(&url)
-                        .to_string();
-                    s.address = TextEdit::new("");
-                    s.editing = false;
-                    if let Some(engine) = &mut s.engine {
-                        engine.navigate(&url, tab_id);
-                    }
-                })
+                        s.address = TextEdit::new("");
+                        s.editing = false;
+                        go(s, url);
+                    })
         } else {
             let placeholder = shown_url.is_empty();
-            text(if placeholder { "Search or enter website name".to_string() } else { shown_url })
+            text(if placeholder { "Search or enter website name".to_string() } else { shown_url.clone() })
                 .grow(1.0)
                 .font(type_::BODY.lh(20.0))
                 .color(if placeholder { t.text_secondary } else { t.text })
@@ -187,6 +279,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                         if let Some(engine) = &mut s.engine {
                             engine.activate(id);
                         }
+                        save_session(s);
                     }
                 });
             if s.tabs.len() > 1 {
@@ -210,6 +303,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                                     engine.new_tab(id);
                                     engine.activate(id);
                                 }
+                                save_session(s);
                             } else {
                                 if s.active >= s.tabs.len() {
                                     s.active = s.tabs.len() - 1;
@@ -220,6 +314,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                                     engine.close_tab(closed_id);
                                     engine.activate(new_active);
                                 }
+                                save_session(s);
                             }
                         }),
                 );
@@ -243,6 +338,19 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 e.forward(active_id);
             }
         })))
+        .child(icon_btn("br-star", if starred { &ICON_STAR_FILLED } else { &ICON_STAR },
+            !shown_url.is_empty(),
+            Some(|s: &mut State| {
+                let url = s.ui.url(s.tabs[s.active].id).unwrap_or_default();
+                if url.is_empty() { return; }
+                if let Some(pos) = s.bookmarks.iter().position(|(u, _)| *u == url) {
+                    s.bookmarks.remove(pos);
+                } else {
+                    let title = s.ui.title(s.tabs[s.active].id).unwrap_or_else(|| url.clone());
+                    s.bookmarks.insert(0, (url, title));
+                }
+                store::save_bookmarks(&s.bookmarks);
+            })))
         .child(pill)
         .child(tabs_row)
         .child(icon_btn("br-plus", &ICON_PLUS, true, Some(|s: &mut State| {
@@ -258,26 +366,34 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 engine.new_tab(tab_id);
                 engine.activate(tab_id);
             }
+            save_session(s);
         })))
-        .child(icon_btn("br-menu", &ICON_ELLIPSIS, false, None::<fn(&mut State)>))
+        .child(icon_btn("br-menu", &ICON_ELLIPSIS, true, Some(|s: &mut State| {
+            s.menu_open = !s.menu_open;
+            if s.menu_open {
+                s.history_view = store::read_history(15);
+            }
+        })))
         .child(spacer())
         .child(el().w(78.0));
 
-    col().w_full().h_full().fill(t.bg)
-        .child(bar)
-        .child(
-            el().key("page").grow(1.0).min_h(0.0).fill(t.bg)
-                .native_surface(&s.surface, SurfaceFit::Fit)
-                .on_layout(|s: &mut State, rect: [f32; 4]| {
-                    let (w, h) = (rect[2].max(1.0) as u32, rect[3].max(1.0) as u32);
-                    if Some((w, h)) != s.last_size {
-                        s.last_size = Some((w, h));
-                        if let Some(engine) = &mut s.engine {
-                            engine.resize(w, h);
-                        }
-                    }
-                }),
-        )
+    let page = el().key("page").grow(1.0).min_h(0.0).fill(t.bg)
+        .native_surface(&s.surface, SurfaceFit::Fit)
+        .on_layout(|s: &mut State, rect: [f32; 4]| {
+            let (w, h) = (rect[2].max(1.0) as u32, rect[3].max(1.0) as u32);
+            if Some((w, h)) != s.last_size {
+                s.last_size = Some((w, h));
+                if let Some(engine) = &mut s.engine {
+                    engine.resize(w, h);
+                }
+            }
+        });
+
+    let mut root = col().w_full().h_full().fill(t.bg).child(bar);
+    if s.menu_open {
+        root = root.child(menu_panel);
+    }
+    root.child(page)
 }
 
 fn main() {

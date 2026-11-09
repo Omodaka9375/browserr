@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use rune::{NativeSurface, Waker};
 
+use crate::store;
+
 const PORT: u16 = 7411;
 const MAGIC: u32 = 0x46_52_4D_31; // FRM1
 const EV_MAGIC: u32 = 0x45_56_54_31; // EVT1
@@ -57,7 +59,13 @@ pub struct Engine {
 
 impl Engine {
     /// Spawn the engine sibling process and start the frame reader.
-    pub fn start(surface: NativeSurface, waker: Waker, ui: Arc<Ui>) -> std::io::Result<Engine> {
+    /// `user_agent` (may be empty) is forwarded to the engine as an option.
+    pub fn start(
+        surface: NativeSurface,
+        waker: Waker,
+        ui: Arc<Ui>,
+        user_agent: &str,
+    ) -> std::io::Result<Engine> {
         let exe = std::env::var("BROWSERR_ENGINE")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| {
@@ -71,7 +79,11 @@ impl Engine {
         let engine_log = std::env::temp_dir().join("browserr-engine.log");
         let stderr = std::fs::File::create(&engine_log).ok();
         eprintln!("chrome: engine stderr -> {}", engine_log.display());
-        let child = Command::new(exe)
+        let mut cmd = Command::new(exe);
+        if !user_agent.is_empty() {
+            cmd.arg(format!("--user-agent={user_agent}"));
+        }
+        let child = cmd
             .stdout(Stdio::null())
             .stderr(stderr.map(Stdio::from).unwrap_or(Stdio::null()))
             .spawn()?;
@@ -186,7 +198,14 @@ fn read_frames(stream: TcpStream, surface: NativeSurface, waker: Waker, ui: Arc<
                 match v["ev"].as_str() {
                     Some("url") => {
                         if let Some(u) = v["url"].as_str() {
-                            ui.urls.lock().unwrap().insert(tab, u.to_string());
+                            let mut urls = ui.urls.lock().unwrap();
+                            let changed = urls.get(&tab) != Some(&u.to_string());
+                            urls.insert(tab, u.to_string());
+                            drop(urls);
+                            // Dedupe: the engine re-sends the same url on activate.
+                            if changed {
+                                store::append_history(u);
+                            }
                         }
                     }
                     Some("title") => {
