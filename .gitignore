@@ -9,3 +9,5 @@ engine*.log
 chrome-boot-test.log
 
 *.zip
+
+chrome-driver-test.log
