@@ -89,6 +89,8 @@ pub struct Settings {
     pub adblock: bool,
     /// Fallback search url for non-address queries; "{}" is the encoded query.
     pub search: String,
+    /// Page zoom for new tabs (1.0 = 100%).
+    pub default_zoom: f32,
 }
 
 pub fn load_settings() -> Settings {
@@ -105,6 +107,7 @@ pub fn load_settings() -> Settings {
             .filter(|s| !s.is_empty())
             .unwrap_or("https://duckduckgo.com/?q={}")
             .to_string(),
+        default_zoom: v["default_zoom"].as_f64().unwrap_or(1.0) as f32,
     }
 }
 
@@ -118,6 +121,7 @@ pub fn save_settings(settings: &Settings) {
         "user_agent": settings.user_agent,
         "adblock": settings.adblock,
         "search": settings.search,
+        "default_zoom": settings.default_zoom,
     });
     let _ = std::fs::write(
         dir.join("settings.json"),
@@ -200,18 +204,20 @@ pub fn save_bookmarks(bookmarks: &[(String, String)]) {
     );
 }
 
-pub fn save_session(urls: &[String], active: usize) {
+pub fn save_session(urls: &[String], active: usize, zooms: &[f32]) {
     let dir = data_dir();
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
-    let v = serde_json::json!({ "urls": urls, "active": active });
+    let v = serde_json::json!({ "urls": urls, "active": active, "zooms": zooms });
     let _ = std::fs::write(dir.join("session.json"), v.to_string());
 }
 
 pub struct Session {
     pub urls: Vec<String>,
     pub active: usize,
+    /// Page zoom per url (same order); 1.0 when absent.
+    pub zooms: Vec<f32>,
 }
 
 /// Delete the browsing history file.
@@ -234,8 +240,17 @@ pub fn load_session() -> Option<Session> {
     }
     let active = v["active"].as_u64().unwrap_or(0) as usize;
     let len = urls.len();
+    let zooms: Vec<f32> = v["zooms"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|z| z.as_f64().unwrap_or(1.0) as f32)
+                .collect()
+        })
+        .unwrap_or_default();
     Some(Session {
         urls,
         active: active.min(len - 1),
+        zooms,
     })
 }

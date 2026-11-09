@@ -69,11 +69,18 @@ rune's cursor set over the page area.
   tab pills with live titles and close buttons
 - Back/forward wired to Servo history, greyed out per active tab
 - User data: per-profile dirs (chrome data + Servo storage via --profile-dir),
-  settings.json (homepage, user agent), history.jsonl, bookmarks (star
-  button), session restore across restarts, bookmarks/history panel
+  settings.json (homepage, user agent, search engine, default page zoom),
+  history.jsonl, bookmarks (star button), session restore across restarts
+  (urls + per-tab zoom), bookmarks/history panel
+- Page input forwarding: pointer down/up/move, wheel, keyboard; cursor shape
+  feedback from the page (hand over links, I-beam over text, ...); Ctrl+wheel
+  page zoom per tab with a toolbar chip and Ctrl+0/-/= shortcuts
+- Clear browsing history and clear cookies/site data (engine storage wiped
+  in place, tabs reloaded) from the settings page
 - GPU rendering: surfman WGL hardware context (software fallback), ~3-20ms per
   frame cycle; identical frames skipped, animated pages capped at 30fps
-- Two-exe distribution via scripts/dist.ps1 (side-by-side, no env var needed)
+- Two-exe distribution via scripts/dist.ps1 (side-by-side, no env var needed);
+  scripts/package.ps1 adds a browserr-<version>-windows-x64.zip
 
 ## User data (Phase 1)
 
@@ -86,10 +93,11 @@ chrome.exe --profile work
 Everything lives in `%APPDATA%\browserr\profiles\<name>\` as plain files:
 
 ```text
-settings.json   { "homepage": "...", "user_agent": "...", "adblock": bool }
+settings.json   { "homepage": "...", "user_agent": "...", "adblock": bool,
+                  "search": "...", "default_zoom": 1.0 }
 history.jsonl   appended on every navigation: {"ts": secs, "url": "..."}
 bookmarks.json  [{"url": "...", "title": "..."}]  (star button in the toolbar)
-session.json    {"urls": [...], "active": N}  (written on tab changes, restored on launch)
+session.json    {"urls": [...], "active": N, "zooms": [...]}  (restored on launch)
 engine\         Servo's own storage (cookies, HSTS, auth cache, localStorage), per profile
 easylist.txt    adblock filter list (downloaded once, refreshed weekly)
 ```
@@ -99,8 +107,11 @@ click a profile to open it in a new window, or type a name and press Enter to
 create one. The picker itself is CLI-only free; profile names are sanitized to
 letters, digits, dashes and underscores.
 
-Settings are edited in the menu panel (ellipsis button): homepage, user agent
-and an adblock toggle. User agent and adblock apply on restart.
+Settings live on a full settings page (hamburger menu -> open settings):
+homepage, search engine cycle, default page zoom (applies to new tabs), user
+agent, adblock toggle, clear browsing history, clear cookies and site data,
+and the saved-password list. User agent and adblock restart the engine in
+place; so does clearing site data (tabs are reloaded afterwards).
 
 ## Passwords
 

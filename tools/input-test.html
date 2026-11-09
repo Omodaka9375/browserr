@@ -1,0 +1,5 @@
+<!doctype html><body style='margin:0'>
+<div id=hit style='width:600px;height:600px;background:#f00' onclick="document.title='CLICKED'">click me</div>
+<input id=t style='position:fixed;left:0;bottom:0' oninput="document.title='TYPED:'+this.value">
+<script>window.addEventListener('wheel',()=>{document.title='SCROLLED'},{passive:true});</script>
+</body>

@@ -110,19 +110,25 @@ fn state() -> State {
     let settings_home = TextEdit::new(settings.homepage.clone());
     let settings_ua = TextEdit::new(settings.user_agent.clone());
     // Restore the last session, or start with a single empty tab.
-    let (tabs, active, next_id) = if picker {
-        (vec![Tab::default()], 0, 1)
+    let (tabs, active, next_id, zooms) = if picker {
+        (vec![Tab::default()], 0, 1, Vec::new())
     } else {
         match store::load_session() {
             Some(s) => {
                 let tabs: Vec<Tab> = s.urls.iter().enumerate()
                     .map(|(i, u)| Tab { id: i as u64, url: u.clone(), title: host(u) })
                     .collect();
-                (tabs, s.active, s.urls.len() as u64)
+                (tabs, s.active, s.urls.len() as u64, s.zooms)
             }
-            None => (vec![Tab::default()], 0, 1),
+            None => (vec![Tab::default()], 0, 1, Vec::new()),
         }
     };
+    // Per-tab zoom restored with the session (tab ids are 0..n-1).
+    let zoom: HashMap<u64, f32> = tabs
+        .iter()
+        .enumerate()
+        .filter_map(|(i, _)| zooms.get(i).map(|z| (i as u64, *z)))
+        .collect();
     State {
         tabs,
         active,
@@ -150,7 +156,7 @@ fn state() -> State {
         creds_view: Vec::new(),
         engine_ua: String::new(),
         engine_adblock: false,
-        zoom: HashMap::new(),
+        zoom,
     }
 }
 
@@ -197,6 +203,9 @@ fn fill_js(user: &str, pass: &str) -> String {
     )
 }
 
+/// Zoom levels cycled by the settings page; includes the reset value.
+const ZOOM_LEVELS: [f32; 9] = [0.5, 0.67, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0];
+
 /// Zoom limits and step (Chrome-like).
 const ZOOM_MIN: f32 = 0.25;
 const ZOOM_MAX: f32 = 3.0;
@@ -234,15 +243,22 @@ fn cursor_shape(s: &State) -> rune::Cursor {
     }
 }
 
-/// Kill and respawn the engine (settings that need a new process), then
-/// re-open every tab on the fresh engine.
-fn restart_engine(s: &mut State) {
-    let Some(e) = &mut s.engine else { return };
-    if e.restart().is_err() {
-        eprintln!("chrome: engine restart failed");
-        return;
+/// Push every tab's non-default zoom to the engine (fresh webviews and
+/// restarts forget it; the chrome keeps the per-tab values).
+fn push_zooms_to(e: &mut Engine, s: &State) {
+    for t in &s.tabs {
+        if let Some(z) = s.zoom.get(&t.id) {
+            if *z != 1.0 {
+                e.zoom(t.id, *z);
+            }
+        }
     }
+}
+
+/// Re-send resize + navigation + zoom + activate to the (fresh) engine.
+fn renavigate_all(s: &mut State) {
     let (w, h) = s.last_size.unwrap_or((1200, 760));
+    let Some(e) = &mut s.engine else { return };
     e.resize(w, h);
     s.ui.clear_cursors();
     // Prefer the engine-reported url; fall back to the chrome-side record.
@@ -265,8 +281,30 @@ fn restart_engine(s: &mut State) {
         }
     }
     e.activate(s.tabs[s.active].id);
+}
+
+/// Kill and respawn the engine (settings that need a new process), then
+/// re-open every tab on the fresh engine.
+fn restart_engine(s: &mut State) {
+    let Some(e) = &mut s.engine else { return };
+    if e.restart().is_err() {
+        eprintln!("chrome: engine restart failed");
+        return;
+    }
     s.engine_ua = s.settings.user_agent.clone();
     s.engine_adblock = s.settings.adblock;
+    renavigate_all(s);
+}
+
+/// Wipe the profile's servo storage (cookies, localStorage, IndexedDB, ...)
+/// by deleting the engine data dir while the engine is down, then respawn.
+fn clear_site_data(s: &mut State) {
+    let Some(e) = &mut s.engine else { return };
+    if e.clear_site_data().is_err() {
+        eprintln!("chrome: clear site data failed");
+        return;
+    }
+    renavigate_all(s);
 }
 
 /// Pull the panel's TextEdits into s.settings and persist them. Restarts the
@@ -291,7 +329,8 @@ fn launch_profile(tx: &mut Tx, name: &str) {
 
 fn save_session(s: &State) {
     let urls: Vec<String> = s.tabs.iter().map(|t| t.url.clone()).collect();
-    store::save_session(&urls, s.active);
+    let zooms: Vec<f32> = s.tabs.iter().map(|t| zoom_of(s, t.id)).collect();
+    store::save_session(&urls, s.active, &zooms);
 }
 
 /// Navigate the active tab (address bar, bookmarks, history all land here).
@@ -338,10 +377,16 @@ fn setup(s: &mut State, wake: rune::Waker) {
                 for (id, url) in restored {
                     e.navigate(&url, id);
                 }
+                push_zooms_to(&mut e, s);
                 e.activate(active_id);
                 s.ui.active.store(active_id, std::sync::atomic::Ordering::SeqCst);
             } else if !s.settings.homepage.is_empty() {
                 e.navigate(&s.settings.homepage, 0);
+                if s.settings.default_zoom != 1.0 {
+                    e.zoom(0, s.settings.default_zoom);
+                }
+            } else if s.settings.default_zoom != 1.0 {
+                e.zoom(0, s.settings.default_zoom);
             }
             s.engine = Some(e);
         }
@@ -498,6 +543,16 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 save_settings_ui(s);
             }),
         );
+        c = c.child(label("Default page zoom (applies to new tabs)".into()));
+        c = c.child(
+            text_btn("set-zoom", format!("{}%", (s.settings.default_zoom * 100.0).round() as u32), |s: &mut State| {
+                let next = ZOOM_LEVELS.iter().position(|z| *z == s.settings.default_zoom)
+                    .map(|i| (i + 1) % ZOOM_LEVELS.len())
+                    .unwrap_or(0);
+                s.settings.default_zoom = ZOOM_LEVELS[next];
+                save_settings_ui(s);
+            }),
+        );
 
         c = c.child(section("Privacy and network"));
         c = c.child(
@@ -513,6 +568,13 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 store::clear_history();
                 s.history_view = Vec::new();
             }),
+        );
+        c = c.child(
+            row().gap(8.0).center_y()
+                .child(text_btn("clear-site-data", "Clear cookies and site data".to_string(), |s: &mut State| {
+                    clear_site_data(s);
+                }))
+                .child(label("(the engine restarts; tabs are reloaded)".into())),
         );
         c = c.child(label("User agent (applies on save; the engine restarts)".into()));
         c = c.child(
@@ -794,6 +856,9 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                                     engine.new_tab(id);
                                     engine.activate(id);
                                 }
+                                if s.settings.default_zoom != 1.0 {
+                                    set_zoom(s, id, s.settings.default_zoom);
+                                }
                                 // New tabs open the homepage (if set); the pill
                                 // stays in edit mode so typing works right away.
                                 if !s.settings.homepage.is_empty() {
@@ -869,6 +934,18 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             }
         })))
         .child(pill)
+        // Zoom chip: visible whenever the page is not at 100%; click resets.
+        .child({
+            let z = zoom_of(s, active_id);
+            if z != 1.0 {
+                text_btn("br-zoom-chip", format!("{}%", (z * 100.0).round() as u32), |s: &mut State| {
+                    let id = s.tabs[s.active].id;
+                    set_zoom(s, id, 1.0);
+                })
+            } else {
+                spacer()
+            }
+        })
         .child(tabs_row)
         .child(icon_btn("br-plus", &ICON_PLUS, true, Some(|s: &mut State| {
             let id = s.next_tab_id;
@@ -882,6 +959,9 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             if let Some(engine) = &mut s.engine {
                 engine.new_tab(tab_id);
                 engine.activate(tab_id);
+            }
+            if s.settings.default_zoom != 1.0 {
+                set_zoom(s, tab_id, s.settings.default_zoom);
             }
             // New tabs open the homepage (if set); the pill stays in edit mode
             // so the user can type right away.

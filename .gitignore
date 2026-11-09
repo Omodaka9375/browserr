@@ -7,3 +7,5 @@ dist/
 
 engine*.log
 chrome-boot-test.log
+
+*.zip

@@ -228,6 +228,23 @@ impl Engine {
     /// re-navigate the open tabs afterwards.
     pub fn restart(&mut self) -> std::io::Result<()> {
         eprintln!("chrome: restarting engine");
+        self.kill_and_wait();
+        self.respawn()
+    }
+
+    /// Kill the engine, wipe its per-profile storage dir (cookies, HSTS,
+    /// localStorage, IndexedDB, ...), and respawn. The caller must
+    /// re-navigate the open tabs afterwards.
+    pub fn clear_site_data(&mut self) -> std::io::Result<()> {
+        eprintln!("chrome: clearing site data ({})", self.args.profile_dir);
+        self.kill_and_wait();
+        if !self.args.profile_dir.is_empty() {
+            let _ = std::fs::remove_dir_all(&self.args.profile_dir);
+        }
+        self.respawn()
+    }
+
+    fn kill_and_wait(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
         #[cfg(windows)]
@@ -238,6 +255,9 @@ impl Engine {
         }
         // The old reader thread exits on its own when the socket closes.
         self.reader = None;
+    }
+
+    fn respawn(&mut self) -> std::io::Result<()> {
         let fresh = Engine::spawn(StartArgs {
             surface: self.args.surface.clone(),
             waker: self.args.waker.clone(),
