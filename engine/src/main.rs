@@ -13,6 +13,7 @@
 //! Only the active tab is painted; switching tabs re-sends that tab's url/title.
 //! Options: --user-agent=STRING overrides the HTTP user agent (from settings.json).
 //!           --profile-dir=PATH gives Servo a per-profile config/storage dir.
+//!           --adblock-list=PATH enables request blocking against an EasyList-format file.
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use servo::RenderingContext;
@@ -80,9 +81,56 @@ struct Shared {
     started: Mutex<std::collections::HashSet<u64>>,
 }
 
+struct ServoAdblockDelegate {
+    adblock: Option<std::rc::Rc<adblock::engine::Engine>>,
+}
+
+impl servo::ServoDelegate for ServoAdblockDelegate {
+    fn load_web_resource(&self, load: servo::WebResourceLoad) {
+        // Requests with a target webview go to the WebViewDelegate; this
+        // catches the rest (no target webview known at the net layer).
+        if let Some(engine) = &self.adblock {
+            block_if_matching(engine, load);
+        }
+    }
+}
+
+/// Block the request if the filter list matches; default is pass-through.
+/// Main-frame documents are never blocked: a cancelled document response
+/// wedges the pipeline for later navigations on that tab.
+fn block_if_matching(
+    engine: &adblock::engine::Engine,
+    load: servo::WebResourceLoad,
+) {
+    if load.request().is_for_main_frame {
+        return;
+    }
+    let url = load.request().url.to_string();
+    let req_type = format!("{:?}", load.request().destination).to_lowercase();
+    let method = load.request().method.as_str();
+    let Ok(req) = adblock::request::Request::new(&url, "", &req_type, method) else {
+        return;
+    };
+    if engine.check_network_request(&req).should_block() {
+        eprintln!("engine: adblock blocked {url}");
+        let response_url = load.request().url.clone().into_url();
+        load.intercept(servo::WebResourceResponse::new(response_url)).cancel();
+    }
+}
+
 struct FrameDelegate {
     tab: u64,
     shared: Arc<Shared>,
+    adblock: Option<std::rc::Rc<adblock::engine::Engine>>,
+}
+
+impl FrameDelegate {
+    /// Block the request if the filter list matches; default is pass-through.
+    fn maybe_block(&self, load: servo::WebResourceLoad) {
+        if let Some(engine) = &self.adblock {
+            block_if_matching(engine, load);
+        }
+    }
 }
 
 impl servo::WebViewDelegate for FrameDelegate {
@@ -132,6 +180,10 @@ impl servo::WebViewDelegate for FrameDelegate {
         });
         self.shared.pump.kick();
     }
+
+    fn load_web_resource(&self, _webview: servo::WebView, load: servo::WebResourceLoad) {
+        self.maybe_block(load);
+    }
 }
 
 struct Tab {
@@ -144,6 +196,49 @@ struct Tab {
     last_url: Option<String>,
     last_title: Option<String>,
     last_history: Option<(bool, bool)>,
+}
+
+const EASYLIST_URL: &str = "https://easylist.to/easylist/easylist.txt";
+/// Re-download after a week.
+const FILTER_LIST_MAX_AGE_SECS: u64 = 7 * 24 * 3600;
+
+/// Download the EasyList-format filter file if missing or stale. Best effort:
+/// a failed download keeps any existing file and just logs.
+fn ensure_filter_list(path: &std::path::Path) {
+    let stale = match std::fs::metadata(path) {
+        Ok(m) => m
+            .modified()
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .map(|e| e.as_secs() > FILTER_LIST_MAX_AGE_SECS)
+            .unwrap_or(true),
+        Err(_) => true,
+    };
+    if !stale {
+        return;
+    }
+    eprintln!("engine: downloading adblock filter list -> {}", path.display());
+    if let Ok(dir) = path.parent().ok_or(()) {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    match ureq::get(EASYLIST_URL).call() {
+        Ok(resp) => match resp.into_string() {
+            Ok(body) => {
+                let _ = std::fs::write(path, body);
+                eprintln!("engine: filter list saved");
+            }
+            Err(e) => eprintln!("engine: filter list body read failed: {e}"),
+        },
+        Err(e) => eprintln!("engine: filter list download failed: {e}"),
+    }
+}
+
+fn load_adblock(path: &std::path::Path) -> Option<std::rc::Rc<adblock::engine::Engine>> {
+    let text = std::fs::read_to_string(path).ok()?;
+    eprintln!("engine: adblock enabled");
+    Some(std::rc::Rc::new(adblock::engine::Engine::new_with_list_text(
+        text,
+    )))
 }
 
 fn make_context(size: dpi::PhysicalSize<u32>) -> Option<std::rc::Rc<dyn RenderingContext>> {
@@ -178,11 +273,14 @@ fn main() {
 
     let mut user_agent = None;
     let mut profile_dir = None;
+    let mut adblock_list = None;
     for a in std::env::args().skip(1) {
         if let Some(v) = a.strip_prefix("--user-agent=") {
             user_agent = Some(v.to_string());
         } else if let Some(v) = a.strip_prefix("--profile-dir=") {
             profile_dir = Some(std::path::PathBuf::from(v));
+        } else if let Some(v) = a.strip_prefix("--adblock-list=") {
+            adblock_list = Some(std::path::PathBuf::from(v));
         }
     }
 
@@ -219,6 +317,17 @@ fn main() {
         .build();
     servo.setup_logging();
 
+    // Adblock: load (and if needed download) the filter list before any loads.
+    let adblock = adblock_list.and_then(|p| {
+        ensure_filter_list(&p);
+        load_adblock(&p)
+    });
+    if adblock.is_some() {
+        servo.set_delegate(std::rc::Rc::new(ServoAdblockDelegate {
+            adblock: adblock.clone(),
+        }));
+    }
+
     let initial_size = dpi::PhysicalSize::new(1200u32, 760u32);
 
     let mut make_tab = |id: u64| -> Option<Tab> {
@@ -227,6 +336,7 @@ fn main() {
         let delegate = std::rc::Rc::new(FrameDelegate {
             tab: id,
             shared: shared.clone(),
+            adblock: adblock.clone(),
         });
         let webview = servo::WebViewBuilder::new(&servo, context.clone())
             .delegate(delegate)

@@ -81,17 +81,29 @@ chrome.exe --profile work
 Everything lives in `%APPDATA%\browserr\profiles\<name>\` as plain files:
 
 ```text
-settings.json   { "homepage": "https://...", "user_agent": "..." }  (hand-edited, restart to apply)
+settings.json   { "homepage": "...", "user_agent": "...", "adblock": bool }
 history.jsonl   appended on every navigation: {"ts": secs, "url": "..."}
 bookmarks.json  [{"url": "...", "title": "..."}]  (star button in the toolbar)
 session.json    {"urls": [...], "active": N}  (written on tab changes, restored on launch)
 engine\         Servo's own storage (cookies, HSTS, auth cache, localStorage), per profile
+easylist.txt    adblock filter list (downloaded once, refreshed weekly)
 ```
 
 No `--profile` argument opens the profile picker window instead of a browser:
 click a profile to open it in a new window, or type a name and press Enter to
 create one. The picker itself is CLI-only free; profile names are sanitized to
 letters, digits, dashes and underscores.
+
+Settings are edited in the menu panel (ellipsis button): homepage, user agent
+and an adblock toggle. User agent and adblock apply on restart.
+
+## Adblock
+
+The engine implements `load_web_resource` (Servo's request interception hook)
+and cancels every subresource request that matches an EasyList-format filter
+list via the `adblock` crate. Main-frame documents are never blocked (a
+cancelled document wedges the pipeline). The list is downloaded from
+easylist.to on first run and re-downloaded after a week.
 
 - The chrome passes `user_agent` to the engine as `--user-agent=...`; it
   overrides Servo's preference (engine/src/main.rs).
@@ -104,8 +116,13 @@ letters, digits, dashes and underscores.
 
 - Frames stream over loopback TCP (~4MB each); a GPU shared-texture path would
   remove the copy
-- No favicon, no scroll position persistence across tab switches, no
-  downloads; settings are hand-edited, no settings UI yet
+- No favicon, no scroll position persistence across tab switches, no downloads
 - History is url-only (no page titles stored)
+- No site sandbox: servo's multiprocess/sandbox feature is compiled out on
+  Windows (`not(target_os = "windows")` in servo 0.8). The engine runs in a
+  job object so it is killed if the chrome dies, and it self-exits when the
+  chrome disconnects, but content runs in-process with the engine.
+- Do Not Track: no request-header hook in servo 0.8 (the interception hook is
+  read-only and can only cancel or replace responses)
 - Engine exits with a cosmetic surfman panic on shutdown ("Should have
   destroyed the surface first")

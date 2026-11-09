@@ -12,6 +12,34 @@ use rune::{NativeSurface, Waker};
 
 use crate::store;
 
+/// Put the engine in a job object that is killed when the chrome dies. The
+/// engine normally exits when the socket closes, but a hung engine (paint/GL
+/// deadlock) would linger forever; this guarantees cleanup.
+#[cfg(windows)]
+fn bind_job(child: &Child) -> Option<windows::Win32::Foundation::HANDLE> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    unsafe {
+        let job = CreateJobObjectW(None, windows::core::PCWSTR::null()).ok()?;
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const core::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+        .ok()?;
+        AssignProcessToJobObject(job, HANDLE(child.as_raw_handle() as _)).ok()?;
+        Some(job)
+    }
+}
+
 const PORT: u16 = 7411;
 const MAGIC: u32 = 0x46_52_4D_31; // FRM1
 const EV_MAGIC: u32 = 0x45_56_54_31; // EVT1
@@ -54,19 +82,24 @@ impl Ui {
 pub struct Engine {
     stream: TcpStream,
     _child: Child,
+    /// Job object handle; the engine is killed when this is dropped (chrome exit).
+    #[cfg(windows)]
+    _job: Option<windows::Win32::Foundation::HANDLE>,
     _reader: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Engine {
     /// Spawn the engine sibling process and start the frame reader.
     /// `user_agent` (may be empty) is forwarded as an option; `profile_dir`
-    /// gives the engine its own per-profile storage dir (may be empty).
+    /// gives the engine its own per-profile storage dir (may be empty);
+    /// `adblock_list` (may be empty) enables request blocking.
     pub fn start(
         surface: NativeSurface,
         waker: Waker,
         ui: Arc<Ui>,
         user_agent: &str,
         profile_dir: &str,
+        adblock_list: &str,
     ) -> std::io::Result<Engine> {
         let exe = std::env::var("BROWSERR_ENGINE")
             .map(std::path::PathBuf::from)
@@ -88,10 +121,15 @@ impl Engine {
         if !profile_dir.is_empty() {
             cmd.arg(format!("--profile-dir={profile_dir}"));
         }
+        if !adblock_list.is_empty() {
+            cmd.arg(format!("--adblock-list={adblock_list}"));
+        }
         let child = cmd
             .stdout(Stdio::null())
             .stderr(stderr.map(Stdio::from).unwrap_or(Stdio::null()))
             .spawn()?;
+        #[cfg(windows)]
+        let job = bind_job(&child);
 
         // Connect with retries while the engine boots.
         let mut stream = None;
@@ -107,7 +145,13 @@ impl Engine {
         let reader_stream = stream.try_clone()?;
         let reader = std::thread::spawn(move || read_frames(reader_stream, surface, waker, ui));
 
-        Ok(Engine { stream, _child: child, _reader: Some(reader) })
+        Ok(Engine {
+            stream,
+            _child: child,
+            #[cfg(windows)]
+            _job: job,
+            _reader: Some(reader),
+        })
     }
 
     fn send(&mut self, json: &str) {

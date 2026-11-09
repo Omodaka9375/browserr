@@ -39,6 +39,11 @@ struct State {
     profiles: Vec<String>,
     /// New-profile name input (picker mode only).
     profile_input: TextEdit,
+    /// Current settings (loaded at startup, saved from the menu panel).
+    settings: store::Settings,
+    /// Editable copies of the text settings for the panel.
+    settings_home: TextEdit,
+    settings_ua: TextEdit,
 }
 
 impl Default for Tab {
@@ -56,6 +61,9 @@ fn host(url: &str) -> String {
 fn state() -> State {
     // No --profile argument: this window is the profile picker, not a browser.
     let picker = !store::profile_selected();
+    let settings = store::load_settings();
+    let settings_home = TextEdit::new(settings.homepage.clone());
+    let settings_ua = TextEdit::new(settings.user_agent.clone());
     // Restore the last session, or start with a single empty tab.
     let (tabs, active, next_id) = if picker {
         (vec![Tab::default()], 0, 1)
@@ -86,7 +94,17 @@ fn state() -> State {
         picker,
         profiles: if picker { store::list_profiles() } else { Vec::new() },
         profile_input: TextEdit::new(""),
+        settings,
+        settings_home,
+        settings_ua,
     }
+}
+
+/// Pull the panel's TextEdits into s.settings and persist them.
+fn save_settings_ui(s: &mut State) {
+    s.settings.homepage = s.settings_home.text.trim().to_string();
+    s.settings.user_agent = s.settings_ua.text.clone();
+    store::save_settings(&s.settings);
 }
 
 /// Open a new chrome window for `name` and close the picker.
@@ -119,14 +137,20 @@ fn setup(s: &mut State, wake: rune::Waker) {
     if s.picker {
         return; // profile picker: no engine
     }
-    let settings = store::load_settings();
+    let user_agent = s.settings.user_agent.clone();
+    let adblock_list = if s.settings.adblock {
+        store::data_dir().join("easylist.txt").to_string_lossy().to_string()
+    } else {
+        String::new()
+    };
     let profile_dir = store::data_dir().join("engine");
     match Engine::start(
         s.surface.clone(),
         wake,
         s.ui.clone(),
-        &settings.user_agent,
+        &user_agent,
         &profile_dir.to_string_lossy(),
+        &adblock_list,
     ) {
         Ok(mut e) => {
             // Restore open tabs: navigate() creates missing engine tabs on demand.
@@ -141,8 +165,8 @@ fn setup(s: &mut State, wake: rune::Waker) {
                 }
                 e.activate(active_id);
                 s.ui.active.store(active_id, std::sync::atomic::Ordering::SeqCst);
-            } else if !settings.homepage.is_empty() {
-                e.navigate(&settings.homepage, 0);
+            } else if !s.settings.homepage.is_empty() {
+                e.navigate(&s.settings.homepage, 0);
             }
             s.engine = Some(e);
         }
@@ -193,6 +217,13 @@ fn icon_btn(id: &'static str, ic: &'static Icon, enabled: bool, action: Option<i
         (true, Some(action)) => e.fill(Color::TRANSPARENT).hover(t.hover).on_press(action),
         _ => e.layer_opacity(0.35),
     }
+}
+
+fn text_btn(id: &'static str, label: String, action: impl Fn(&mut State) + 'static) -> El {
+    let t = tok::theme(true);
+    el().key(id).px(12.0).py(4.0).radius(14.0).fill(t.hover)
+        .on_press(action)
+        .child(text(label).font(type_::BODY.lh(18.0)).color(t.text))
 }
 
 fn view(s: &State, _: &mut Cx<State>) -> El {
@@ -280,6 +311,33 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                     .child(text(url).font(type_::BODY.lh(18.0)).color(t.text_secondary)),
             );
         }
+        p = p.child(text("Settings").font(type_::BODY.lh(20.0)).color(t.text_secondary));
+        p = p.child(text("Homepage").font(type_::BODY.lh(16.0)).color(t.text_secondary));
+        p = p.child(
+            text_input(&s.settings_home, type_::BODY.lh(20.0)).key("set-home").single_line()
+                .color(t.text)
+                .placeholder("Homepage url", t.text_secondary)
+                .on_edit(|s: &mut State| &mut s.settings_home),
+        );
+        p = p.child(text("User agent (restart to apply)").font(type_::BODY.lh(16.0)).color(t.text_secondary));
+        p = p.child(
+            text_input(&s.settings_ua, type_::BODY.lh(20.0)).key("set-ua").single_line()
+                .color(t.text)
+                .placeholder("Leave empty for default", t.text_secondary)
+                .on_edit(|s: &mut State| &mut s.settings_ua),
+        );
+        p = p.child(
+            row().gap(8.0).center_y()
+                .child(text_btn("set-adblock", format!("Adblock: {}", if s.settings.adblock { "on" } else { "off" }), |s: &mut State| {
+                    s.settings.adblock = !s.settings.adblock;
+                    save_settings_ui(s);
+                }))
+                .child(text("(restart to apply)").font(type_::BODY.lh(16.0)).color(t.text_secondary))
+                .child(text_btn("set-save", "Save settings".to_string(), |s: &mut State| {
+                    save_settings_ui(s);
+                    s.menu_open = false;
+                })),
+        );
         p
     };
 

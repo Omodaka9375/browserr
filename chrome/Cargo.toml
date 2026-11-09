@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 rune = { git = "https://github.com/anomalyco/rune", rev = "7256c7c2afb605862ccfe600a469df7330509efb" }
 serde_json = "1"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [profile.dev]
 opt-level = 1

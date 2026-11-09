@@ -78,6 +78,7 @@ pub fn list_profiles() -> Vec<String> {
 pub struct Settings {
     pub homepage: String,
     pub user_agent: String,
+    pub adblock: bool,
 }
 
 pub fn load_settings() -> Settings {
@@ -88,7 +89,24 @@ pub fn load_settings() -> Settings {
     Settings {
         homepage: v["homepage"].as_str().unwrap_or("").to_string(),
         user_agent: v["user_agent"].as_str().unwrap_or("").to_string(),
+        adblock: v["adblock"].as_bool().unwrap_or(false),
     }
+}
+
+pub fn save_settings(settings: &Settings) {
+    let dir = data_dir();
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let v = serde_json::json!({
+        "homepage": settings.homepage,
+        "user_agent": settings.user_agent,
+        "adblock": settings.adblock,
+    });
+    let _ = std::fs::write(
+        dir.join("settings.json"),
+        serde_json::to_string_pretty(&v).unwrap_or_else(|_| "{}".into()),
+    );
 }
 
 pub fn append_history(url: &str) {
