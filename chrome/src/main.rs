@@ -47,6 +47,7 @@ struct State {
     settings_ua: TextEdit,
     /// Password capture fields for the current host (menu panel).
     cred_user: TextEdit,
+    /// Masked password input (secure mode).
     cred_pass: TextEdit,
     /// Whether a password is already saved for the current host.
     cred_saved: bool,
@@ -106,7 +107,7 @@ fn state() -> State {
         settings_home,
         settings_ua,
         cred_user: TextEdit::new(""),
-        cred_pass: TextEdit::new(""),
+        cred_pass: TextEdit::new("").secure(),
         cred_saved: false,
         pw_handled: None,
     }
@@ -119,12 +120,12 @@ fn refresh_creds(s: &mut State) {
     match creds::load(&host) {
         Some((user, _)) => {
             s.cred_user = TextEdit::new(user);
-            s.cred_pass = TextEdit::new("");
+            s.cred_pass = TextEdit::new("").secure();
             s.cred_saved = true;
         }
         None => {
             s.cred_user = TextEdit::new("");
-            s.cred_pass = TextEdit::new("");
+            s.cred_pass = TextEdit::new("").secure();
             s.cred_saved = false;
         }
     }
@@ -413,7 +414,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                         .color(t.text).placeholder("Username", t.text_secondary)
                         .on_edit(|s: &mut State| &mut s.cred_user))
                     .child(text_input(&s.cred_pass, type_::BODY.lh(20.0)).key("cred-pass").single_line().w(180.0)
-                        .color(t.text).placeholder("Password (shown)", t.text_secondary)
+                        .color(t.text).placeholder("Password", t.text_secondary)
                         .on_edit(|s: &mut State| &mut s.cred_pass)),
             );
             p = p.child(

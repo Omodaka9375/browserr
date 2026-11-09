@@ -104,9 +104,9 @@ at rest under the logged-in user), one entry per site host. The key button
 fills the current page's login form; the menu panel's Passwords section saves,
 fills or forgets the credential for the current host. Fill runs a small script
 in the page via the engine's eval command (loopback-only, chrome -> engine).
-Known limits: the password field in the panel is shown in plain text, and
+Known limits: the panel's password field is masked (no reveal toggle yet) and
 form detection is heuristic (first password input + first username-like
-input); no automatic save-on-submit yet.
+input).
 
 ## Adblock
 

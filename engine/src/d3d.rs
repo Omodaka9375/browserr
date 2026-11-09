@@ -37,6 +37,11 @@ use windows::Win32::Graphics::Direct3D12::{
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
+/// Instance counter for pool names: resizing back to a previous size must not
+/// reuse a name whose kernel object is still held (e.g. by the chrome's
+/// importer cache) - that fails CreateSharedHandle with NAME_ALREADY_EXISTS.
+static POOL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub struct Pool {
     device: ID3D12Device,
     queue: ID3D12CommandQueue,
@@ -184,8 +189,9 @@ impl Pool {
                 .CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE)
                 .map_err(|e| format!("create our fence: {e}"))?;
 
-            let frame_name = format!("browserr-frame-{w}x{h}");
-            let fence_name = format!("browserr-fence-{w}x{h}");
+            let instance = POOL_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let frame_name = format!("browserr-frame-{w}x{h}-{instance}");
+            let fence_name = format!("browserr-fence-{w}x{h}-{instance}");
             let texture_child: ID3D12DeviceChild = resource
                 .cast()
                 .map_err(|e| format!("cast resource: {e}"))?;
