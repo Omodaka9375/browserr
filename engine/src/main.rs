@@ -11,6 +11,9 @@
 //!        events:  u32 magic 'EVT1', u64 id, u32 len, u32 0, len bytes JSON
 //!                 {"ev":"url","tab":N,"url":"..."} | {"ev":"title","tab":N,"title":"..."}
 //! Only the active tab is painted; switching tabs re-sends that tab's url/title.
+//! Page zoom (Ctrl+wheel in the chrome) is per tab, set by the chrome via
+//! {"cmd":"zoom","tab":N,"zoom":F}; the page's requested cursor shape is
+//! forwarded as {"ev":"cursor","tab":N,"cursor":"name"}.
 //! Options: --user-agent=STRING overrides the HTTP user agent (from settings.json).
 //!           --profile-dir=PATH gives Servo a per-profile config/storage dir.
 //!           --adblock-list=PATH enables request blocking against an EasyList-format file.
@@ -72,6 +75,8 @@ struct Update {
     pw: Option<String>,
     /// Decoded favicon: (page origin, width, height, RGBA bytes).
     icon: Option<(String, u32, u32, Vec<u8>)>,
+    /// Page-requested cursor shape (servo's Debug name, lowercase).
+    cursor: Option<String>,
 }
 
 /// Runs on load complete: if the page has a password field, capture its
@@ -187,6 +192,7 @@ impl FrameDelegate {
                         history: None,
                         pw: Some(data),
                         icon: None,
+                        cursor: None,
                     });
                     shared.pump.kick();
                 }
@@ -216,6 +222,7 @@ impl FrameDelegate {
                     history: None,
                     pw: None,
                     icon: Some((origin, 16, 16, rgba)),
+                cursor: None,
                 });
                 shared.pump.kick();
                 return;
@@ -232,6 +239,7 @@ impl FrameDelegate {
                         history: None,
                         pw: None,
                         icon: Some((origin, w, h, rgba)),
+                cursor: None,
                     });
                     shared.pump.kick();
                 }
@@ -276,6 +284,7 @@ impl servo::WebViewDelegate for FrameDelegate {
             history: None,
             pw: None,
             icon: None,
+            cursor: None,
         });
         // Pick up a capture that a submitted form left behind.
         self.eval_pw(webview, PW_READ_JS);
@@ -298,6 +307,20 @@ impl servo::WebViewDelegate for FrameDelegate {
         self.eval_favicon(webview);
     }
 
+    fn notify_cursor_changed(&self, _webview: servo::WebView, cursor: servo::Cursor) {
+        let name = format!("{cursor:?}").to_lowercase();
+        self.shared.updates.lock().unwrap().push(Update {
+            tab: self.tab,
+            url: None,
+            title: None,
+            history: None,
+            pw: None,
+            icon: None,
+            cursor: Some(name),
+        });
+        self.shared.pump.kick();
+    }
+
     fn notify_page_title_changed(&self, _webview: servo::WebView, title: Option<String>) {
         self.shared.updates.lock().unwrap().push(Update {
             tab: self.tab,
@@ -306,6 +329,7 @@ impl servo::WebViewDelegate for FrameDelegate {
             history: None,
             pw: None,
             icon: None,
+            cursor: None,
         });
         self.shared.pump.kick();
     }
@@ -320,6 +344,7 @@ impl servo::WebViewDelegate for FrameDelegate {
             history: Some((back, forward)),
             pw: None,
             icon: None,
+            cursor: None,
         });
         self.shared.pump.kick();
     }
@@ -353,6 +378,7 @@ struct Tab {
     last_url: Option<String>,
     last_title: Option<String>,
     last_history: Option<(bool, bool)>,
+    last_cursor: Option<String>,
 }
 
 const EASYLIST_URL: &str = "https://easylist.to/easylist/easylist.txt";
@@ -622,6 +648,7 @@ fn main() {
             last_url: None,
             last_title: None,
             last_history: None,
+            last_cursor: None,
         })
     };
 
@@ -750,6 +777,14 @@ fn main() {
                                         &mut out,
                                         event_id,
                                         &format!("{{\"ev\":\"history\",\"tab\":{tab_id},\"back\":{b},\"forward\":{f}}}"),
+                                    );
+                                }
+                                if let Some(c) = &tab.last_cursor {
+                                    event_id += 1;
+                                    send_event(
+                                        &mut out,
+                                        event_id,
+                                        &format!("{{\"ev\":\"cursor\",\"tab\":{tab_id},\"cursor\":\"{c}\"}}"),
                                     );
                                 }
                                 shared.frame_ready.store(true, Ordering::SeqCst);
@@ -898,6 +933,18 @@ fn main() {
                                     }
                                 }
                             }
+                            Some("zoom") => {
+                                // Page zoom (Ctrl+wheel in the chrome); overrides
+                                // the webview's current page zoom.
+                                if let Some(z) = v["zoom"].as_f64()
+                                    && let Some(tab) = tabs.get(&tab_id)
+                                {
+                                    let z = (z as f32).clamp(0.25, 3.0);
+                                    eprintln!("engine: zoom (tab {tab_id}) {z}");
+                                    tab.webview.set_page_zoom(z);
+                                    shared.pump.kick();
+                                }
+                            }
                             Some("resize") => {
                                 let (w, h) = (
                                     v["w"].as_u64().unwrap_or(1200) as u32,
@@ -986,6 +1033,9 @@ fn main() {
                     if let Some(h) = &u.history {
                         t.last_history = Some(*h);
                     }
+                    if let Some(c) = &u.cursor {
+                        t.last_cursor = Some(c.clone());
+                    }
                 }
                 event_id += 1;
                 if let Some(url) = &u.url {
@@ -1008,6 +1058,13 @@ fn main() {
                         &mut out,
                         event_id,
                         &format!("{{\"ev\":\"history\",\"tab\":{},\"back\":{},\"forward\":{}}}", u.tab, b, f),
+                    );
+                }
+                if let Some(c) = &u.cursor {
+                    send_event(
+                        &mut out,
+                        event_id,
+                        &format!("{{\"ev\":\"cursor\",\"tab\":{},\"cursor\":\"{}\"}}", u.tab, c),
                     );
                 }
                 if let Some(data) = &u.pw {

@@ -70,6 +70,8 @@ pub struct Ui {
     pub pw: Mutex<Option<PwCapture>>,
     /// Decoded favicons keyed by page origin host.
     pub icons: Mutex<HashMap<String, Pixels>>,
+    /// Page-requested cursor shape per tab id (servo Debug name, lowercase).
+    pub cursors: Mutex<HashMap<u64, String>>,
 }
 
 impl Ui {
@@ -81,6 +83,7 @@ impl Ui {
             history: Mutex::new(HashMap::new()),
             pw: Mutex::new(None),
             icons: Mutex::new(HashMap::new()),
+            cursors: Mutex::new(HashMap::new()),
         })
     }
 
@@ -102,6 +105,16 @@ impl Ui {
 
     pub fn history(&self, tab: u64) -> Option<(bool, bool)> {
         self.history.lock().unwrap().get(&tab).copied()
+    }
+
+    pub fn cursor(&self, tab: u64) -> Option<String> {
+        self.cursors.lock().unwrap().get(&tab).cloned()
+    }
+
+    /// Drop all remembered cursor shapes (used when the engine restarts:
+    /// fresh webviews start at the default cursor).
+    pub fn clear_cursors(&self) {
+        self.cursors.lock().unwrap().clear();
     }
 }
 
@@ -300,6 +313,11 @@ impl Engine {
         ));
     }
 
+    /// Set a tab's page zoom (1.0 = 100%; the engine clamps).
+    pub fn zoom(&mut self, tab: u64, zoom: f32) {
+        self.send(&format!("{{\"cmd\":\"zoom\",\"tab\":{tab},\"zoom\":{zoom}}}"));
+    }
+
     /// Forward a keyboard event: name from key_name(), text for text keys,
     /// mods bitmask (1 shift, 2 ctrl, 4 alt, 8 cmd).
     pub fn key(&mut self, tab: u64, name: &str, text: &str, mods: u8, down: bool) {
@@ -415,6 +433,11 @@ fn read_frames(stream: TcpStream, surface: NativeSurface, waker: Waker, ui: Arc<
                                 px.set(w, h, rgba);
                                 ui.icons.lock().unwrap().insert(host, px);
                             }
+                        }
+                    }
+                    Some("cursor") => {
+                        if let Some(c) = v["cursor"].as_str() {
+                            ui.cursors.lock().unwrap().insert(tab, c.to_string());
                         }
                     }
                     Some("pwcapture") => {

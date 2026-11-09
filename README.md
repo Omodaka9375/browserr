@@ -44,17 +44,22 @@ Commands (chrome -> engine, newline JSON, all tab-addressed):
 {"cmd":"back"|"forward","tab":N}
 {"cmd":"new_tab"|"activate"|"close_tab","tab":N}
 {"cmd":"resize","w":N,"h":N}
+{"cmd":"input"|"wheel"|"key","tab":N,...}   page input forwarding
+{"cmd":"eval","tab":N,"js":"..."}          run JS (password autofill)
+{"cmd":"zoom","tab":N,"zoom":F}           page zoom (chrome: Ctrl+wheel)
 ```
 
 Responses (engine -> chrome, 20-byte header + payload):
 
 ```text
 FRM1 + id + w + h      -> w*h*4 BGRA pixels (active tab, deduped, capped at 30fps)
-EVT1 + id + len + 0    -> JSON events: {"ev":"url"|"title"|"history","tab":N,...}
+EVT1 + id + len + 0    -> JSON events: {"ev":"url"|"title"|"history"|"cursor"|"favicon"|"pwcapture","tab":N,...}
 ```
 
 Only the active tab is painted; switching tabs re-sends that tab's url/title/
-history. Tab 0 exists from startup.
+history/cursor. Tab 0 exists from startup. The cursor event carries the page's
+requested pointer shape (servo Cursor name, lowercase); the chrome maps it onto
+rune's cursor set over the page area.
 
 ## Status / v2 scope (done)
 

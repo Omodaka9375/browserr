@@ -6,6 +6,7 @@ mod creds;
 mod store;
 
 use engine::{Engine, Ui};
+use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Arc;
 
@@ -61,6 +62,8 @@ struct State {
     /// saves that change them can restart the engine in place.
     engine_ua: String,
     engine_adblock: bool,
+    /// Page zoom per engine tab id (1.0 = 100%).
+    zoom: HashMap<u64, f32>,
 }
 
 impl Default for Tab {
@@ -147,6 +150,7 @@ fn state() -> State {
         creds_view: Vec::new(),
         engine_ua: String::new(),
         engine_adblock: false,
+        zoom: HashMap::new(),
     }
 }
 
@@ -193,6 +197,43 @@ fn fill_js(user: &str, pass: &str) -> String {
     )
 }
 
+/// Zoom limits and step (Chrome-like).
+const ZOOM_MIN: f32 = 0.25;
+const ZOOM_MAX: f32 = 3.0;
+const ZOOM_STEP: f32 = 1.1;
+
+fn zoom_of(s: &State, id: u64) -> f32 {
+    *s.zoom.get(&id).unwrap_or(&1.0)
+}
+
+/// Set a tab's zoom and push it to the engine.
+fn set_zoom(s: &mut State, id: u64, zoom: f32) {
+    let z = zoom.clamp(ZOOM_MIN, ZOOM_MAX);
+    s.zoom.insert(id, z);
+    if let Some(e) = &mut s.engine {
+        e.zoom(id, z);
+    }
+}
+
+/// Map an engine-reported cursor name (servo Cursor Debug, lowercase) to a
+/// rune cursor for the page area. Unmapped shapes fall back to the arrow.
+fn cursor_shape(s: &State) -> rune::Cursor {
+    let name = s.ui.cursor(s.tabs[s.active].id).unwrap_or_default();
+    match name.as_str() {
+        "none" => rune::Cursor::Hidden,
+        "pointer" => rune::Cursor::Pointer,
+        "text" | "verticaltext" => rune::Cursor::Text,
+        "grab" => rune::Cursor::Grab,
+        "grabbing" => rune::Cursor::Grabbing,
+        "notallowed" => rune::Cursor::NotAllowed,
+        "move" | "allscroll" => rune::Cursor::Move,
+        "eresize" | "wresize" | "ewresize" | "colresize" => rune::Cursor::ResizeColumn,
+        "nresize" | "sresize" | "nsresize" | "rowresize" => rune::Cursor::ResizeRow,
+        "crosshair" => rune::Cursor::Crosshair,
+        _ => rune::Cursor::Default,
+    }
+}
+
 /// Kill and respawn the engine (settings that need a new process), then
 /// re-open every tab on the fresh engine.
 fn restart_engine(s: &mut State) {
@@ -203,6 +244,7 @@ fn restart_engine(s: &mut State) {
     }
     let (w, h) = s.last_size.unwrap_or((1200, 760));
     e.resize(w, h);
+    s.ui.clear_cursors();
     // Prefer the engine-reported url; fall back to the chrome-side record.
     let tabs: Vec<(u64, String)> = s.tabs.iter().map(|t| {
         let url = s.ui.url(t.id).filter(|u| !u.is_empty())
@@ -212,6 +254,14 @@ fn restart_engine(s: &mut State) {
     for (id, url) in tabs {
         if !url.is_empty() {
             e.navigate(&url, id);
+        }
+    }
+    // Fresh webviews forget their zoom; re-apply the chrome-side values.
+    for t in &s.tabs {
+        if let Some(z) = s.zoom.get(&t.id) {
+            if *z != 1.0 {
+                e.zoom(t.id, *z);
+            }
         }
     }
     e.activate(s.tabs[s.active].id);
@@ -875,6 +925,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
 
     let page = el().key("page").grow(1.0).min_h(0.0).fill(t.bg)
         .native_surface(&s.surface, SurfaceFit::Fit)
+        .cursor(cursor_shape(s))
         .focusable(true)
         .on_drag(|s: &mut State, drag: &mut rune::Drag, _tx: &mut Tx| {
             if drag.phase == rune::Phase::Down {
@@ -905,22 +956,57 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         })
         .on_wheel(|s: &mut State, we: rune::WheelEvent, _tx: &mut Tx| {
             let id = s.tabs[s.active].id;
-            if let Some(e) = &mut s.engine {
+            if we.mods.ctrl || we.mods.cmd {
+                // Ctrl+wheel zooms the page instead of scrolling (Chrome
+                // behavior): wheel up (rune dy > 0) zooms in.
+                let cur = zoom_of(s, id);
+                let next = if we.dy > 0.0 { cur * ZOOM_STEP } else { cur / ZOOM_STEP };
+                set_zoom(s, id, next);
+            } else if let Some(e) = &mut s.engine {
                 e.wheel(id, we.dx, we.dy, we.x, we.y);
             }
             true
         })
         .on_key(|s: &mut State, ev: &rune::KeyEvent, _tx: &mut Tx| {
-            let Some((name, text)) = key_name(&ev.key) else { return false };
             let id = s.tabs[s.active].id;
+            // Zoom shortcuts: Ctrl+0 reset, Ctrl+= / Ctrl+- step. Swallowed
+            // here so the page never sees them (their key-up is skipped too).
+            if ev.mods.ctrl || ev.mods.cmd {
+                if let rune::Key::Text(ch) = &ev.key {
+                    match ch.as_str() {
+                        "0" => {
+                            set_zoom(s, id, 1.0);
+                            return true;
+                        }
+                        "+" | "=" => {
+                            set_zoom(s, id, zoom_of(s, id) * ZOOM_STEP);
+                            return true;
+                        }
+                        "-" | "_" => {
+                            set_zoom(s, id, zoom_of(s, id) / ZOOM_STEP);
+                            return true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let Some((name, text)) = key_name(&ev.key) else { return false };
             if let Some(e) = &mut s.engine {
                 e.key(id, &name, &text, key_mods(ev.mods), true);
             }
             true
         })
         .on_key_up(|s: &mut State, ev: &rune::KeyEvent, _tx: &mut Tx| {
-            let Some((name, text)) = key_name(&ev.key) else { return false };
             let id = s.tabs[s.active].id;
+            // Skip releases of the zoom shortcuts swallowed by on_key.
+            if ev.mods.ctrl || ev.mods.cmd {
+                if let rune::Key::Text(ch) = &ev.key {
+                    if matches!(ch.as_str(), "0" | "+" | "=" | "-" | "_") {
+                        return true;
+                    }
+                }
+            }
+            let Some((name, text)) = key_name(&ev.key) else { return false };
             if let Some(e) = &mut s.engine {
                 e.key(id, &name, &text, key_mods(ev.mods), false);
             }
