@@ -5,6 +5,7 @@ mod engine;
 mod store;
 
 use engine::{Engine, Ui};
+use std::process::Command;
 use std::sync::Arc;
 
 const BAR_H: f32 = 40.0;
@@ -32,6 +33,12 @@ struct State {
     menu_open: bool,
     /// History urls shown in the panel (refreshed when it opens).
     history_view: Vec<String>,
+    /// True when no --profile was given: this window is the profile picker.
+    picker: bool,
+    /// Known profile names (picker mode only).
+    profiles: Vec<String>,
+    /// New-profile name input (picker mode only).
+    profile_input: TextEdit,
 }
 
 impl Default for Tab {
@@ -47,15 +54,21 @@ fn host(url: &str) -> String {
 }
 
 fn state() -> State {
+    // No --profile argument: this window is the profile picker, not a browser.
+    let picker = !store::profile_selected();
     // Restore the last session, or start with a single empty tab.
-    let (tabs, active, next_id) = match store::load_session() {
-        Some(s) => {
-            let tabs: Vec<Tab> = s.urls.iter().enumerate()
-                .map(|(i, u)| Tab { id: i as u64, url: u.clone(), title: host(u) })
-                .collect();
-            (tabs, s.active, s.urls.len() as u64)
+    let (tabs, active, next_id) = if picker {
+        (vec![Tab::default()], 0, 1)
+    } else {
+        match store::load_session() {
+            Some(s) => {
+                let tabs: Vec<Tab> = s.urls.iter().enumerate()
+                    .map(|(i, u)| Tab { id: i as u64, url: u.clone(), title: host(u) })
+                    .collect();
+                (tabs, s.active, s.urls.len() as u64)
+            }
+            None => (vec![Tab::default()], 0, 1),
         }
-        None => (vec![Tab::default()], 0, 1),
     };
     State {
         tabs,
@@ -70,6 +83,18 @@ fn state() -> State {
         bookmarks: store::load_bookmarks(),
         menu_open: false,
         history_view: Vec::new(),
+        picker,
+        profiles: if picker { store::list_profiles() } else { Vec::new() },
+        profile_input: TextEdit::new(""),
+    }
+}
+
+/// Open a new chrome window for `name` and close the picker.
+fn launch_profile(tx: &mut Tx, name: &str) {
+    if let Ok(exe) = std::env::current_exe() {
+        if Command::new(exe).arg(format!("--profile={name}")).spawn().is_ok() {
+            tx.close_window();
+        }
     }
 }
 
@@ -91,6 +116,9 @@ fn go(s: &mut State, url: String) {
 
 fn setup(s: &mut State, wake: rune::Waker) {
     s.surface.set_waker(wake.clone());
+    if s.picker {
+        return; // profile picker: no engine
+    }
     let settings = store::load_settings();
     let profile_dir = store::data_dir().join("engine");
     match Engine::start(
@@ -169,6 +197,42 @@ fn icon_btn(id: &'static str, ic: &'static Icon, enabled: bool, action: Option<i
 
 fn view(s: &State, _: &mut Cx<State>) -> El {
     let t = tok::theme(true);
+
+    // Profile picker: pick an existing profile or type a new name + Enter.
+    if s.picker {
+        let mut p = col().w_full().h_full().fill(t.bg).px(20.0).py(14.0).gap(6.0).window_drag();
+        p = p.child(
+            row().w_full().center_y()
+                .child(text("Choose a profile").font(type_::BODY.lh(24.0)).color(t.text).grow(1.0))
+                .child(
+                    el().size(11.0, 11.0).radius(5.5)
+                        .fill(Color { r: 1.0, g: 0.37, b: 0.34, a: 1.0 })
+                        .on_press_tx(|_: &mut State, tx: &mut Tx| tx.close_window()),
+                ),
+        );
+        for name in &s.profiles {
+            let n = name.clone();
+            p = p.child(
+                el().key("profile").w_full().py(6.0).px(10.0).radius(8.0).fill(t.card).hover(t.hover)
+                    .on_press_tx(move |_: &mut State, tx: &mut Tx| launch_profile(tx, &n))
+                    .child(text(name.clone()).font(type_::BODY.lh(20.0)).color(t.text)),
+            );
+        }
+        p = p.child(text("New profile (Enter)").font(type_::BODY.lh(18.0)).color(t.text_secondary));
+        p = p.child(
+            text_input(&s.profile_input, type_::BODY.lh(20.0)).key("profile-input").single_line()
+                .color(t.text)
+                .placeholder("Profile name", t.text_secondary)
+                .on_edit(|s: &mut State| &mut s.profile_input)
+                .on_submit(|s: &mut State, tx: &mut Tx| {
+                    let name = store::sanitize_profile(s.profile_input.text.trim());
+                    if !name.is_empty() {
+                        launch_profile(tx, &name);
+                    }
+                }),
+        );
+        return p;
+    }
 
     // Window controls: minimal traffic lights, macOS style.
     let dot = |key: &'static str, c: Color| {
@@ -405,9 +469,11 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
 
 fn main() {
     rune::run_windows(|_| {
+        let picker = !store::profile_selected();
+        let size = if picker { (420.0, 520.0) } else { (1280.0, 800.0) };
         let app = App::new(AppSpec {
             setup: Some(setup),
-            ..AppSpec::new("Browserr", (1280.0, 800.0), state, view)
+            ..AppSpec::new("Browserr", size, state, view)
         })
         .window_options(WindowOptions { borderless: true, ..Default::default() });
         let windows: Vec<rune::AnyWindowSpec> =

@@ -88,8 +88,10 @@ session.json    {"urls": [...], "active": N}  (written on tab changes, restored 
 engine\         Servo's own storage (cookies, HSTS, auth cache, localStorage), per profile
 ```
 
-No `--profile` argument means the `default` profile. Profile names are
-sanitized to letters, digits, dashes and underscores.
+No `--profile` argument opens the profile picker window instead of a browser:
+click a profile to open it in a new window, or type a name and press Enter to
+create one. The picker itself is CLI-only free; profile names are sanitized to
+letters, digits, dashes and underscores.
 
 - The chrome passes `user_agent` to the engine as `--user-agent=...`; it
   overrides Servo's preference (engine/src/main.rs).
