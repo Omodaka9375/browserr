@@ -4,8 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-servo = "0.8.0"
+# Thin agent build: servo's default pulls in devtools (Firefox-protocol actor
+# server), clipboard (arboard) and multiprocess (compiled out on Windows
+# anyway). None are needed headless; media already uses the dummy backend on
+# Windows (no gstreamer). js_jit stays on for page JS speed, bundled stays on
+# for the baked-in UA stylesheets.
+servo = { version = "0.8.0", default-features = false, features = ["bundled", "js_jit"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
+rustls-platform-verifier = "0.7"
+rustls-pki-types = "1"
 url = "2"
 serde_json = "1"
 keyboard-types = "0.8"
@@ -16,6 +23,14 @@ gleam = "0.15"
 euclid = "0.22"
 glow = "0.17"
 adblock = "0.13"
-ureq = "2"
 image = { version = "0.25", default-features = false, features = ["png", "ico", "jpeg", "bmp", "webp", "gif"] }
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_System_Threading"] }
+
+# Size-focused release profile. LTO + single codegen unit let the linker drop
+# unreferenced code across servo's ~600 crates. Symbols are stripped where the
+# MSVC toolchain allows. panic stays "unwind": close_tab catches the known
+# surfman drop panic, and abort would turn that into a hard crash.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
