@@ -1,0 +1,62 @@
+name: linux-probe
+# Throwaway probe: does the servo 0.8 dependency tree build on ubuntu-latest?
+# Answers the "how hard is a Linux port" question cheaply. Delete after.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libdbus-1-dev \
+            libegl1-mesa-dev libgl1-mesa-dev libgbm-dev \
+            libfontconfig1-dev libfreetype-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxinerama-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: ${{ runner.os }}-cargo-probe-${{ hashFiles('**/Cargo.lock') }}
+
+      # The engine crate is Windows-only today (d3d.rs, hw.rs WGL, windows
+      # crate). The probe builds the full servo dependency tree with OUR
+      # feature set (thin: bundled + js_jit, no gstreamer) to see whether it
+      # compiles on Linux - without touching engine source. That is the whole
+      # question this job answers.
+      - name: Fetch deps as cargo would resolve them
+        run: cargo fetch --manifest-path engine/Cargo.toml
+
+      - name: Compile servo with the thin feature set (Linux)
+        run: |
+          mkdir -p /tmp/probe
+          cat > /tmp/probe/Cargo.toml <<'EOF'
+          [package]
+          name = "probe"
+          version = "0.0.0"
+          edition = "2024"
+
+          [dependencies]
+          servo = { version = "=0.8.0", default-features = false, features = ["bundled", "js_jit"] }
+          EOF
+          echo 'fn main() { let _ = servo::Servo::new; }' > /tmp/probe/src-main.rs
+          mkdir -p /tmp/probe/src
+          mv /tmp/probe/src-main.rs /tmp/probe/src/main.rs
+          cd /tmp/probe
+          cargo build 2>&1 | tail -40
