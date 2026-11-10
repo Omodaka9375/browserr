@@ -152,6 +152,33 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "browser_click_element",
+        "description": "Click the center of the first element matching a CSS "
+                       "selector with a real pointer event (hover/focus "
+                       "behave). Scrolls into view first.",
+        "inputSchema": {"type": "object", "properties": {
+            "selector": {"type": "string"},
+            "timeout": {"type": "number"}}, "required": ["selector"]},
+    },
+    {
+        "name": "browser_set_value",
+        "description": "Set an input/textarea/select value by CSS selector, "
+                       "firing input and change events (React/Vue controlled "
+                       "inputs accepted via the native value setter).",
+        "inputSchema": {"type": "object", "properties": {
+            "selector": {"type": "string"},
+            "value": {"type": "string"},
+            "timeout": {"type": "number"}}, "required": ["selector", "value"]},
+    },
+    {
+        "name": "browser_wait_for",
+        "description": "Wait until a CSS selector matches at least one visible "
+                       "element (SPA render); returns its viewport rect.",
+        "inputSchema": {"type": "object", "properties": {
+            "selector": {"type": "string"},
+            "timeout": {"type": "number"}}, "required": ["selector"]},
+    },
+    {
         "name": "browser_tabs",
         "description": "Open a new tab (action=open), switch tabs (action=activate "
                        "with tab id), or list tab ids (action=list).",
@@ -209,6 +236,17 @@ def call_tool(name, args):
         if hit is None:
             raise McpError(f"no visible link matching {args['text']!r}")
         return {"clicked": hit}
+    if name == "browser_click_element":
+        d.click_element(args["selector"], timeout=args.get("timeout", 10.0))
+        return {"clicked": args["selector"]}
+    if name == "browser_set_value":
+        d.set_value(args["selector"], args["value"],
+                    timeout=args.get("timeout", 10.0))
+        return {"set": args["selector"]}
+    if name == "browser_wait_for":
+        rect = d.wait_for_selector(args["selector"],
+                                    timeout=args.get("timeout", 15.0))
+        return {"found": args["selector"], "rect": rect}
     if name == "browser_fill":
         if not d.fill(args["field"], args["value"]):
             raise McpError(f"no field named {args['field']!r}")

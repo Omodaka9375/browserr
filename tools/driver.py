@@ -357,6 +357,91 @@ class Driver:
             self.key("text", ch, down=True, tab=tab)
             self.key("text", ch, down=False, tab=tab)
 
+    # -- element commands (selector-based; built on eval + real input) ------
+
+    @staticmethod
+    def _js_selector(selector: str) -> str:
+        """Embed a CSS selector as a JS string literal (json quoting)."""
+        return json.dumps(selector)
+
+    def element_rect(self, selector, tab: int = 0, timeout=10.0):
+        """Scroll the first element matching a CSS selector into view and
+        return its viewport rect {x, y, w, h} (center = x+w/2, y+h/2),
+        or None while it does not exist yet."""
+        js = ("(function(){var s=" + self._js_selector(selector) + ";"
+              "var e=document.querySelector(s);if(!e){return null;}"
+              "e.scrollIntoView({block:'center',inline:'nearest'});"
+              "var r=e.getBoundingClientRect();"
+              "return {x:r.x,y:r.y,w:r.width,h:r.height};})()")
+        deadline = time.time() + timeout
+        while True:
+            try:
+                rect = self.eval_js(js, tab, timeout=2.0)
+            except TimeoutError:
+                rect = None  # page not scriptable yet; keep polling
+            if rect:
+                return rect
+            if time.time() >= deadline:
+                return None
+            time.sleep(0.2)
+
+    def click_element(self, selector, tab: int = 0, timeout=10.0):
+        """Click the center of the first element matching a CSS selector with
+        a real pointer event (down+up at coordinates, so hover/focus behave).
+        Returns (x, y); raises TimeoutError if the element never appears."""
+        deadline = time.time() + timeout
+        while True:
+            rect = self.element_rect(selector, tab, timeout=2.0)
+            if rect:
+                x = rect["x"] + rect["w"] / 2
+                y = rect["y"] + rect["h"] / 2
+                self.move(x, y, tab=tab)
+                self.click(x, y, tab=tab)
+                return (x, y)
+            if time.time() >= deadline:
+                raise TimeoutError(f"no element matches {selector!r}")
+            time.sleep(0.2)
+
+    def set_value(self, selector, value, tab: int = 0, timeout=10.0):
+        """Set an input/textarea/select value by CSS selector, firing input
+        and change events. Uses the native value setter so React/Vue
+        controlled inputs accept the change. Returns True on success."""
+        js = ("(function(){var s=" + self._js_selector(selector) + ";"
+              "var v=" + json.dumps(value) + ";"
+              "var e=document.querySelector(s);if(!e){return {ok:false};}"
+              "e.focus();"
+              "var proto=e.tagName==='TEXTAREA'?"
+              "window.HTMLTextAreaElement.prototype:"
+              "window.HTMLInputElement.prototype;"
+              "var d=Object.getOwnPropertyDescriptor(proto,'value');"
+              "if(d&&d.set){d.set.call(e,v);}else{e.value=v;}"
+              "e.dispatchEvent(new Event('input',{bubbles:true}));"
+              "e.dispatchEvent(new Event('change',{bubbles:true}));"
+              "return {ok:true};})()")
+        deadline = time.time() + timeout
+        while True:
+            try:
+                r = self.eval_js(js, tab, timeout=2.0)
+            except TimeoutError:
+                r = None  # page not scriptable yet; keep polling
+            if r and r.get("ok"):
+                return True
+            if time.time() >= deadline:
+                raise TimeoutError(f"no input matches {selector!r}")
+            time.sleep(0.2)
+
+    def wait_for_selector(self, selector, tab: int = 0, timeout=15.0):
+        """Wait until a CSS selector matches at least one visible element;
+        returns the rect (see element_rect) or raises TimeoutError."""
+        deadline = time.time() + timeout
+        while True:
+            rect = self.element_rect(selector, tab, timeout=2.0)
+            if rect and rect["w"] > 0 and rect["h"] > 0:
+                return rect
+            if time.time() >= deadline:
+                raise TimeoutError(f"no element matches {selector!r}")
+            time.sleep(0.2)
+
     def new_tab(self, tab: int) -> None:
         self.cmd({"cmd": "new_tab", "tab": tab})
 

@@ -18,6 +18,7 @@ PAGE = """<!doctype html><html><head><title>MCP Test Page</title></head><body>
 <p>Agent content here.</p>
 <a id=next href='/mcp-next.html'>Next page</a>
 <form action='/search'><input name='q' placeholder='Query'></form>
+<input id='q2' value=''><button id='go2' onclick="document.getElementById('q2').dataset.done='1'">Go2</button>
 </body></html>"""
 NEXT = """<!doctype html><html><head><title>MCP Next</title></head><body>
 <p>Second page content.</p></body></html>"""
@@ -135,6 +136,18 @@ try:
     assert r["bytes"] == 4096, r
     assert os.path.getsize(r"D:/Code/2026/Browserr/tools/mcp-dl.bin") == 4096
     print("download OK:", r["bytes"], "bytes")
+
+    # Element tools: back on the first page (click_text navigated away).
+    call("browser_navigate", {"url": "http://127.0.0.1:8130/mcp-test.html"})
+    r = call("browser_wait_for", {"selector": "#go2"})
+    assert r["found"] == "#go2", r
+    print("wait_for OK:", r["rect"])
+
+    r = call("browser_set_value", {"selector": "#q2", "value": "mcp"})
+    assert r["set"] == "#q2", r
+    r = call("browser_click_element", {"selector": "#go2"})
+    assert r["clicked"] == "#go2", r
+    print("element tools OK")
 
     call("browser_stop")
     print("stop OK")
