@@ -8,8 +8,9 @@ TOOLS_DIR = _os.path.dirname(_os.path.abspath(__file__))
 ROOT = _os.path.dirname(TOOLS_DIR)
 import subprocess
 import time
+from driver import ENGINE_DEBUG
 
-ENGINE = ROOT + "\\engine\\target\\debug\\engine.exe"
+ENGINE = ENGINE_DEBUG
 
 a = subprocess.Popen([ENGINE], stderr=open(rf"{ROOT}/engine-bind-a.log", "wb"))
 time.sleep(1.5)

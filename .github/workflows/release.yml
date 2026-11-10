@@ -5,7 +5,17 @@ on:
 
 jobs:
   release:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x64
+            gpuless: "1"
+          - os: ubuntu-latest
+            platform: linux-x64
+            gpuless: ""
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     permissions:
       contents: write
@@ -13,6 +23,16 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install system deps (linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libdbus-1-dev \
+            libegl1-mesa-dev libgl1-mesa-dev libgbm-dev \
+            libfontconfig1-dev libfreetype-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxinerama-dev \
+            xvfb
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -31,24 +51,38 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Same gate as CI (fmt + clippy + build + render-free protocol tests;
-      # GitHub runners are GPU-less, see the comment in ci.yml).
-      - name: Gate (fmt + clippy + build + gpu-less test suite)
+      - name: Gate (fmt + clippy + build + test suite)
         shell: pwsh
         env:
-          CI_GPULESS: "1"
+          CI_GPULESS: ${{ matrix.gpuless }}
         run: powershell -File scripts/ci.ps1
+        if: runner.os == 'Windows'
+
+      - name: Gate (fmt + clippy + build + test suite, linux)
+        shell: bash
+        run: bash scripts/ci.sh
+        if: runner.os == 'Linux'
 
       - name: Package release zip
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ github.ref_name }}
         run: powershell -File scripts/package.ps1
+        if: runner.os == 'Windows'
+
+      - name: Package release zip (linux)
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: bash scripts/package.sh
+        if: runner.os == 'Linux'
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: browserr-*-windows-x64.zip
+          files: |
+            browserr-*-windows-x64.zip
+            browserr-*-linux-x64.tar.gz
           generate_release_notes: true
           draft: false
           prerelease: false

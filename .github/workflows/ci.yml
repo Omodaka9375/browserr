@@ -6,12 +6,35 @@ on:
 
 jobs:
   test:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            # GitHub windows-latest runners are GPU-less; servo's WGL backend
+            # needs WGL_NV_DX_interop + a real D3D11 device, so render tests
+            # cannot pass there. GPU-less mode runs fmt + clippy + build +
+            # the render-free protocol tests. The full 14-test suite runs on
+            # Linux (llvmpipe) and locally on any GPU machine.
+            gpuless: "1"
+          - os: ubuntu-latest
+            gpuless: ""
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install system deps (linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libdbus-1-dev \
+            libegl1-mesa-dev libgl1-mesa-dev libgbm-dev \
+            libfontconfig1-dev libfreetype-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxinerama-dev \
+            xvfb
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -33,19 +56,20 @@ jobs:
       - name: fmt + clippy + build + python test suite
         shell: pwsh
         env:
-          # GitHub windows-latest runners are GPU-less; servo's WGL backend
-          # needs WGL_NV_DX_interop + a real D3D11 device, so render tests
-          # cannot pass there. GPU-less mode runs fmt + clippy + build +
-          # the render-free protocol tests. Run the full 14-test suite on
-          # any machine with a GPU (local: powershell -File scripts/ci.ps1).
-          CI_GPULESS: "1"
+          CI_GPULESS: ${{ matrix.gpuless }}
         run: powershell -File scripts/ci.ps1
+        if: runner.os == 'Windows'
+
+      - name: fmt + clippy + build + python test suite (linux)
+        shell: bash
+        run: bash scripts/ci.sh
+        if: runner.os == 'Linux'
 
       - name: Upload test logs (always)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-logs
+          name: test-logs-${{ matrix.os }}
           path: |
             *.log
           if-no-files-found: ignore
@@ -56,11 +80,22 @@ jobs:
         run: |
           cargo build --release --manifest-path engine/Cargo.toml *> release-build.log
           if ($LASTEXITCODE -ne 0) { Get-Content release-build.log -Tail 8; exit 1 }
+        if: runner.os == 'Windows'
 
-      - name: Upload engine.exe (release)
+      - name: Upload engine (release, windows)
         uses: actions/upload-artifact@v4
         with:
           name: engine-windows-x64
           path: engine/target/release/engine.exe
           if-no-files-found: error
           retention-days: 14
+        if: runner.os == 'Windows'
+
+      - name: Upload engine (release, linux)
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-linux-x64
+          path: engine/target/release/engine
+          if-no-files-found: error
+          retention-days: 14
+        if: runner.os == 'Linux'

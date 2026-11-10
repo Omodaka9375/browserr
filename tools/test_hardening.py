@@ -16,12 +16,12 @@ import sys
 import time
 
 sys.path.insert(0, TOOLS_DIR)
-from driver import Driver
+from driver import Driver, ENGINE_DEBUG
 
 TOKEN = "test-secret-token"
 engine = os.environ.get(
     "BROWSERR_ENGINE",
-    ROOT + "/engine/target/debug/engine.exe")
+    ENGINE_DEBUG)
 
 ui = subprocess.Popen(
     [engine, "--ephemeral", "--driver-port=7412", f"--driver-token={TOKEN}"],

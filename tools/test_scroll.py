@@ -16,6 +16,7 @@ import time
 import http.server
 import functools
 import os
+from driver import ENGINE_DEBUG
 
 MAGIC = 0x46524D31
 EV_MAGIC = 0x45565431
@@ -87,7 +88,7 @@ def title_with(prefix, timeout=10.0):
 
 def engine_path():
     return os.environ.get("BROWSERR_ENGINE",
-                          ROOT + "/engine/target/debug/engine.exe")
+                          ENGINE_DEBUG)
 
 
 engine = subprocess.Popen([engine_path()],

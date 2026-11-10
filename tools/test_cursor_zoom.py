@@ -16,6 +16,7 @@ import struct
 import subprocess
 import sys
 import threading
+from driver import ENGINE_DEBUG
 import time
 import http.server
 import functools
@@ -105,7 +106,7 @@ def engine_path():
     override = os.environ.get("BROWSERR_ENGINE")
     if override:
         return override
-    return ROOT + "/engine/target/debug/engine.exe"
+    return ENGINE_DEBUG
 
 
 engine = subprocess.Popen([engine_path()],

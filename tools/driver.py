@@ -30,6 +30,11 @@ events/screenshots to all of them. With --driver-token, drivers must send
 import os as _os
 TOOLS_DIR = _os.path.dirname(_os.path.abspath(__file__))
 ROOT = _os.path.dirname(TOOLS_DIR)
+# Engine binary name is platform-dependent (engine.exe on Windows, engine
+# elsewhere); tests and the default engine path derive from this.
+EXE_SUFFIX = ".exe" if _os.name == "nt" else ""
+ENGINE_DEBUG = ROOT + "/engine/target/debug/engine" + EXE_SUFFIX
+ENGINE_RELEASE = ROOT + "/engine/target/release/engine" + EXE_SUFFIX
 import json
 import socket
 import struct
@@ -112,9 +117,7 @@ class Driver:
         self.height = height
         self.ephemeral = ephemeral
 
-        engine_path = engine_path or os.environ.get(
-            "BROWSERR_ENGINE",
-            ROOT + "/engine/target/debug/engine.exe")
+        engine_path = engine_path or os.environ.get("BROWSERR_ENGINE", ENGINE_DEBUG)
         args = [engine_path]
         if ephemeral:
             # Throwaway profile under %TEMP%; the engine deletes it on exit.

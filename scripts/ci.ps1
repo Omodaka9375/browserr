@@ -6,15 +6,20 @@
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
 
+# Cargo may not be on PATH (Kai shells); fall back to the default install.
+$cargo = Get-Command cargo -ErrorAction SilentlyContinue
+if (-not $cargo) { $cargo = "$env:USERPROFILE\.cargo\bin\cargo.exe" }
+else { $cargo = $cargo.Source }
+
 Write-Host "== fmt + clippy gate ==" -ForegroundColor Cyan
-cargo fmt --manifest-path engine\Cargo.toml -- --check *> fmt.log
+& $cargo fmt --manifest-path engine\Cargo.toml -- --check *> fmt.log
 if ($LASTEXITCODE -ne 0) { Get-Content fmt.log -Tail 10; Write-Host "engine fmt FAILED" -ForegroundColor Red; exit 1 }
-cargo clippy --manifest-path engine\Cargo.toml -- -D warnings *> clippy-engine.log
+& $cargo clippy --manifest-path engine\Cargo.toml -- -D warnings *> clippy-engine.log
 if ($LASTEXITCODE -ne 0) { Get-Content clippy-engine.log -Tail 10; Write-Host "engine clippy FAILED" -ForegroundColor Red; exit 1 }
 Remove-Item fmt.log, clippy-engine.log -ErrorAction SilentlyContinue
 
 Write-Host "== build (debug) ==" -ForegroundColor Cyan
-cargo build --manifest-path engine\Cargo.toml *> engine-build.log
+& $cargo build --manifest-path engine\Cargo.toml *> engine-build.log
 if ($LASTEXITCODE -ne 0) { Get-Content engine-build.log -Tail 8; Write-Host "engine build FAILED" -ForegroundColor Red; exit 1 }
 
 $env:BROWSERR_ENGINE = "$root\engine\target\debug\engine.exe"

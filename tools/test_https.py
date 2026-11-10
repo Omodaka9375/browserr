@@ -16,7 +16,7 @@ import time
 import tempfile
 
 ENGINE = os.environ.get("BROWSERR_ENGINE",
-                        ROOT + "/engine/target/release/engine.exe")
+                        ENGINE_RELEASE)
 LOG = ROOT + "/engine-https-test.log"
 
 # Fresh temp profile: the engine sees no easylist.txt -> downloads over HTTPS.

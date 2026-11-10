@@ -19,7 +19,7 @@ import threading
 import time
 
 sys.path.insert(0, TOOLS_DIR)
-from driver import Driver, save_png
+from driver import Driver, save_png, ENGINE_DEBUG
 
 PAGE = """<!doctype html><body style='margin:0'>
 <div id=hit style='width:800px;height:600px;background:#f00' onclick="document.title='CLICKED'"></div>
@@ -36,7 +36,7 @@ with open(TOOLS_DIR + "/attach-test.html", "w") as f:
 
 engine = os.environ.get(
     "BROWSERR_ENGINE",
-    ROOT + "/engine/target/debug/engine.exe")
+    ENGINE_DEBUG)
 
 # The engine needs its MAIN client connected before the driver port opens
 # (the listener starts after the first accept). Connect a raw client first.

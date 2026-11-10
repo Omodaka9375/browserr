@@ -25,6 +25,7 @@ use servo::RenderingContext;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 
+#[cfg(windows)]
 mod d3d;
 mod hw;
 use hw::HardwareRenderingContext;
@@ -940,17 +941,24 @@ fn map_key(name: &str, text: &str, mods: u8, down: bool) -> Option<servo::InputE
 fn cleanup_ephemeral(dir: &Option<std::path::PathBuf>) {
     if let Some(d) = dir {
         let _ = std::fs::remove_dir_all(d);
-        // Detached helper: powershell waits for THIS pid to die, then deletes.
-        let pid = std::process::id();
-        let script = format!(
-            "$p = Get-Process -Id {pid} -ErrorAction SilentlyContinue; \
-             if ($p) {{ Wait-Process -Id {pid} -ErrorAction SilentlyContinue }}; \
-             Remove-Item -LiteralPath '{}' -Recurse -Force -ErrorAction SilentlyContinue",
-            d.display()
-        );
-        let _ = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
-            .spawn();
+        // Windows only: servo's background threads still hold SQLite handles
+        // (clientstorage) while the process lives, so the in-process delete can
+        // silently fail. A detached helper waits for THIS pid to die, then
+        // deletes. On Unix the plain delete above succeeds (open handles do
+        // not block unlink).
+        #[cfg(windows)]
+        {
+            let pid = std::process::id();
+            let script = format!(
+                "$p = Get-Process -Id {pid} -ErrorAction SilentlyContinue; \
+                 if ($p) {{ Wait-Process -Id {pid} -ErrorAction SilentlyContinue }}; \
+                 Remove-Item -LiteralPath '{}' -Recurse -Force -ErrorAction SilentlyContinue",
+                d.display()
+            );
+            let _ = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
+                .spawn();
+        }
         eprintln!("engine: ephemeral profile removed ({})", d.display());
     }
 }
@@ -1027,6 +1035,7 @@ fn main() {
     };
 
     // Startup probe: --probe-shared tests Pool::new before anything else.
+    #[cfg(windows)]
     if std::env::args().any(|a| a == "--probe-shared") {
         match d3d::Pool::new(64, 64) {
             Ok(p) => eprintln!("engine: probe-shared OK luid={}", p.adapter_luid()),
@@ -1156,12 +1165,17 @@ fn main() {
 
     // Shared GPU textures: try first; fall back to socket bytes on any
     // failure or if the chrome reports it cannot import them.
+    // Shared-texture frames are a Windows (D3D12) feature; everywhere else
+    // the byte-frame path is the only one.
+    #[cfg(windows)]
     #[derive(Clone, Copy, PartialEq)]
     enum FrameMode {
         TryShared,
         Bytes,
     }
+    #[cfg(windows)]
     let mut frame_mode = FrameMode::TryShared;
+    #[cfg(windows)]
     let mut shared_pool: Option<d3d::Pool> = None;
 
     loop {
@@ -1818,7 +1832,9 @@ fn main() {
                         frame_id += 1;
 
                         // Shared-texture path: no pixel bytes over the socket.
+                        #[cfg_attr(not(windows), allow(unused_mut))]
                         let mut sent_shared = false;
+                        #[cfg(windows)]
                         if frame_mode == FrameMode::TryShared {
                             let need_resize = shared_pool
                                 .as_ref()
