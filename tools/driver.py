@@ -38,6 +38,14 @@ EVT1 = 0x45565431
 SHT1 = 0x53485431
 
 
+class EngineDeadError(ConnectionError):
+    """The engine process/socket died mid-session (crash, hang, kill).
+
+    Raised by wait_for instead of hanging until the timeout; agents catch it
+    (or let it bubble) and retry with a fresh Driver.
+    """
+
+
 def _png_chunk(kind: bytes, data: bytes) -> bytes:
     return len(data).to_bytes(4, "big") + kind + data + zlib.crc32(kind + data).to_bytes(4, "big")
 
@@ -138,11 +146,18 @@ class Driver:
         self._log = open(log, "w") if log else None
         self.width = None
         self.height = None
+        self.dead = False           # set by the reader thread on socket loss
 
     # -- protocol ---------------------------------------------------------
 
     def cmd(self, obj: dict) -> None:
-        self.sock.sendall((json.dumps(obj) + "\n").encode())
+        if self.dead:
+            raise EngineDeadError("engine socket gone (cmd dropped)")
+        try:
+            self.sock.sendall((json.dumps(obj) + "\n").encode())
+        except OSError as e:
+            self._mark_dead()
+            raise EngineDeadError(f"send failed: {e}")
 
     def _read_exact(self, n: int) -> bytes:
         buf = b""
@@ -160,7 +175,8 @@ class Driver:
                 hdr = self._read_exact(20)
             except socket.timeout:
                 continue
-            except OSError:
+            except (OSError, ConnectionError):
+                self._mark_dead()
                 return
             magic = struct.unpack("<I", hdr[:4])[0]
             a = struct.unpack("<I", hdr[12:16])[0]
@@ -179,18 +195,32 @@ class Driver:
                         self.events.append(json.loads(payload))
                         self._cond.notify_all()
                 else:
+                    self._mark_dead()
                     return  # unknown stream: bail out
-            except OSError:
+            except (OSError, ConnectionError):
+                self._mark_dead()
                 return
 
+    def _mark_dead(self):
+        """Record engine death and wake every waiter so they fail fast."""
+        with self._cond:
+            self.dead = True
+            self._cond.notify_all()
+
     def wait_for(self, pred, timeout=10.0):
-        """Wait until pred(event) holds for some event, return that event."""
+        """Wait until pred(event) holds for some event, return that event.
+        Raises EngineDeadError as soon as the reader notices the engine
+        socket is gone (no hanging until the timeout)."""
         deadline = time.time() + timeout
         with self._cond:
             while True:
                 for e in reversed(self.events):
                     if pred(e):
                         return e
+                if self.dead:
+                    raise EngineDeadError(
+                        "engine socket gone; recent events: "
+                        + str([e.get("ev") for e in self.events[-10:]]))
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     raise TimeoutError("no matching event; recent: "
@@ -243,6 +273,8 @@ class Driver:
         deadline = time.time() + timeout
         with self._cond:
             while len(self.shots) <= n:
+                if self.dead:
+                    raise EngineDeadError("engine socket gone (no screenshot)")
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     raise TimeoutError("no screenshot arrived")

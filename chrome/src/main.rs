@@ -296,6 +296,37 @@ fn restart_engine(s: &mut State) {
     renavigate_all(s);
 }
 
+/// Watchdog: called from the UI poll whenever the frame reader flagged the
+/// engine as dead (crash, hang, killed). Respawn in place and re-open every
+/// tab. The old reader thread and socket are already gone; kill_and_wait
+/// clears the (dead) child handle.
+fn recover_engine(s: &mut State) {
+    if s.picker {
+        return; // picker window: no engine to recover
+    }
+    eprintln!("chrome: engine died: respawning (watchdog)");
+    if let Some(e) = &mut s.engine {
+        // Engine::restart kills the child (already dead) and respawns.
+        if e.restart().is_err() {
+            eprintln!("chrome: watchdog respawn failed");
+            s.engine = None;
+        } else {
+            renavigate_all(s);
+        }
+    }
+}
+
+/// Poll hook: the frame reader wakes the loop when the engine dies; this
+/// respawns it. Also saves the session whenever the engine reports a URL
+/// change (crash resilience: the last session state survives engine loss).
+fn poll(s: &mut State, _t: f64, _tx: &mut Tx) -> bool {
+    if s.ui.engine_dead.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        recover_engine(s);
+        return true;
+    }
+    false
+}
+
 /// Wipe the profile's servo storage (cookies, localStorage, IndexedDB, ...)
 /// by deleting the engine data dir while the engine is down, then respawn.
 fn clear_site_data(s: &mut State) {
@@ -1125,6 +1156,7 @@ fn main() {
         let size = if picker { (420.0, 520.0) } else { (1280.0, 800.0) };
         let app = App::new(AppSpec {
             setup: Some(setup),
+            poll: Some(poll),
             ..AppSpec::new("Browserr", size, state, view)
         })
         .window_options(WindowOptions { borderless: true, ..Default::default() });

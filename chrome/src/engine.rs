@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rune::{NativeSurface, Pixels, Waker};
@@ -73,6 +73,9 @@ pub struct Ui {
     pub icons: Mutex<HashMap<String, Pixels>>,
     /// Page-requested cursor shape per tab id (servo Debug name, lowercase).
     pub cursors: Mutex<HashMap<u64, String>>,
+    /// Set by the frame reader when the engine process/socket dies. The UI
+    /// poll picks it up and respawns the engine (watchdog).
+    pub engine_dead: AtomicBool,
 }
 
 impl Ui {
@@ -85,6 +88,7 @@ impl Ui {
             pw: Mutex::new(None),
             icons: Mutex::new(HashMap::new()),
             cursors: Mutex::new(HashMap::new()),
+            engine_dead: AtomicBool::new(false),
         })
     }
 
@@ -476,6 +480,21 @@ fn driver_client_loop(stream: TcpStream, hub: Arc<DriverHub>) {
 }
 
 fn read_frames(
+    stream: TcpStream,
+    surface: NativeSurface,
+    waker: Waker,
+    ui: Arc<Ui>,
+    hub: Arc<DriverHub>,
+) {
+    // Any exit means the engine is gone: flag it and wake the UI so its poll
+    // can respawn the engine (watchdog).
+    read_frames_inner(stream, surface.clone(), waker.clone(), ui.clone(), hub);
+    ui.engine_dead.store(true, Ordering::SeqCst);
+    eprintln!("chrome: frame reader exited (engine gone)");
+    waker();
+}
+
+fn read_frames_inner(
     stream: TcpStream,
     surface: NativeSurface,
     waker: Waker,
