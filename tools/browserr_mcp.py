@@ -256,8 +256,12 @@ def handle(msg):
     msg_id = msg.get("id")
     try:
         if method == "initialize":
+            # Echo the client's requested protocol version when given (MCP
+            # negotiation): clients validate the echoed version and drop
+            # the connection on a mismatch.
+            requested = (msg.get("params") or {}).get("protocolVersion")
             return {"jsonrpc": "2.0", "id": msg_id, "result": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": requested or "2024-11-05",
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "browserr", "version": "0.1.0"},
             }}
