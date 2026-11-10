@@ -822,15 +822,31 @@ fn load_adblock(path: &std::path::Path) -> Option<std::rc::Rc<adblock::engine::E
 }
 
 fn make_context(size: dpi::PhysicalSize<u32>) -> Option<std::rc::Rc<dyn RenderingContext>> {
-    match HardwareRenderingContext::new(size) {
-        Ok(c) => {
-            eprintln!("engine: hardware (GPU) rendering context");
-            return Some(std::rc::Rc::new(c));
+    // GPU-less / driver-less machines (CI runners) can flake on context
+    // creation: retry briefly, then fall back to software.
+    for attempt in 0..3 {
+        match HardwareRenderingContext::new(size) {
+            Ok(c) => {
+                eprintln!(
+                    "engine: hardware (GPU) rendering context (attempt {})",
+                    attempt + 1
+                );
+                return Some(std::rc::Rc::new(c));
+            }
+            Err(e) => {
+                eprintln!(
+                    "engine: hardware context failed ({e:?}), attempt {} of 3",
+                    attempt + 1
+                );
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
         }
-        Err(e) => eprintln!("engine: hardware context failed ({e:?}), falling back to software"),
     }
     match servo::SoftwareRenderingContext::new(size) {
-        Ok(c) => Some(std::rc::Rc::new(c)),
+        Ok(c) => {
+            eprintln!("engine: software rendering context");
+            Some(std::rc::Rc::new(c))
+        }
         Err(e) => {
             eprintln!("engine: no rendering context: {e:?}");
             None

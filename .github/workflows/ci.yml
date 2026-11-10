@@ -34,6 +34,16 @@ jobs:
         shell: pwsh
         run: powershell -File scripts/ci.ps1
 
+      - name: Upload test logs (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: |
+            *.log
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Release build smoke (engine; LTO build)
         shell: pwsh
         run: |

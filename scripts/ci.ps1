@@ -60,6 +60,12 @@ foreach ($t in $raw_tests) {
 
 if ($failed.Count) {
     Write-Host "FAILED: $($failed -join ', ')" -ForegroundColor Red
+    # Diagnostics: every engine log the tests wrote (context creation
+    # failures on GPU-less runners land here).
+    Get-ChildItem "$root\*.log" -ErrorAction SilentlyContinue | ForEach-Object {
+        Write-Host "--- $($_.Name) ---" -ForegroundColor Yellow
+            Get-Content $_.FullName -Tail 25
+    }
     exit 1
 }
 Remove-Item "$root\*.log" -ErrorAction SilentlyContinue
