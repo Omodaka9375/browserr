@@ -135,8 +135,11 @@ screenshot answers are mirrored to every attached driver. With
 without events. Command lines over 8 MB are dropped without parsing.
 
 Extraction helpers: `read_page()` (title plus body text, links as
-`[label](href)`, invisible elements skipped), `links()` and `forms()`
-(visible items with viewport rectangles), `click_text()`, `fill()`.
+`[label](href)`, invisible elements skipped), `read_structure()` (headings,
+buttons, inputs, selects, links, images - each with a rect and a usable CSS
+selector that feeds click_element/set_value; prefer for locating UI),
+`links()` and `forms()` (visible items with viewport rectangles),
+`click_text()`, `fill()`.
 Element commands (CSS-selector based, no coordinates or text guessing):
 `element_rect()`, `click_element()` (scrolls into view, real pointer event
 at the center), `set_value()` (native value setter + input/change events,
@@ -158,10 +161,10 @@ Timing rules that matter:
 ## Agent browser (MCP)
 
 `tools/browserr_mcp.py` is a Model Context Protocol server (stdlib only,
-newline JSON-RPC on stdio) with 18 tools: start, stop, ping, navigate, read,
-links, forms, click, click_text, click_element, set_value, wait_for, fill,
-key, screenshot, tabs, console, download. Headless with an ephemeral
-profile by default; `--port N` drives a visible window.
+newline JSON-RPC on stdio) with 19 tools: start, stop, ping, navigate, read,
+read_structure, links, forms, click, click_text, click_element, set_value,
+wait_for, fill, key, screenshot, tabs, console, download. Headless with an
+ephemeral profile by default; `--port N` drives a visible window.
 
 Reliability for unattended runs: `ping` health check, `--ephemeral` profiles
 (deleted on exit; a detached helper finishes the delete after servo releases
@@ -244,6 +247,7 @@ test_attach.py       computer use: drive a real window, detach keeps it alive
 test_agent.py        ping, ephemeral, read_page/links/forms/fill/click_text
 test_features.py     console capture, downloads, load-error surfacing
 test_elements.py     click_element / set_value / wait_for_selector (SPA + scroll)
+test_structure.py    read_structure: selectors usable by the element commands
 test_hardening.py    driver-token gate + oversized-line rejection
 test_mcp.py          full MCP session over stdio
 test_https.py        engine TLS client: real EasyList download

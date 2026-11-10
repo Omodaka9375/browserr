@@ -179,6 +179,15 @@ TOOLS = [
             "timeout": {"type": "number"}}, "required": ["selector"]},
     },
     {
+        "name": "browser_read_structure",
+        "description": "Structured page inventory (richer than read): headings, "
+                       "buttons, inputs, selects, links, images - each with a "
+                       "viewport rect and a usable CSS selector for "
+                       "click_element/set_value. Prefer this when locating "
+                       "specific UI; prefer read for prose.",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
         "name": "browser_tabs",
         "description": "Open a new tab (action=open), switch tabs (action=activate "
                        "with tab id), or list tab ids (action=list).",
@@ -224,6 +233,8 @@ def call_tool(name, args):
     if name == "browser_read":
         title, text = d.read_page()
         return {"title": title, "text": text}
+    if name == "browser_read_structure":
+        return d.read_structure()
     if name == "browser_links":
         return {"links": d.links()}
     if name == "browser_forms":

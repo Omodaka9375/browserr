@@ -139,6 +139,12 @@ try:
 
     # Element tools: back on the first page (click_text navigated away).
     call("browser_navigate", {"url": "http://127.0.0.1:8130/mcp-test.html"})
+    r = call("browser_read_structure", {})
+    assert any(b["text"] == "Go2" for b in r["buttons"]), r["buttons"]
+    sel = [i["selector"] for i in r["inputs"] if i["id"] == "q2"]
+    assert sel, r["inputs"]
+    print("read_structure OK, q2 selector:", sel[0])
+
     r = call("browser_wait_for", {"selector": "#go2"})
     assert r["found"] == "#go2", r
     print("wait_for OK:", r["rect"])

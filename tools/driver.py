@@ -594,11 +594,95 @@ class Driver:
         return out;
     })()"""
 
+    STRUCTURE_JS = r"""(() => {
+        // Structured page inventory: interactive elements + headings, with
+        // rects and a usable CSS selector, so agents can act without
+        // screenshots (feeds click_element/set_value).
+        const sel = (el) => {
+            if (el.id) return '#' + CSS.escape(el.id);
+            const name = el.getAttribute('name');
+            if (name) return `${el.tagName.toLowerCase()}[name="${CSS.escape(name)}"]`;
+            // Nth-of-type path from <body>; unique in practice for the
+            // pages agents drive.
+            const parts = [];
+            let n = el;
+            while (n && n.tagName !== 'BODY' && n.parentElement) {
+                const sibs = [...n.parentElement.children].filter(
+                    c2 => c2.tagName === n.tagName);
+                const i = sibs.indexOf(n) + 1;
+                parts.unshift(n.tagName.toLowerCase()
+                    + (sibs.length > 1 ? `:nth-of-type(${i})` : ''));
+                n = n.parentElement;
+            }
+            return parts.join(' > ');
+        };
+        const rect = (el) => {
+            const r = el.getBoundingClientRect();
+            return {x: r.x, y: r.y, w: r.width, h: r.height};
+        };
+        const out = {title: document.title, headings: [], buttons: [],
+                     inputs: [], selects: [], links: [], images: []};
+        const vis = (el) => {
+            const s = getComputedStyle(el);
+            return s.display !== 'none' && s.visibility !== 'hidden';
+        };
+        for (const h of document.querySelectorAll('h1,h2,h3,h4')) {
+            if (vis(h)) out.headings.push({level: +h.tagName[1], text: h.textContent.trim().slice(0, 200)});
+        }
+        for (const b of document.querySelectorAll('button, [role=button], input[type=submit], input[type=button]')) {
+            if (!vis(b)) continue;
+            const r = rect(b);
+            if (!r.w || !r.h) continue;
+            out.buttons.push({text: (b.value || b.textContent).trim().slice(0, 80),
+                              selector: sel(b), ...r});
+        }
+        for (const i of document.querySelectorAll('input:not([type=submit]):not([type=button]):not([type=hidden]), textarea')) {
+            if (!vis(i)) continue;
+            const r = rect(i);
+            if (!r.w && !r.h) continue;
+            out.inputs.push({type: i.type || 'text', name: i.name || '', id: i.id || '',
+                             placeholder: i.placeholder || '', selector: sel(i), ...r});
+        }
+        for (const s of document.querySelectorAll('select')) {
+            if (!vis(s)) continue;
+            const r = rect(s);
+            out.selects.push({name: s.name || '', id: s.id || '', selector: sel(s),
+                              options: [...s.options].map(o2 => o2.value).slice(0, 50), ...r});
+        }
+        for (const a of document.links) {
+            const r = a.getBoundingClientRect();
+            if (!r.width || !r.height) continue;
+            const text = a.innerText.replace(/\s+/g, ' ').trim() || a.href;
+            out.links.push({text: text.slice(0, 80), href: a.href,
+                            x: r.x, y: r.y, w: r.width, h: r.height});
+        }
+        for (const im of document.images) {
+            const r = im.getBoundingClientRect();
+            if (!r.width || !r.height) continue;
+            out.images.push({alt: (im.alt || '').slice(0, 80), src: im.src.slice(0, 200),
+                             x: r.x, y: r.y, w: r.width, h: r.height});
+        }
+        return out;
+    })()"""
+
     def read_page(self, tab: int = 0, timeout=15.0):
         """Extract the page as (title, markdown-ish text): links become
         [label](href), paragraphs get blank-line separation. Token-cheap."""
         title, text = self.eval_js(self.READ_JS, tab, timeout)
         return title, text
+
+    def read_structure(self, tab: int = 0, timeout=15.0):
+        """Structured page inventory: headings, buttons, inputs, selects,
+        links and images, each with a viewport rect and a usable CSS selector
+        (feeds click_element/set_value). Richer than read_page; use when the
+        agent needs to locate and act on specific UI."""
+        r = self.eval_js(self.STRUCTURE_JS, tab, timeout)
+        if not r or not isinstance(r, dict):
+            return {"title": "", "headings": [], "buttons": [], "inputs": [],
+                    "selects": [], "links": [], "images": []}
+        for key in ("headings", "buttons", "inputs", "selects", "links", "images"):
+            r.setdefault(key, [])
+        return r
 
     def links(self, tab: int = 0, timeout=10.0):
         """Visible links with their viewport rectangles (for click targeting)."""
