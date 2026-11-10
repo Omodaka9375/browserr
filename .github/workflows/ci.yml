@@ -32,6 +32,13 @@ jobs:
 
       - name: fmt + clippy + build + python test suite
         shell: pwsh
+        env:
+          # GitHub windows-latest runners are GPU-less; servo's WGL backend
+          # needs WGL_NV_DX_interop + a real D3D11 device, so render tests
+          # cannot pass there. GPU-less mode runs fmt + clippy + build +
+          # the render-free protocol tests. Run the full 14-test suite on
+          # any machine with a GPU (local: powershell -File scripts/ci.ps1).
+          CI_GPULESS: "1"
         run: powershell -File scripts/ci.ps1
 
       - name: Upload test logs (always)

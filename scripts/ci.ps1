@@ -19,15 +19,31 @@ if ($LASTEXITCODE -ne 0) { Get-Content engine-build.log -Tail 8; Write-Host "eng
 
 $env:BROWSERR_ENGINE = "$root\engine\target\debug\engine.exe"
 
+# NB: servo's Windows rendering (surfman WGL) requires WGL_NV_DX_interop +
+# a real D3D11 device, so webview/render tests CANNOT run on GPU-less CI
+# runners. On those, set CI_GPULESS=1: only the render-free protocol tests
+# run (bind: port handover; the engine's socket/protocol logic).
+$gpuless = $env:CI_GPULESS -eq "1"
+
 # SDK tests: each spawns its own engine via the Driver (ping/pong handshake)
-# or attaches to one it spawns with a driver port.
+# or attaches to one it spawns with a driver port. Render-dependent.
 $sdk_tests = @(
     "test_driver", "test_agent", "test_elements", "test_structure",
     "test_watchdog", "test_features", "test_mcp", "test_scroll",
     "test_bind", "test_attach", "test_hardening"
 )
-# Protocol tests: raw socket, expect a fresh engine listening on 7411.
-$raw_tests = @("test_input", "test_cursor_zoom", "test_close")
+# Render-free tests: raw socket protocol, no webview pixels needed.
+$gpuless_tests = @("test_bind")
+
+if ($gpuless) {
+    $sdk_tests = @()
+    $raw_tests = @()
+    $render_free = $gpuless_tests
+} else {
+    # Protocol tests: raw socket, expect a fresh engine listening on 7411.
+    $raw_tests = @("test_input", "test_cursor_zoom", "test_close")
+    $render_free = @()
+}
 
 function Run-Test($t) {
     Write-Host "-- $t" -ForegroundColor Cyan
@@ -40,7 +56,7 @@ function Run-Test($t) {
 }
 
 $failed = @()
-foreach ($t in $sdk_tests) {
+foreach ($t in ($sdk_tests + $render_free)) {
     if (-not (Run-Test $t)) { $failed += $t }
 }
 
@@ -69,4 +85,5 @@ if ($failed.Count) {
     exit 1
 }
 Remove-Item "$root\*.log" -ErrorAction SilentlyContinue
-Write-Host "ALL GREEN ($($sdk_tests.Count + $raw_tests.Count) tests)" -ForegroundColor Green
+$total = $sdk_tests.Count + $raw_tests.Count + $render_free.Count
+Write-Host "ALL GREEN ($total tests)$(if ($gpuless) { ' [GPU-LESS MODE: render tests skipped]' })" -ForegroundColor Green
