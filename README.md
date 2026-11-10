@@ -1,5 +1,7 @@
 # Browserr
 
+[![CI](https://github.com/Omodaka9375/browserr/actions/workflows/ci.yml/badge.svg)](https://github.com/Omodaka9375/browserr/actions/workflows/ci.yml)
+
 A Servo-based, headless browser engine built for AI agents.
 
 Browserr is an alternative to embedding Chromium in an agent stack: a single
