@@ -84,6 +84,9 @@ struct Update {
     cursor: Option<String>,
     /// Result of an eval-with-id: (request id, JSON-encoded value).
     eval: Option<(u64, serde_json::Value)>,
+    /// Page console message: (level, message). Servo also routes network
+    /// and TLS load errors here, so agents see why a page failed.
+    console: Option<(String, String)>,
 }
 
 /// Runs on load complete: if the page has a password field, capture its
@@ -201,6 +204,7 @@ impl FrameDelegate {
                         icon: None,
                         cursor: None,
                         eval: None,
+            console: None,
                     });
                     shared.pump.kick();
                 }
@@ -232,6 +236,7 @@ impl FrameDelegate {
                     icon: Some((origin, 16, 16, rgba)),
                 cursor: None,
                 eval: None,
+            console: None,
                 });
                 shared.pump.kick();
                 return;
@@ -250,6 +255,7 @@ impl FrameDelegate {
                         icon: Some((origin, w, h, rgba)),
                 cursor: None,
                 eval: None,
+            console: None,
                     });
                     shared.pump.kick();
                 }
@@ -291,6 +297,7 @@ impl servo::WebViewDelegate for FrameDelegate {
             icon: None,
             cursor: None,
             eval: None,
+            console: None,
         });
         // Pick up a capture that a submitted form left behind.
         self.eval_pw(webview, PW_READ_JS);
@@ -313,6 +320,30 @@ impl servo::WebViewDelegate for FrameDelegate {
         self.eval_favicon(webview);
     }
 
+    /// Console messages from the page (and servo's own load-failure logs:
+    /// network and TLS errors land here). Forwarded as events so agents can
+    /// read page output and load failures.
+    fn show_console_message(
+        &self,
+        _webview: servo::WebView,
+        level: servo::ConsoleLogLevel,
+        message: String,
+    ) {
+        let name = format!("{level:?}").to_lowercase();
+        self.shared.updates.lock().unwrap().push(Update {
+            tab: self.tab,
+            url: None,
+            title: None,
+            history: None,
+            pw: None,
+            icon: None,
+            cursor: None,
+            eval: None,
+            console: Some((name, message)),
+        });
+        self.shared.pump.kick();
+    }
+
     fn notify_cursor_changed(&self, _webview: servo::WebView, cursor: servo::Cursor) {
         let name = format!("{cursor:?}").to_lowercase();
         self.shared.updates.lock().unwrap().push(Update {
@@ -324,6 +355,7 @@ impl servo::WebViewDelegate for FrameDelegate {
             icon: None,
             cursor: Some(name),
             eval: None,
+            console: None,
         });
         self.shared.pump.kick();
     }
@@ -338,6 +370,7 @@ impl servo::WebViewDelegate for FrameDelegate {
             icon: None,
             cursor: None,
             eval: None,
+            console: None,
         });
         self.shared.pump.kick();
     }
@@ -354,6 +387,7 @@ impl servo::WebViewDelegate for FrameDelegate {
             icon: None,
             cursor: None,
             eval: None,
+            console: None,
         });
         self.shared.pump.kick();
     }
@@ -1090,6 +1124,7 @@ fn main() {
                                                 icon: None,
                                                 cursor: None,
                                                 eval: Some((req, value)),
+        console: None,
                                             });
                                             shared.pump.kick();
                                         });
@@ -1238,6 +1273,43 @@ fn main() {
                                     ),
                                 );
                             }
+                            Some("download") => {
+                                // Fetch a URL straight to disk (agents fetch
+                                // files; servo 0.8 has no download hook).
+                                // No page cookies: only use it for public
+                                // files. Answered with an event.
+                                let req = v["id"].as_u64().unwrap_or(0);
+                                let url = v["url"].as_str().unwrap_or("");
+                                let path = v["path"].as_str().unwrap_or("");
+                                let max = v["max_bytes"].as_u64().unwrap_or(64 << 20);
+                                eprintln!("engine: download {url} -> {path}");
+                                let result = if url.is_empty() || path.is_empty() {
+                                    Err("missing url or path".to_string())
+                                } else {
+                                    http_get(url, max).and_then(|body| {
+                                        if let Some(dir) =
+                                            std::path::Path::new(path).parent()
+                                            && !dir.as_os_str().is_empty()
+                                        {
+                                            let _ = std::fs::create_dir_all(dir);
+                                        }
+                                        let n = body.len() as u64;
+                                        std::fs::write(path, body).map(|_| n).map_err(|e| e.to_string())
+                                    })
+                                };
+                                event_id += 1;
+                                let payload = match result {
+                                    Ok(n) => format!(
+                                        "{{\"ev\":\"download\",\"tab\":{tab_id},\"id\":{req},\"path\":\"{}\",\"ok\":true,\"bytes\":{n}}}",
+                                        path.replace('\\', "\\\\").replace('"', "\\\"")
+                                    ),
+                                    Err(e) => format!(
+                                        "{{\"ev\":\"download\",\"tab\":{tab_id},\"id\":{req},\"ok\":false,\"error\":\"{}\"}}",
+                                        e.replace('\\', "\\\\").replace('"', "\\\"")
+                                    ),
+                                };
+                                send_event(&mut out, event_id, &payload);
+                            }
                             Some("zoom") => {
                                 // Page zoom (Ctrl+wheel in the chrome); overrides
                                 // the webview's current page zoom.
@@ -1380,6 +1452,18 @@ fn main() {
                         &mut out,
                         event_id,
                         &format!("{{\"ev\":\"evalresult\",\"tab\":{},\"id\":{},\"value\":{}}}", u.tab, req, value),
+                    );
+                }
+                if let Some((level, message)) = &u.console {
+                    let esc = message
+                        .replace('\\', "\\\\")
+                        .replace('"', "\\\"")
+                        .replace('\n', "\\n")
+                        .replace('\r', "\\r");
+                    send_event(
+                        &mut out,
+                        event_id,
+                        &format!("{{\"ev\":\"console\",\"tab\":{},\"level\":\"{}\",\"message\":\"{esc}\"}}", u.tab, level),
                     );
                 }
                 if let Some(data) = &u.pw {

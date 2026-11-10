@@ -155,6 +155,22 @@ TOOLS = [
             "action": {"type": "string", "enum": ["open", "activate", "list"]},
             "tab": {"type": "integer"}}, "required": ["action"]},
     },
+    {
+        "name": "browser_console",
+        "description": "Page console messages collected so far, newest last: "
+                       "{tab, level, message}. Network and TLS load errors also "
+                       "arrive here. Optional level filter (log/info/warn/error).",
+        "inputSchema": {"type": "object", "properties": {
+            "level": {"type": "string"}}, "required": []},
+    },
+    {
+        "name": "browser_download",
+        "description": "Fetch a URL straight to a local path (no page cookies "
+                       "are sent; use for public files). Returns the byte count.",
+        "inputSchema": {"type": "object", "properties": {
+            "url": {"type": "string"}, "path": {"type": "string"},
+            "max_bytes": {"type": "integer"}}, "required": ["url", "path"]},
+    },
 ]
 
 
@@ -220,6 +236,13 @@ def call_tool(name, args):
             d.activate(args["tab"])
             return {"active": args["tab"]}
         return d.ping()
+    if name == "browser_console":
+        msgs = d.console(level=args.get("level"))
+        return {"messages": msgs[-200:]}
+    if name == "browser_download":
+        n = d.download(args["url"], args["path"],
+                       max_bytes=args.get("max_bytes"))
+        return {"path": args["path"], "bytes": n}
     raise McpError(f"unknown tool {name}")
 
 

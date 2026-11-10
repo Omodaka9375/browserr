@@ -315,6 +315,41 @@ class Driver:
         ev = self.wait_for(lambda e: e.get("ev") == "pong" and e.get("id") == req, timeout)
         return {"tabs": ev.get("tabs"), "active": ev.get("active")}
 
+    def console(self, tab=None, level=None):
+        """Collected page console messages as dicts
+        {tab, level, message} (level: log/info/warn/error/...).
+        Optional filters by tab and level."""
+        return [e for e in self.events
+                if e.get("ev") == "console"
+                and (tab is None or e.get("tab") == tab)
+                and (level is None or e.get("level") == level)]
+
+    def wait_console(self, level=None, contains=None, tab=None, timeout=15.0):
+        """Wait for a console message (optionally matching level and a
+        substring); returns the message event."""
+        return self.wait_for(
+            lambda e: e.get("ev") == "console"
+            and (level is None or e.get("level") == level)
+            and (contains is None or contains in e.get("message", ""))
+            and (tab is None or e.get("tab") == tab),
+            timeout)
+
+    def download(self, url, path, max_bytes=None, timeout=120.0):
+        """Fetch a URL straight to a local path (agents fetch files; servo
+        0.8 has no in-page download hook). No page cookies are sent, so only
+        public URLs work. Returns the byte count."""
+        req = self._next_id
+        self._next_id += 1
+        args = {"cmd": "download", "tab": 0, "id": req, "url": url, "path": path}
+        if max_bytes:
+            args["max_bytes"] = max_bytes
+        self.cmd(args)
+        ev = self.wait_for(
+            lambda e: e.get("ev") == "download" and e.get("id") == req, timeout)
+        if not ev.get("ok"):
+            raise RuntimeError(f"download failed: {ev.get('error')}")
+        return ev.get("bytes")
+
     def close(self, timeout=5.0) -> None:
         """Detach (attach mode leaves the browser running) or stop the engine.
 

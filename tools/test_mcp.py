@@ -22,6 +22,10 @@ PAGE = """<!doctype html><html><head><title>MCP Test Page</title></head><body>
 NEXT = """<!doctype html><html><head><title>MCP Next</title></head><body>
 <p>Second page content.</p></body></html>"""
 
+import os
+with open(r"D:/Code/2026/Browserr/tools/mcp-dl.bin", "wb") as f:
+    f.write(os.urandom(4096))
+
 handler = functools.partial(http.server.SimpleHTTPRequestHandler,
                             directory=r"D:/Code/2026/Browserr/tools")
 httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 8130), handler)
@@ -121,6 +125,16 @@ try:
     r = call("browser_tabs", {"action": "open"})
     assert "tab" in r, r
     print("tabs OK:", r)
+
+    r = call("browser_console", {})
+    assert "messages" in r, r
+    print("console OK:", len(r["messages"]), "messages")
+
+    r = call("browser_download", {"url": "http://127.0.0.1:8130/mcp-dl.bin",
+                                  "path": r"D:/Code/2026/Browserr/tools/mcp-dl.bin"})
+    assert r["bytes"] == 4096, r
+    assert os.path.getsize(r"D:/Code/2026/Browserr/tools/mcp-dl.bin") == 4096
+    print("download OK:", r["bytes"], "bytes")
 
     call("browser_stop")
     print("stop OK")

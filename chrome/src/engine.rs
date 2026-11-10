@@ -413,9 +413,9 @@ impl DriverHub {
 
 /// Commands an attached driver may send; all are tab-addressed and forwarded
 /// to the engine 1:1. resize/frames are chrome-owned and rejected.
-const DRIVER_CMDS: [&str; 13] = [
+const DRIVER_CMDS: [&str; 14] = [
     "navigate", "back", "forward", "new_tab", "activate", "close_tab",
-    "input", "wheel", "key", "eval", "screenshot", "zoom", "ping",
+    "input", "wheel", "key", "eval", "screenshot", "zoom", "ping", "download",
 ];
 
 /// Accept automation-driver connections on 127.0.0.1:port (opt-in via

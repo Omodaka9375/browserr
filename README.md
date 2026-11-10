@@ -63,6 +63,7 @@ client (the chrome, or one driver, or the MCP server).
 {"cmd":"screenshot","tab":N}                 paint, answer with a SHT1 frame
 {"cmd":"zoom","tab":N,"zoom":F}              page zoom (chrome: Ctrl+wheel)
 {"cmd":"ping","id":X}                        health check
+{"cmd":"download","url":"...","path":"...","id":X}  fetch straight to disk
 ```
 
 Responses use a 20-byte header (magic u32, id u64, then two u32 fields):
@@ -74,10 +75,13 @@ SHT1 + id + w + h    -> w*h*4 BGRA pixels (screenshot answer, automation only)
 ```
 
 Events: `url`, `title`, `history`, `cursor`, `favicon`, `pwcapture`,
-`evalresult`, `pong`. The `pong` answers `ping` with the tab count and the
-active tab. `evalresult` returns any JSON value (arrays, objects, booleans,
-numbers, strings; DOM handles come back tagged). Only the active tab is
-painted; switching tabs re-sends that tab's url/title/history/cursor.
+`evalresult`, `pong`, `console`, `download`. The `pong` answers `ping` with
+the tab count and the active tab. `console` carries page console messages
+(log/warn/error/...); servo also routes network and TLS load errors there,
+so agents see why a page failed. `download` answers the download command
+with ok/bytes/error. `evalresult` returns any JSON value (arrays, objects,
+booleans, numbers, strings; DOM handles come back tagged). Only the active
+tab is painted; switching tabs re-sends that tab's url/title/history/cursor.
 
 Frames normally cross the socket as D3D12 named shared textures plus fences
 (no pixel bytes); if the chrome cannot import them, it asks the engine to
@@ -125,6 +129,9 @@ screenshot answers are mirrored to every attached driver.
 Extraction helpers: `read_page()` (title plus body text, links as
 `[label](href)`, invisible elements skipped), `links()` and `forms()`
 (visible items with viewport rectangles), `click_text()`, `fill()`.
+Observability: `console()` / `wait_console()` (page messages and load
+errors), `ping()`, `EngineDeadError` on engine death. Files:
+`download(url, path)` (no page cookies, public URLs only).
 
 Timing rules that matter:
 
@@ -139,9 +146,10 @@ Timing rules that matter:
 ## Agent browser (MCP)
 
 `tools/browserr_mcp.py` is a Model Context Protocol server (stdlib only,
-newline JSON-RPC on stdio) with 13 tools: start, stop, ping, navigate, read,
-links, forms, click, click_text, fill, key, screenshot, tabs. Headless with
-an ephemeral profile by default; `--port N` drives a visible window.
+newline JSON-RPC on stdio) with 15 tools: start, stop, ping, navigate, read,
+links, forms, click, click_text, fill, key, screenshot, tabs, console,
+download. Headless with an ephemeral profile by default; `--port N` drives
+a visible window.
 
 Reliability for unattended runs: `ping` health check, `--ephemeral` profiles
 (deleted on exit; a detached helper finishes the delete after servo releases
@@ -222,6 +230,7 @@ test_scroll.py       scroll survives tab switches
 test_driver.py       SDK: eval results, click, typing, screenshot pixels
 test_attach.py       computer use: drive a real window, detach keeps it alive
 test_agent.py        ping, ephemeral, read_page/links/forms/fill/click_text
+test_features.py     console capture, downloads, load-error surfacing
 test_mcp.py          full MCP session over stdio
 test_https.py        engine TLS client: real EasyList download
 test_thin.py         release build smoke (set BROWSERR_ENGINE)
