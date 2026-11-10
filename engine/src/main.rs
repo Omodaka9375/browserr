@@ -1608,6 +1608,7 @@ fn main() {
                                     }
                                 }
                             }
+                            #[cfg(windows)]
                             Some("frames") if v["mode"].as_str() == Some("bytes") => {
                                 eprintln!("engine: chrome requested byte frames");
                                 frame_mode = FrameMode::Bytes;
@@ -1852,6 +1853,7 @@ fn main() {
                                 }
                             }
                         }
+                        #[cfg(windows)]
                         if frame_mode == FrameMode::TryShared {
                             let pool = shared_pool.as_mut().unwrap();
                             match pool.write(&bgra) {
