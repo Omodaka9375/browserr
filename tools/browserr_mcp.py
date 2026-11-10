@@ -1,13 +1,14 @@
 """Browserr MCP server: exposes the agent browser to MCP clients over stdio.
 
 JSON-RPC 2.0 per the Model Context Protocol; stdlib only (json/socket/thread).
-Manages one engine per session (headless, ephemeral profile by default).
+Manages one engine per session (spawns its own engine, ephemeral profile by
+default; or attaches to a running engine).
 
 Run:
-    python browserr_mcp.py [--port 7412]   # or no args for headless mode
+    python browserr_mcp.py [--port 7412]   # or no args to spawn an engine
 
 With --port it attaches to a running engine started with --driver-port=N
-(computer-use mode); without it, it spawns its own headless engine.
+(computer-use mode); without it, it spawns its own engine.
 
 Tools:
     browser_start / browser_stop / browser_ping
@@ -53,7 +54,9 @@ class State:
                 self.driver = Driver.attach(attach_port, token=token)
             else:
                 self.driver = Driver(ephemeral=True)
-            return {"started": True, "mode": "attach" if attach_port else "headless"}
+            # spawn = a fresh engine this server owns; attach = connected to
+            # a running engine's driver port. There is no headed mode.
+            return {"started": True, "mode": "attach" if attach_port else "spawn"}
 
     def stop(self):
         with self.lock:
@@ -68,10 +71,10 @@ STATE = State()
 TOOLS = [
     {
         "name": "browser_start",
-        "description": "Start the browser. Headless by default; pass attach_port "
-                       "to attach to a running engine started with "
-                       "--driver-port (computer-use mode). Pass token if the "
-                       "engine was started with --driver-token.",
+        "description": "Start the browser: spawns a fresh engine (ephemeral "
+                       "profile) by default; pass attach_port to attach to a "
+                       "running engine started with --driver-port. Pass token "
+                       "if that engine was started with --driver-token.",
         "inputSchema": {"type": "object", "properties": {
             "attach_port": {"type": "integer",
                             "description": "driver port of a running engine"},
