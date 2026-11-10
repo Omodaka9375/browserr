@@ -13,3 +13,5 @@ chrome-boot-test.log
 chrome-driver-test.log
 
 tools/__pycache__/
+__pycache__/
+mcp-crash.log
