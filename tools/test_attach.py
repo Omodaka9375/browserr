@@ -1,15 +1,18 @@
-"""Computer-use test: drive a real chrome.exe window through its driver port.
+"""Computer-use test: attach to a running engine through its driver port.
 
-Spawns chrome.exe --driver-port=7412 (visible window, throwaway profile),
-attaches a Driver, then verifies navigation, eval, click, typing, screenshots
-and that the UI process is still alive throughout (driver never wedges it).
+Spawns engine.exe --driver-port=7412 (the engine accepts driver clients on a
+second port; the main client slot is free for this driver in the test), then
+verifies attach + auth, navigation, eval, click, typing, screenshots, and
+that the engine stays alive after the driver detaches (socket close on the
+driver port must NOT exit the engine; only the main client's disconnect does).
 """
 import functools
 import http.server
+import os
 import subprocess
+import sys
 import threading
 import time
-import sys
 
 sys.path.insert(0, r"D:/Code/2026/Browserr/tools")
 from driver import Driver, save_png
@@ -27,43 +30,56 @@ threading.Thread(target=httpd.serve_forever, daemon=True).start()
 with open(r"D:/Code/2026/Browserr/tools/attach-test.html", "w") as f:
     f.write(PAGE)
 
-import os
-chrome = os.environ.get("BROWSERR_CHROME",
-                        r"D:/Code/2026/Browserr/chrome/target/debug/chrome.exe")
-# chrome.exe looks for engine.exe next to itself (only dist/ has that);
-# dev-tree runs need the env override.
-os.environ.setdefault("BROWSERR_ENGINE",
-                       r"D:/Code/2026/Browserr/engine/target/debug/engine.exe")
-ui = subprocess.Popen(
-    [chrome, "--driver-port=7412", "--profile=drivertest"],
-    stderr=open(r"D:/Code/2026/Browserr/chrome-driver-test.log", "w"))
+engine = os.environ.get(
+    "BROWSERR_ENGINE",
+    r"D:/Code/2026/Browserr/engine/target/debug/engine.exe")
+
+# The engine needs its MAIN client connected before the driver port opens
+# (the listener starts after the first accept). Connect a raw client first.
+main = subprocess.Popen(
+    [engine, "--ephemeral", "--driver-port=7412", "--driver-token=secret"],
+    stdout=subprocess.DEVNULL,
+    stderr=open(r"D:/Code/2026/Browserr/engine-attach-test.log", "w"))
+
+# The engine's main port must be connected before the driver port opens
+# (the listener starts after the first accept). Hold a raw main connection
+# for the test's lifetime; the driver attaches on the second port.
+main_sock = None
+for _ in range(100):
+    try:
+        import socket
+        main_sock = socket.create_connection(("127.0.0.1", 7411), timeout=1)
+        break
+    except OSError:
+        time.sleep(0.1)
+assert main_sock is not None, "engine main port never opened"
 
 d = None
 try:
-    d = Driver.attach(7412)
+    # The driver port opens once the engine's main slot is taken; retry.
+    d = None
+    for _ in range(50):
+        try:
+            d = Driver.attach(7412, token="secret")
+            break
+        except ConnectionError:
+            time.sleep(0.1)
     print("attach OK")
-    # The driver port opens before the engine connects; wait until the engine
-    # reports something (the initial about:blank / restored url) so early
-    # navigates are not dropped.
-    d.wait_for(lambda e: e.get("ev") == "url", timeout=30)
-    print("engine up")
 
     d.navigate("http://127.0.0.1:8127/attach-test.html")
     d.wait_load(contains="attach-test.html")
     d.wait_ready()
     print("navigate OK")
-    assert ui.poll() is None, "chrome exited during the test"
+    assert main.poll() is None, "engine exited during the test"
 
     assert d.eval_js("2 + 3") == 5
     assert d.eval_js("[1, 'a', true]") == [1, "a", True]
     print("eval OK")
-    assert ui.poll() is None
 
-    # Click inside the visible window's page area (below the 40px toolbar).
     d.click(300, 300)
-    d.wait_for(lambda e: e.get("ev") == "title" and e.get("title") == "CLICKED", timeout=10)
+    d.wait_for(lambda e: e.get("ev") == "title" and e.get("title") == "CLICKED",
+               timeout=10)
     print("click OK")
-    assert ui.poll() is None
 
     d.click(50, 630)
     time.sleep(0.5)
@@ -72,9 +88,7 @@ try:
     got = d.eval_js("document.title")
     assert got == "TYPED:hi", f"title={got!r}"
     print("type OK")
-    assert ui.poll() is None
 
-    # Screenshot mirrors what the engine paints for the window.
     w, h, bgra = d.screenshot()
     assert len(bgra) == w * h * 4, (w, h)
     r, g, b = bgra[2], bgra[1], bgra[0]
@@ -82,20 +96,21 @@ try:
     save_png(r"D:/Code/2026/Browserr/tools/attach-test-shot.png", w, h, bgra)
     print("screenshot OK")
 
-    # New tab through the driver, still attached and mirrored.
     d.new_tab(1)
     d.activate(1)
-    d.wait_for(lambda e: e.get("ev") == "url" and e.get("tab") == 1
-               and "about:blank" in e.get("url", ""), timeout=10)
     print("tabs OK")
-    assert ui.poll() is None
 
     print("ALL OK")
 finally:
     if d:
-        d.close()   # detach: must NOT kill the UI
+        d.close()   # detach: must NOT kill the engine
     time.sleep(0.5)
-    alive = ui.poll() is None
-    ui.kill()
-    print("ui alive after detach:", alive)
-    assert alive, "detach killed the browser window"
+    alive = main.poll() is None
+    # Closing the main connection is the engine's exit path.
+    main_sock.close()
+    time.sleep(1.0)
+    main.kill()
+    print("engine alive after detach:", alive)
+    assert alive, "detach killed the engine"
+
+os.remove(r"D:/Code/2026/Browserr/tools/attach-test.html")

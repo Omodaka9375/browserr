@@ -1,13 +1,13 @@
 name: ci
 on:
   push:
-    branches: [master, main]
+    branches: [main]
   pull_request:
 
 jobs:
   test:
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
     env:
       CARGO_TERM_COLOR: always
     steps:
@@ -23,7 +23,6 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             engine/target
-            chrome/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Setup python
@@ -33,14 +32,10 @@ jobs:
 
       - name: fmt + clippy + build + python test suite
         shell: pwsh
-        env:
-          # Headless engine tests only on CI (windowed-chrome tests need an
-          # interactive desktop session; run those locally with CI_WINDOWED=1).
-          CI_WINDOWED: "0"
         run: powershell -File scripts/ci.ps1
 
       - name: Release build smoke (engine; LTO build)
         shell: pwsh
         run: |
-          cargo build --release --manifest-path engine/Cargo.toml 2>&1 | Select-Object -Last 3
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          cargo build --release --manifest-path engine/Cargo.toml *> release-build.log
+          if ($LASTEXITCODE -ne 0) { Get-Content release-build.log -Tail 8; exit 1 }

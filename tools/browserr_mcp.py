@@ -6,7 +6,7 @@ Manages one engine per session (headless, ephemeral profile by default).
 Run:
     python browserr_mcp.py [--port 7412]   # or no args for headless mode
 
-With --port it attaches to a running chrome.exe --driver-port=N window
+With --port it attaches to a running engine started with --driver-port=N
 (computer-use mode); without it, it spawns its own headless engine.
 
 Tools:
@@ -69,21 +69,21 @@ TOOLS = [
     {
         "name": "browser_start",
         "description": "Start the browser. Headless by default; pass attach_port "
-                       "to drive a visible Browserr window started with "
-                       "--driver-port (computer-use mode). Pass token if "
-                       "the window was started with --driver-token.",
+                       "to attach to a running engine started with "
+                       "--driver-port (computer-use mode). Pass token if the "
+                       "engine was started with --driver-token.",
         "inputSchema": {"type": "object", "properties": {
             "attach_port": {"type": "integer",
-                            "description": "driver port of a running window"},
+                            "description": "driver port of a running engine"},
             "token": {"type": "string",
-                      "description": "driver auth token if the window was "
+                      "description": "driver auth token if the engine was "
                                       "started with --driver-token"}},
             "required": []},
     },
     {
         "name": "browser_stop",
         "description": "Stop the browser (detaches in computer-use mode without "
-                       "closing the window).",
+                       "stopping the engine).",
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
     {

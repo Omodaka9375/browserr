@@ -1,6 +1,6 @@
-# Local CI runner: same steps as .github/workflows/ci.yml (build both crates,
-# run the python test suite against the built binaries).
-# Usage: powershell -File scripts\ci.ps1   (CI_WINDOWED=1 to add windowed tests)
+# Local CI runner: same steps as .github/workflows/ci.yml (fmt + clippy gate,
+# engine build, python test suite).
+# Usage: powershell -File scripts\ci.ps1
 # NB: no $ErrorActionPreference='Stop' - pwsh 7.3+ turns native stderr lines
 # (cargo warnings) into terminating errors under it. Exit codes checked instead.
 $root = Split-Path $PSScriptRoot -Parent
@@ -9,37 +9,25 @@ Set-Location $root
 Write-Host "== fmt + clippy gate ==" -ForegroundColor Cyan
 cargo fmt --manifest-path engine\Cargo.toml -- --check *> fmt.log
 if ($LASTEXITCODE -ne 0) { Get-Content fmt.log -Tail 10; Write-Host "engine fmt FAILED" -ForegroundColor Red; exit 1 }
-cargo fmt --manifest-path chrome\Cargo.toml -- --check *> fmt.log
-if ($LASTEXITCODE -ne 0) { Get-Content fmt.log -Tail 10; Write-Host "chrome fmt FAILED" -ForegroundColor Red; exit 1 }
 cargo clippy --manifest-path engine\Cargo.toml -- -D warnings *> clippy-engine.log
 if ($LASTEXITCODE -ne 0) { Get-Content clippy-engine.log -Tail 10; Write-Host "engine clippy FAILED" -ForegroundColor Red; exit 1 }
-cargo clippy --manifest-path chrome\Cargo.toml -- -D warnings *> clippy-chrome.log
-if ($LASTEXITCODE -ne 0) { Get-Content clippy-chrome.log -Tail 10; Write-Host "chrome clippy FAILED" -ForegroundColor Red; exit 1 }
-Remove-Item fmt.log, clippy-engine.log, clippy-chrome.log -ErrorAction SilentlyContinue
+Remove-Item fmt.log, clippy-engine.log -ErrorAction SilentlyContinue
 
 Write-Host "== build (debug) ==" -ForegroundColor Cyan
 cargo build --manifest-path engine\Cargo.toml *> engine-build.log
-if ($LASTEXITCODE -ne 0) { Get-Content engine-build.log -Tail 8; exit 1 }
-cargo build --manifest-path chrome\Cargo.toml *> chrome-build.log
-if ($LASTEXITCODE -ne 0) { Get-Content chrome-build.log -Tail 8; exit 1 }
+if ($LASTEXITCODE -ne 0) { Get-Content engine-build.log -Tail 8; Write-Host "engine build FAILED" -ForegroundColor Red; exit 1 }
 
 $env:BROWSERR_ENGINE = "$root\engine\target\debug\engine.exe"
 
-# SDK tests: spawn their own engine via the Driver (ping/pong handshake).
+# SDK tests: each spawns its own engine via the Driver (ping/pong handshake)
+# or attaches to one it spawns with a driver port.
 $sdk_tests = @(
     "test_driver", "test_agent", "test_elements", "test_structure",
-    "test_watchdog", "test_features", "test_mcp", "test_scroll", "test_bind"
+    "test_watchdog", "test_features", "test_mcp", "test_scroll",
+    "test_bind", "test_attach", "test_hardening"
 )
-# Protocol tests: raw socket, expect an engine already listening on 7411;
-# ci.ps1 spawns one for them (a fresh engine per group, like the tests' own
-# docs say: never share 7411 between a dying and a booting engine).
+# Protocol tests: raw socket, expect a fresh engine listening on 7411.
 $raw_tests = @("test_input", "test_cursor_zoom", "test_close")
-# Windowed-chrome tests (attach/hardening/chrome-watchdog) need an
-# interactive desktop session; opt in locally with CI_WINDOWED=1.
-$win_tests = @()
-if ($env:CI_WINDOWED -eq "1") {
-    $win_tests = @("test_attach", "test_hardening", "test_chrome_watchdog")
-}
 
 function Run-Test($t) {
     Write-Host "-- $t" -ForegroundColor Cyan
@@ -52,7 +40,7 @@ function Run-Test($t) {
 }
 
 $failed = @()
-foreach ($t in $sdk_tests + $win_tests) {
+foreach ($t in $sdk_tests) {
     if (-not (Run-Test $t)) { $failed += $t }
 }
 
@@ -75,4 +63,4 @@ if ($failed.Count) {
     exit 1
 }
 Remove-Item "$root\*.log" -ErrorAction SilentlyContinue
-Write-Host "ALL GREEN ($($sdk_tests.Count + $raw_tests.Count + $win_tests.Count) tests)" -ForegroundColor Green
+Write-Host "ALL GREEN ($($sdk_tests.Count + $raw_tests.Count) tests)" -ForegroundColor Green

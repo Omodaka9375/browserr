@@ -37,6 +37,156 @@ const MAGIC: u32 = 0x46_52_4D_31; // FRM1
 const EV_MAGIC: u32 = 0x45_56_54_31; // EVT1
 const SHOT_MAGIC: u32 = 0x53_48_54_31; // SHT1 (screenshot)
 
+/// Commands an attached driver may send; validated before queueing.
+const DRIVER_CMDS: [&str; 14] = [
+    "navigate",
+    "back",
+    "forward",
+    "new_tab",
+    "activate",
+    "close_tab",
+    "input",
+    "wheel",
+    "key",
+    "eval",
+    "screenshot",
+    "zoom",
+    "ping",
+    "download",
+];
+
+/// Attached-driver hub (computer-use mode: `--driver-port=N`). Driver
+/// command lines are validated, queued, and drained by the main loop
+/// (which owns servo); engine events and SHT1 screenshot answers are
+/// mirrored to every attached driver. Optional `--driver-token=T`:
+/// drivers must send {"cmd":"auth","token":T} as their first line or
+/// the socket is dropped without receiving anything.
+struct DriverHub {
+    clients: std::sync::Mutex<Vec<std::net::TcpStream>>,
+    queue: std::sync::Mutex<std::collections::VecDeque<String>>,
+}
+
+static HUB: std::sync::OnceLock<DriverHub> = std::sync::OnceLock::new();
+
+impl DriverHub {
+    fn global() -> &'static DriverHub {
+        HUB.get_or_init(|| DriverHub {
+            clients: std::sync::Mutex::new(Vec::new()),
+            queue: std::sync::Mutex::new(std::collections::VecDeque::new()),
+        })
+    }
+
+    /// Queue a validated command line for the main loop to drain.
+    fn push(&self, line: &str) {
+        self.queue.lock().unwrap().push_back(line.to_string());
+    }
+
+    fn add_client(&self, stream: &std::net::TcpStream) {
+        if let Ok(clone) = stream.try_clone() {
+            let mut clients = self.clients.lock().unwrap();
+            clients.push(clone);
+            eprintln!("engine: driver attached ({} open)", clients.len());
+        }
+    }
+
+    /// Mirror framed bytes (EVT1/SHT1) to every attached driver; sockets
+    /// that went away are pruned. A 2s write timeout (set on accept)
+    /// bounds a wedged driver.
+    fn broadcast(&self, bytes: &[u8]) {
+        let mut clients = self.clients.lock().unwrap();
+        clients.retain_mut(|c| c.write_all(bytes).is_ok() && c.flush().is_ok());
+    }
+
+    fn has_clients(&self) -> bool {
+        !self.clients.lock().unwrap().is_empty()
+    }
+}
+
+/// Accept driver connections on 127.0.0.1:port; validate + queue their
+/// commands; drop unauthenticated sockets when a token is required.
+fn start_driver_listener(port: u16, token: Option<String>) {
+    std::thread::spawn(move || {
+        let listener = match std::net::TcpListener::bind(("127.0.0.1", port)) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("engine: driver port bind failed: {e}");
+                return;
+            }
+        };
+        eprintln!("engine: driver port listening on 127.0.0.1:{port}");
+        for client in listener.incoming() {
+            let Ok(stream) = client else { return };
+            let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(2)));
+            let hub = DriverHub::global();
+            let token = token.clone();
+            std::thread::spawn(move || driver_client_loop(stream, hub, token));
+        }
+    });
+}
+
+/// Read JSON command lines from one driver, validate, and queue the
+/// allowed ones for the main loop. First line must authenticate when a
+/// token is set. Authenticated sockets are registered for broadcasts.
+fn driver_client_loop(stream: std::net::TcpStream, hub: &DriverHub, token: Option<String>) {
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    let mut authed = token.is_none();
+    let mut registered = false;
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.len() > 8 << 20 {
+            eprintln!(
+                "engine: driver sent oversized line ({} bytes), dropping",
+                trimmed.len()
+            );
+            break;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        let Some(cmd) = v["cmd"].as_str() else {
+            continue;
+        };
+        if !authed {
+            let ok = cmd == "auth"
+                && v["token"]
+                    .as_str()
+                    .map(|t| t == token.as_deref().unwrap_or(""))
+                    .unwrap_or(false);
+            if ok {
+                authed = true;
+                registered = true;
+                eprintln!("engine: driver authenticated");
+                // Register for broadcasts only now: an unauthed socket gets
+                // no engine events or screenshot answers.
+                hub.add_client(reader.get_ref());
+                continue;
+            }
+            eprintln!("engine: driver failed auth, dropping connection");
+            break;
+        }
+        if !registered {
+            // No token required: register on the first command.
+            registered = true;
+            hub.add_client(reader.get_ref());
+        }
+        if !DRIVER_CMDS.contains(&cmd) {
+            eprintln!("engine: driver command rejected: {cmd}");
+            continue;
+        }
+        hub.push(trimmed);
+    }
+    eprintln!("engine: driver detached");
+}
+
 #[derive(Clone)]
 struct Pump(Arc<(Mutex<bool>, Condvar)>);
 
@@ -791,12 +941,27 @@ fn cleanup_ephemeral(dir: &Option<std::path::PathBuf>) {
 
 fn send_event(out: &mut impl Write, id: u64, json: &str) {
     let bytes = json.as_bytes();
-    out.write_all(&EV_MAGIC.to_le_bytes()).ok();
-    out.write_all(&id.to_le_bytes()).ok();
-    out.write_all(&(bytes.len() as u32).to_le_bytes()).ok();
-    out.write_all(&0u32.to_le_bytes()).ok();
-    out.write_all(bytes).ok();
+    let mut frame = Vec::with_capacity(20 + bytes.len());
+    frame.extend_from_slice(&EV_MAGIC.to_le_bytes());
+    frame.extend_from_slice(&id.to_le_bytes());
+    frame.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    frame.extend_from_slice(&0u32.to_le_bytes());
+    frame.extend_from_slice(bytes);
+    out.write_all(&frame).ok();
     let _ = out.flush();
+    // Mirror the event to every attached driver (computer-use mode).
+    let hub = DriverHub::global();
+    if hub.has_clients() {
+        hub.broadcast(&frame);
+    }
+}
+
+/// Mirror a framed SHT1 screenshot answer to attached drivers.
+fn broadcast_shot(bytes: &[u8]) {
+    let hub = DriverHub::global();
+    if hub.has_clients() {
+        hub.broadcast(bytes);
+    }
 }
 
 fn main() {
@@ -815,6 +980,8 @@ fn main() {
     let mut profile_dir = None;
     let mut adblock_list = None;
     let mut ephemeral = false;
+    let mut driver_port = None;
+    let mut driver_token = None;
     for a in std::env::args().skip(1) {
         if let Some(v) = a.strip_prefix("--user-agent=") {
             user_agent = Some(v.to_string());
@@ -824,6 +991,10 @@ fn main() {
             adblock_list = Some(std::path::PathBuf::from(v));
         } else if a == "--ephemeral" {
             ephemeral = true;
+        } else if let Some(v) = a.strip_prefix("--driver-port=") {
+            driver_port = v.parse::<u16>().ok();
+        } else if let Some(v) = a.strip_prefix("--driver-token=") {
+            driver_token = Some(v.to_string());
         }
     }
 
@@ -867,6 +1038,12 @@ fn main() {
     eprintln!("engine: chrome connected");
     let out_stream = stream.try_clone().expect("engine: clone stream");
     let mut reader = BufReader::new(stream);
+
+    // Computer-use mode: accept automation drivers on a second port. Opened
+    // AFTER the main client connects (drivers attach to a running engine).
+    if let Some(port) = driver_port {
+        start_driver_listener(port, driver_token);
+    }
 
     let pump = Pump(Arc::new((Mutex::new(false), Condvar::new())));
     let shared = Arc::new(Shared {
@@ -979,7 +1156,16 @@ fn main() {
 
         loop {
             let mut line = String::new();
-            match reader.read_line(&mut line) {
+            // Driver commands (computer-use mode) drain into the same
+            // dispatch as socket lines; the socket itself when none.
+            let queued = DriverHub::global().queue.lock().unwrap().pop_front();
+            let res = if let Some(q) = queued {
+                line.push_str(&q);
+                Ok(1_usize)
+            } else {
+                reader.read_line(&mut line)
+            };
+            match res {
                 Ok(0) => {
                     eprintln!("engine: chrome disconnected");
                     // Exit without running destructors: dropping live tabs would
@@ -1200,12 +1386,15 @@ fn main() {
                                             px.swap(0, 2);
                                         }
                                         frame_id += 1;
-                                        out.write_all(&SHOT_MAGIC.to_le_bytes()).ok();
-                                        out.write_all(&frame_id.to_le_bytes()).ok();
-                                        out.write_all(&current_size.width.to_le_bytes()).ok();
-                                        out.write_all(&current_size.height.to_le_bytes()).ok();
-                                        out.write_all(&bgra).ok();
+                                        let mut frame = Vec::with_capacity(20 + bgra.len());
+                                        frame.extend_from_slice(&SHOT_MAGIC.to_le_bytes());
+                                        frame.extend_from_slice(&frame_id.to_le_bytes());
+                                        frame.extend_from_slice(&current_size.width.to_le_bytes());
+                                        frame.extend_from_slice(&current_size.height.to_le_bytes());
+                                        frame.extend_from_slice(&bgra);
+                                        out.write_all(&frame).ok();
                                         let _ = out.flush();
+                                        broadcast_shot(&frame);
                                     }
                                 }
                             }

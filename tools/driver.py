@@ -8,21 +8,23 @@ Headless (spawn a bare engine):
     d.navigate("https://example.com"); d.wait_load(); d.wait_ready()
     print(d.eval_js("document.title"))
 
-Computer use (drive a real browser window; the UI keeps working):
-    chrome.exe --driver-port=7412 --profile=test
+Computer use (attach to a running engine's driver port):
+    engine.exe --ephemeral --driver-port=7412 --driver-token=secret
     from driver import Driver
-    d = Driver.attach(7412)
+    d = Driver.attach(7412, token="secret")
     d.navigate("https://example.com"); d.wait_ready()
-    w, h, bgra = d.screenshot()   # what the window shows
+    w, h, bgra = d.screenshot()
 
 Capabilities: navigate, wait_load/wait_ready, eval_js (results returned as
 JSON values), screenshot (BGRA buffer, save_png helper), click, move, wheel,
-key, type_text, new_tab, activate. Input coordinates are page-relative; in
-attach mode the page starts below the 40px toolbar.
+key, type_text, new_tab, activate, console capture, download, and
+selector-based element commands (click_element, set_value,
+wait_for_selector).
 
-The headless engine accepts exactly one connection (the chrome's), which is
-why the driver spawns its own engine there. The chrome's driver port accepts
-multiple drivers and mirrors engine events/screenshots to all of them.
+The engine's main port accepts exactly one client (the automation host);
+the driver port accepts multiple drivers and mirrors engine
+events/screenshots to all of them. With --driver-token, drivers must send
+{"cmd":"auth","token":...} as their first line.
 """
 import json
 import socket
@@ -72,14 +74,13 @@ class Driver:
     Two modes:
       - Headless (default): spawns engine.exe and talks to it directly.
       - Computer use: Driver.attach(port=N) connects to a running
-        chrome.exe --driver-port=N window instead - same API, but it drives
-        the visible browser (and the UI keeps working).
+        engine started with --driver-port=N instead - same API.
     """
 
     @classmethod
     def attach(cls, port=7412, log=None, token=None):
-        """Attach to a running Browserr window started with --driver-port=N.
-        If the window was started with --driver-token=T, pass token=T: it is
+        """Attach to a running engine started with --driver-port=N.
+        If the engine was started with --driver-token=T, pass token=T: it is
         sent as the auth line before anything else."""
         self = cls.__new__(cls)
         self._init_common(port, log=log)
