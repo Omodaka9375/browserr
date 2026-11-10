@@ -1,4 +1,4 @@
-# Browserr
+<h1><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icon.svg"><img src="docs/icon.svg" alt="Browserr" height="64" align="left" style="margin-right:16px"></picture>Browserr</h1>
 
 [![CI](https://github.com/Omodaka9375/browserr/actions/workflows/ci.yml/badge.svg)](https://github.com/Omodaka9375/browserr/actions/workflows/ci.yml)
 
