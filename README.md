@@ -232,5 +232,3 @@ Run the suite (fmt + clippy gate, build, tests):
 powershell -File scripts\ci.ps1
 ```
 
-A GitHub Actions workflow (`.github/workflows/ci.yml`) runs the same gate
-on every push. Engine logs go to `%TEMP%\browserr-engine.log`.
