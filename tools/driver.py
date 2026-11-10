@@ -88,18 +88,27 @@ class Driver:
         return self
 
     def __init__(self, engine_path=None, profile_dir=None, port=7411,
-                 width=1200, height=760, log=None):
+                 width=1200, height=760, log=None, ephemeral=False):
         self._init_common(port, log=log)
         self.width = width
         self.height = height
+        self.ephemeral = ephemeral
 
         engine_path = engine_path or os.environ.get(
             "BROWSERR_ENGINE",
             r"D:/Code/2026/Browserr/engine/target/debug/engine.exe")
         args = [engine_path]
-        if profile_dir:
+        if ephemeral:
+            # Throwaway profile under %TEMP%; the engine deletes it on exit.
+            args.append("--ephemeral")
+        elif profile_dir:
             args.append(f"--profile-dir={profile_dir}")
-        self.proc = subprocess.Popen(args, stderr=self._log or subprocess.DEVNULL)
+        # stdout MUST be devnull: in an MCP server the engine would inherit
+        # the JSON-RPC stdout pipe and corrupt it (chrome does the same:
+        # Stdio::null()). The engine never legitimately writes to stdout.
+        self.proc = subprocess.Popen(args, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=self._log or subprocess.DEVNULL)
 
         last = None
         for _ in range(100):
@@ -265,8 +274,22 @@ class Driver:
     def activate(self, tab: int) -> None:
         self.cmd({"cmd": "activate", "tab": tab})
 
-    def close(self) -> None:
-        """Detach (attach mode leaves the browser running) or stop the engine."""
+    def ping(self, timeout=5.0):
+        """Health check: returns {'tabs': N, 'active': A} or raises TimeoutError.
+        Works in both modes (headless and attach)."""
+        req = self._next_id
+        self._next_id += 1
+        self.cmd({"cmd": "ping", "tab": 0, "id": req})
+        ev = self.wait_for(lambda e: e.get("ev") == "pong" and e.get("id") == req, timeout)
+        return {"tabs": ev.get("tabs"), "active": ev.get("active")}
+
+    def close(self, timeout=5.0) -> None:
+        """Detach (attach mode leaves the browser running) or stop the engine.
+
+        Headless mode: closing the socket is the engine's normal shutdown path
+        (it exits when its single client disconnects, cleaning up any ephemeral
+        profile); wait briefly for that before falling back to a kill.
+        """
         self._stop = True
         if self.sock:
             try:
@@ -274,9 +297,130 @@ class Driver:
             except OSError:
                 pass
         if self.proc:
-            self.proc.kill()
+            try:
+                self.proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
         if self._log:
             self._log.close()
+
+    # -- SDK helpers (page extraction for agents) ---------------------------
+
+    READ_JS = r"""(() => {
+        const pick = (el) => {
+            // Skip invisible branches entirely.
+            const st = getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return [];
+            const out = [];
+            for (const n of el.childNodes) {
+                if (n.nodeType === 3) {
+                    const t = n.textContent.replace(/\s+/g, ' ').trim();
+                    if (t) out.push(t);
+                } else if (n.nodeType === 1) {
+                    const tag = n.tagName;
+                    if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEMPLATE') continue;
+                    const inner = pick(n);
+                    if (tag === 'A' && inner.length) {
+                        out.push('[' + inner.join(' ') + '](' + n.href + ')');
+                    } else if ((tag === 'P' || tag === 'LI' || tag === 'H1' || tag === 'H2' || tag === 'H3' || tag === 'H4' || tag === 'BLOCKQUOTE') && inner.length) {
+                        out.push('\n\n' + inner.join(' '));
+                    } else {
+                        out.push(...inner);
+                    }
+                }
+            }
+            return out;
+        };
+        return [document.title, pick(document.body).join(' ')];
+    })()"""
+
+    LINKS_JS = r"""(() => {
+        const out = [];
+        for (const a of document.links) {
+            const r = a.getBoundingClientRect();
+            if (!r.width || !r.height) continue;
+            const text = a.innerText.replace(/\s+/g, ' ').trim() || a.href;
+            out.push({text: text, href: a.href, x: r.x, y: r.y, w: r.width, h: r.height});
+        }
+        return out;
+    })()"""
+
+    FORMS_JS = r"""(() => {
+        const visible = (el) => {
+            const st = getComputedStyle(el);
+            return st.display !== 'none' && st.visibility !== 'hidden';
+        };
+        const fields = (form) => {
+            const out = [];
+            for (const i of form.querySelectorAll('input, textarea, select')) {
+                if (!visible(i)) continue;
+                const r = i.getBoundingClientRect();
+                out.push({
+                    tag: i.tagName.toLowerCase(), type: i.type || '',
+                    name: i.name || '', id: i.id || '',
+                    placeholder: i.placeholder || '',
+                    value: i.value || '',
+                    x: r.x, y: r.y, w: r.width, h: r.height,
+                });
+            }
+            return out;
+        };
+        const out = [];
+        for (const f of document.forms) {
+            const fs = fields(f);
+            if (!fs.length) continue;
+            out.push({action: f.action || location.href, method: f.method, fields: fs});
+        }
+        // Password fields outside any <form> (common in SPA logins).
+        for (const p of document.querySelectorAll('input[type=password]')) {
+            if (!p.closest('form') && visible(p)) {
+                const r = p.getBoundingClientRect();
+                out.push({action: location.href, method: 'none', fields: [{
+                    tag: 'input', type: 'password', name: p.name || '', id: p.id || '',
+                    placeholder: p.placeholder || '', value: '',
+                    x: r.x, y: r.y, w: r.width, h: r.height,
+                }]});
+            }
+        }
+        return out;
+    })()"""
+
+    def read_page(self, tab: int = 0, timeout=15.0):
+        """Extract the page as (title, markdown-ish text): links become
+        [label](href), paragraphs get blank-line separation. Token-cheap."""
+        title, text = self.eval_js(self.READ_JS, tab, timeout)
+        return title, text
+
+    def links(self, tab: int = 0, timeout=10.0):
+        """Visible links with their viewport rectangles (for click targeting)."""
+        return self.eval_js(self.LINKS_JS, tab, timeout) or []
+
+    def forms(self, tab: int = 0, timeout=10.0):
+        """Visible forms and their fields, with viewport rectangles."""
+        return self.eval_js(self.FORMS_JS, tab, timeout) or []
+
+    def click_text(self, text, tab: int = 0, timeout=5.0):
+        """Click the first visible link whose label contains `text`.
+        Returns the link's (x, y) center, or None if no match."""
+        text_l = text.lower()
+        for l in self.links(tab, timeout):
+            if text_l in (l.get("text") or "").lower():
+                x = l["x"] + l["w"] / 2
+                y = l["y"] + l["h"] / 2
+                self.click(x, y, tab)
+                return x, y
+        return None
+
+    def fill(self, name_or_id, value, tab: int = 0, timeout=10.0):
+        """Set a form field by name/id and fire input+change (framework-safe).
+        Returns True if a field was found and filled."""
+        js = ("((()=>{const el=document.getElementsByName(%s)[0]"
+              "||document.getElementById(%s);"
+              "if(!el)return false;el.focus();el.value=%s;"
+              "el.dispatchEvent(new Event('input',{bubbles:true}));"
+              "el.dispatchEvent(new Event('change',{bubbles:true}));return true;})())"
+              % (json.dumps(name_or_id), json.dumps(name_or_id), json.dumps(value)))
+        return bool(self.eval_js(js, tab, timeout))
 
 
 if __name__ == "__main__":

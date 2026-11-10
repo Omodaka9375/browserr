@@ -17,8 +17,10 @@
 //! Options: --user-agent=STRING overrides the HTTP user agent (from settings.json).
 //!           --profile-dir=PATH gives Servo a per-profile config/storage dir.
 //!           --adblock-list=PATH enables request blocking against an EasyList-format file.
+//!           --ephemeral uses a throwaway profile dir under %TEMP% (deleted on exit).
 //! Automation: eval with an "id" reports {"ev":"evalresult","tab","id","value"};
 //! {"cmd":"screenshot","tab":N} answers with a SHT1 frame (magic, id, w, h, w*h*4 BGRA).
+//! {"cmd":"ping","id":N} answers {"ev":"pong","id":N,"tabs":K,"active":A} (health check).
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use servo::RenderingContext;
@@ -708,6 +710,29 @@ fn map_key(name: &str, text: &str, mods: u8, down: bool) -> Option<servo::InputE
     Some(servo::InputEvent::Keyboard(servo::KeyboardEvent::new(ev)))
 }
 
+/// Remove the ephemeral profile dir (best effort) before an engine exit.
+/// Servo's background threads still hold SQLite handles (clientstorage) while
+/// the process lives, so the in-process delete can race and fail. Belt and
+/// braces: try now, and leave a one-shot scheduled task that waits for our
+/// pid to exit and deletes afterwards.
+fn cleanup_ephemeral(dir: &Option<std::path::PathBuf>) {
+    if let Some(d) = dir {
+        let _ = std::fs::remove_dir_all(d);
+        // Detached helper: powershell waits for THIS pid to die, then deletes.
+        let pid = std::process::id();
+        let script = format!(
+            "$p = Get-Process -Id {pid} -ErrorAction SilentlyContinue; \
+             if ($p) {{ Wait-Process -Id {pid} -ErrorAction SilentlyContinue }}; \
+             Remove-Item -LiteralPath '{}' -Recurse -Force -ErrorAction SilentlyContinue",
+            d.display()
+        );
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
+            .spawn();
+        eprintln!("engine: ephemeral profile removed ({})", d.display());
+    }
+}
+
 fn send_event(out: &mut impl Write, id: u64, json: &str) {
     let bytes = json.as_bytes();
     out.write_all(&EV_MAGIC.to_le_bytes()).ok();
@@ -733,6 +758,7 @@ fn main() {
     let mut user_agent = None;
     let mut profile_dir = None;
     let mut adblock_list = None;
+    let mut ephemeral = false;
     for a in std::env::args().skip(1) {
         if let Some(v) = a.strip_prefix("--user-agent=") {
             user_agent = Some(v.to_string());
@@ -740,8 +766,23 @@ fn main() {
             profile_dir = Some(std::path::PathBuf::from(v));
         } else if let Some(v) = a.strip_prefix("--adblock-list=") {
             adblock_list = Some(std::path::PathBuf::from(v));
+        } else if a == "--ephemeral" {
+            ephemeral = true;
         }
     }
+
+    // Ephemeral profiles: a unique throwaway dir under %TEMP%, removed when
+    // the engine exits through its normal paths (agents get free per-run
+    // isolation). A hard kill or crash can leave it behind; the next run
+    // with the same pid and the OS temp cleaner take care of that.
+    let ephemeral_dir: Option<std::path::PathBuf> = if ephemeral {
+        let dir = std::env::temp_dir()
+            .join(format!("browserr-ephemeral-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir); // a crashed predecessor
+        Some(dir)
+    } else {
+        None
+    };
 
     // Startup probe: --probe-shared tests Pool::new before anything else.
     if std::env::args().any(|a| a == "--probe-shared") {
@@ -783,7 +824,8 @@ fn main() {
     });
 
     let mut opts = servo::Opts::default();
-    if let Some(dir) = profile_dir {
+    // Ephemeral wins over an explicit --profile-dir (throwaway wins by intent).
+    if let Some(dir) = ephemeral_dir.clone().or(profile_dir) {
         eprintln!("engine: profile dir {}", dir.display());
         opts.config_dir = Some(dir);
     }
@@ -887,6 +929,7 @@ fn main() {
                     eprintln!("engine: chrome disconnected");
                     // Exit without running destructors: dropping live tabs would
                     // trip the surfman surface assertion (cosmetic noise).
+                    cleanup_ephemeral(&ephemeral_dir);
                     std::process::exit(0);
                 }
                 Ok(_) => {
@@ -907,7 +950,10 @@ fn main() {
                                             Some(t) => {
                                                 tabs.insert(tab_id, t);
                                             }
-                                            None => std::process::exit(0),
+                                            None => {
+                                                cleanup_ephemeral(&ephemeral_dir);
+                                                std::process::exit(0);
+                                            }
                                         }
                                     }
                                     let tab = tabs.get_mut(&tab_id).unwrap();
@@ -922,7 +968,10 @@ fn main() {
                                         Some(t) => {
                                             tabs.insert(tab_id, t);
                                         }
-                                        None => std::process::exit(0),
+                                        None => {
+                                            cleanup_ephemeral(&ephemeral_dir);
+                                            std::process::exit(0);
+                                        },
                                     }
                                 }
                             }
@@ -932,7 +981,10 @@ fn main() {
                                         Some(t) => {
                                             tabs.insert(tab_id, t);
                                         }
-                                        None => std::process::exit(0),
+                                        None => {
+                                            cleanup_ephemeral(&ephemeral_dir);
+                                            std::process::exit(0);
+                                        },
                                     }
                                 }
                                 eprintln!("engine: activate tab {tab_id}");
@@ -1171,6 +1223,21 @@ fn main() {
                                     }
                                 }
                             }
+                            Some("ping") => {
+                                // Health check for automation drivers: answered
+                                // inline with an event, no page involvement.
+                                let req = v["id"].as_u64().unwrap_or(0);
+                                let tabs_n = tabs.len();
+                                let active = shared.active.load(Ordering::SeqCst);
+                                event_id += 1;
+                                send_event(
+                                    &mut out,
+                                    event_id,
+                                    &format!(
+                                        "{{\"ev\":\"pong\",\"tab\":{tab_id},\"id\":{req},\"tabs\":{tabs_n},\"active\":{active}}}"
+                                    ),
+                                );
+                            }
                             Some("zoom") => {
                                 // Page zoom (Ctrl+wheel in the chrome); overrides
                                 // the webview's current page zoom.
@@ -1209,7 +1276,10 @@ fn main() {
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut => break,
-                Err(_) => std::process::exit(0),
+                Err(_) => {
+                    cleanup_ephemeral(&ephemeral_dir);
+                    std::process::exit(0);
+                }
             }
         }
 

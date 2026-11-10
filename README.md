@@ -168,6 +168,25 @@ engine finishes booting - wait for the first `url` event before navigating
 (`tools/test_attach.py` shows the pattern). See `tools/test_driver.py` and
 `tools/test_attach.py` for complete examples.
 
+## Agent browser (MCP)
+
+Browserr doubles as an agent browser: `tools/browserr_mcp.py` is a Model
+Context Protocol server (stdlib only, stdio transport) exposing 13 tools -
+start/stop/ping, navigate, read (token-cheap markdown-ish extraction),
+links/forms with viewport geometry, click/click_text/fill/key, screenshot,
+tabs. Any MCP-capable agent can drive it with zero integration code:
+
+```text
+python tools/browserr_mcp.py            # headless, ephemeral profile
+python tools/browserr_mcp.py --port 7412  # drive a visible --driver-port window
+```
+
+Reliability pieces for unattended runs: `ping` health check (tab count +
+active tab over the same socket), `--ephemeral` engine flag (throwaway profile
+under %TEMP%, deleted when the engine exits - a detached helper finishes the
+delete after servo releases its SQLite handles), and graceful shutdown on
+socket close (driver.close() waits for the engine to exit instead of killing).
+
 ## Passwords
 
 Passwords are stored per profile in the Windows Credential Manager (encrypted
