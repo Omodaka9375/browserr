@@ -1,0 +1,54 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Same gate as CI (fmt + clippy + build + render-free protocol tests;
+      # GitHub runners are GPU-less, see the comment in ci.yml).
+      - name: Gate (fmt + clippy + build + gpu-less test suite)
+        shell: pwsh
+        env:
+          CI_GPULESS: "1"
+        run: powershell -File scripts/ci.ps1
+
+      - name: Package release zip
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: powershell -File scripts/package.ps1
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: browserr-*-windows-x64.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: false

@@ -1,298 +1,757 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Browserr — headless browser engine for AI agents</title>
-<meta name="description" content="A Servo-based, headless browser engine for AI agents. One binary, one crypto stack, a protocol you can audit in an afternoon.">
-<link rel="icon" type="image/svg+xml" href="icon.svg">
-<meta property="og:image" content="icon.svg">
-<meta property="og:title" content="Browserr — headless browser engine for AI agents">
-<meta property="og:description" content="A Servo-based, headless browser engine for AI agents. One binary, one crypto stack, a protocol you can audit in an afternoon.">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230b0e14'/><path d='M20 30 L50 55 L80 30 M20 70 L50 45 L80 70' stroke='%234f8cff' stroke-width='10' fill='none' stroke-linecap='round'/></svg>">
-<style>
-  :root {
-    --bg: #0b0e14;
-    --bg2: #11151f;
-    --card: #161b27;
-    --line: #232a3a;
-    --text: #d8dee9;
-    --dim: #8b93a5;
-    --acc: #4f8cff;
-    --acc2: #39d98a;
-    --warn: #ffb454;
-    --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
-  }
-  * { box-sizing: border-box; margin: 0; }
-  html { scroll-behavior: smooth; }
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font: 16px/1.65 system-ui, "Segoe UI", sans-serif;
-    -webkit-font-smoothing: antialiased;
-  }
-  a { color: var(--acc); text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  .wrap { max-width: 1000px; margin: 0 auto; padding: 0 24px; }
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Browserr — headless browser engine for AI agents</title>
+  <meta name="description" content="A Servo-based headless browser engine for AI agents. One binary, one crypto stack, a 15-command protocol you can audit in an afternoon. No UI, no CDP, no Chromium." />
+  <meta name="theme-color" content="#ffffff" />
 
-  /* header */
-  header { border-bottom: 1px solid var(--line); }
-  nav {
-    display: flex; align-items: center; gap: 28px;
-    padding: 18px 0; font-size: 14px;
-  }
-  nav .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--text); }
-  nav .logo svg { display: block; }
-  nav .spacer { flex: 1; }
-  nav a.pill {
-    border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px;
-    color: var(--text);
-  }
-  nav a.pill:hover { border-color: var(--acc); text-decoration: none; }
+  <!-- Open Graph / Twitter -->
+  <meta property="og:title" content="Browserr — headless browser engine for AI agents" />
+  <meta property="og:description" content="One binary, one crypto stack, a protocol you can audit in an afternoon. No UI, no CDP, no Chromium." />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="icon.svg" />
+  <meta property="og:url" content="https://omodaka9375.github.io/browserr/" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Browserr — headless browser engine for AI agents" />
+  <meta name="twitter:description" content="A Servo-based headless browser engine for AI agents. MCP-native, 15-command protocol." />
 
-  /* hero */
-  .hero { padding: 96px 0 72px; text-align: center; }
-  .hero .badges { display: flex; gap: 8px; justify-content: center; margin-bottom: 28px; flex-wrap: wrap; }
-  .hero h1 {
-    font-size: clamp(38px, 6vw, 60px); line-height: 1.08; font-weight: 800;
-    letter-spacing: -0.02em;
-    background: linear-gradient(180deg, #fff, #9fb2d8);
-    -webkit-background-clip: text; background-clip: text; color: transparent;
-  }
-  .hero p.sub {
-    color: var(--dim); font-size: 19px; max-width: 640px; margin: 22px auto 34px;
-  }
-  .hero p.sub b { color: var(--text); font-weight: 600; }
-  .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
-  .cta a {
-    padding: 12px 22px; border-radius: 10px; font-weight: 600; font-size: 15px;
-  }
-  .cta a.primary { background: var(--acc); color: #04101f; }
-  .cta a.primary:hover { background: #6ea0ff; text-decoration: none; }
-  .cta a.ghost { border: 1px solid var(--line); color: var(--text); }
-  .cta a.ghost:hover { border-color: var(--acc); text-decoration: none; }
+  <link rel="icon" type="image/svg+xml" href="icon.svg" />
+  <link rel="apple-touch-icon" href="icon.svg" />
 
-  /* terminal window */
-  .term {
-    margin: 56px auto 0; max-width: 780px; text-align: left;
-    border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
-    background: var(--bg2); box-shadow: 0 24px 60px rgba(0,0,0,.45);
-  }
-  .term .bar {
-    display: flex; align-items: center; gap: 8px; padding: 11px 14px;
-    border-bottom: 1px solid var(--line);
-  }
-  .term .bar i { width: 11px; height: 11px; border-radius: 50%; background: var(--line); }
-  .term .bar i:nth-child(1) { background: #ff5f57; }
-  .term .bar i:nth-child(2) { background: #febc2e; }
-  .term .bar i:nth-child(3) { background: #28c840; }
-  .term pre {
-    font: 13.5px/1.7 var(--mono); padding: 20px 22px; overflow-x: auto;
-    color: #a9b4c8;
-  }
-  .k { color: var(--acc); }      /* keyword/cmd */
-  .s { color: var(--acc2); }     /* string */
-  .c { color: #565f75; }         /* comment */
-  .r { color: var(--warn); }     /* result */
+  <style>
+    /* ————————————————————————————————————————
+       browserr — monochrome editorial system
+       one ink, one paper, hairline rules, tabular grids
+       (fits the kai page language; the icon is the only hue)
+       ———————————————————————————————————————— */
 
-  /* sections */
-  section { padding: 72px 0; border-top: 1px solid var(--line); }
-  h2 {
-    font-size: 26px; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 10px;
-  }
-  .section-sub { color: var(--dim); max-width: 620px; margin-bottom: 40px; }
+    :root {
+      color-scheme: light dark;
+      /* Palette: ink / paper / steps between. No hue anywhere. */
+      --ink:       #111111;
+      --ink-2:     #333333;
+      --ink-3:     #666666;
+      --ink-4:     #999999;
+      --paper:     #ffffff;
+      --paper-2:   #f4f4f2;   /* slight warm cast, avoids clinical white */
+      --paper-3:   #ececea;
+      --rule:      #d9d9d6;
+      --rule-dark: #111111;
+      --sel:       #111111;   /* selection = inverted */
+      --sel-text:  #ffffff;
+      --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, "Times New Roman", serif;
+      --sans:  "Helvetica Neue", Helvetica, Inter, "Segoe UI", Arial, sans-serif;
+      --mono:  ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      --max: 1060px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-mode="light"]) {
+        --ink:      #e8e8e6;
+        --ink-2:    #c8c8c6;
+        --ink-3:    #909090;
+        --ink-4:    #6a6a6a;
+        --paper:    #101010;
+        --paper-2:  #171717;
+        --paper-3:  #202020;
+        --rule:     #333333;
+        --rule-dark:#e8e8e6;
+        --sel:      #e8e8e6;
+        --sel-text: #101010;
+      }
+    }
+    html[data-mode="dark"] {
+      color-scheme: dark;
+      --ink:      #e8e8e6;
+      --ink-2:    #c8c8c6;
+      --ink-3:    #909090;
+      --ink-4:    #6a6a6a;
+      --paper:    #101010;
+      --paper-2:  #171717;
+      --paper-3:  #202020;
+      --rule:     #333333;
+      --rule-dark:#e8e8e6;
+      --sel:      #e8e8e6;
+      --sel-text: #101010;
+    }
+    html[data-mode="light"] { color-scheme: light; }
 
-  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
-  .card {
-    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
-    padding: 22px 24px;
-  }
-  .card h3 { font-size: 16px; font-weight: 650; margin-bottom: 8px; }
-  .card h3 .tag {
-    font: 11px var(--mono); color: var(--acc); border: 1px solid #24406e;
-    border-radius: 5px; padding: 1px 7px; margin-right: 8px; vertical-align: 2px;
-  }
-  .card p { color: var(--dim); font-size: 14.5px; }
-  .card code { font: 13px var(--mono); color: var(--acc2); background: #0e1320; padding: 1px 5px; border-radius: 4px; }
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    ::selection { background: var(--sel); color: var(--sel-text); }
+    html { scroll-behavior: smooth; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+    body {
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 16px;
+      line-height: 1.55;
+      overflow-x: hidden;
+    }
+    a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+    a:hover { text-decoration-thickness: 2px; }
+    img { display: block; max-width: 100%; height: auto; }
+    code { font-family: var(--mono); font-size: 0.85em; }
+    :focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
 
-  /* stats strip */
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; }
-  .stat { text-align: center; padding: 26px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
-  .stat .n { font: 700 30px/1.1 var(--mono); color: var(--acc); }
-  .stat .l { color: var(--dim); font-size: 13px; margin-top: 6px; }
+    .skip {
+      position: absolute; left: -9999px; top: 0; z-index: 200;
+      background: var(--ink); color: var(--paper);
+      font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase;
+      padding: 10px 16px; border: 1px solid var(--rule-dark);
+    }
+    .skip:focus { left: 0; }
 
-  /* protocol table */
-  table { width: 100%; border-collapse: collapse; font: 14px var(--mono); }
-  th { text-align: left; color: var(--dim); font-weight: 500; font-size: 12.5px; text-transform: uppercase; letter-spacing: .08em; padding: 10px 14px; border-bottom: 1px solid var(--line); }
-  td { padding: 9px 14px; border-bottom: 1px solid #1a2130; color: #b9c3d4; }
-  td:first-child { color: var(--acc); white-space: nowrap; }
-  td.desc { color: var(--dim); font-family: system-ui; font-size: 14px; }
-  .tbl { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg2); }
+    .wrap { max-width: var(--max); margin: 0 auto; padding: 0 clamp(20px, 4vw, 48px); }
 
-  /* comparison */
-  .cmp { width: 100%; border-collapse: collapse; font: 14.5px system-ui; }
-  .cmp th, .cmp td { padding: 12px 14px; border-bottom: 1px solid #1a2130; text-align: left; }
-  .cmp th { color: var(--dim); font-size: 12.5px; text-transform: uppercase; letter-spacing: .08em; }
-  .cmp td { color: #b9c3d4; }
-  .cmp .yes { color: var(--acc2); font-weight: 600; }
-  .cmp .no { color: #565f75; }
-  .cmp .us { color: var(--acc); font-weight: 700; }
+    /* ————— top rule ————— */
+    .topbar { border-bottom: 1px solid var(--rule); font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+    .topbar .wrap { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding-top: 10px; padding-bottom: 10px; }
+    .topbar a { color: var(--ink-2); text-decoration: none; }
+    .topbar a:hover { color: var(--ink); text-decoration: underline; }
+    .topbar .brand { color: var(--ink); font-weight: 700; }
+    .topbar .brand img { display: inline-block; width: 13px; height: 13px; vertical-align: -2px; margin-right: 6px; }
+    .topbar-links { display: flex; gap: 14px; }
 
-  footer { padding: 40px 0 60px; border-top: 1px solid var(--line); color: var(--dim); font-size: 14px; }
-  footer .wrap { display: flex; gap: 20px; flex-wrap: wrap; justify-content: space-between; }
-</style>
+    /* ————— masthead ————— */
+    .masthead { border-bottom: 3px solid var(--rule-dark); }
+    .masthead .wrap { padding-top: clamp(56px, 10vh, 110px); padding-bottom: clamp(36px, 6vh, 64px); }
+    .masthead h1 {
+      font-family: var(--mono);
+      font-size: clamp(2.6rem, 8vw, 5.2rem);
+      line-height: 1;
+      font-weight: 700;
+      letter-spacing: -0.04em;
+      margin: 0 0 20px;
+      display: flex; align-items: center; gap: 0.22em; flex-wrap: wrap;
+    }
+    .masthead h1 img { width: 0.82em; height: 0.82em; }
+    .masthead h1 .cursor { color: var(--ink-4); font-weight: 400; }
+    .masthead .dek {
+      font-family: var(--serif);
+      font-size: clamp(1.15rem, 2.4vw, 1.45rem);
+      line-height: 1.4;
+      max-width: 46ch;
+      margin: 0 0 32px;
+      color: var(--ink-2);
+    }
+    .masthead .dek strong { color: var(--ink); font-weight: 600; }
+
+    .mast-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 40px; }
+    .btn-primary, .btn-secondary {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-family: var(--mono); font-size: 0.72rem; font-weight: 700;
+      letter-spacing: 0.12em; text-transform: uppercase;
+      padding: 12px 22px; cursor: pointer; text-decoration: none;
+    }
+    .btn-primary { background: var(--ink); color: var(--paper); border: 1px solid var(--ink); }
+    .btn-primary:hover { background: var(--paper); color: var(--ink); text-decoration: none; }
+    .btn-secondary { background: transparent; color: var(--ink); border: 1px solid var(--ink-3); }
+    .btn-secondary:hover { border-color: var(--ink); text-decoration: none; }
+
+    /* Spec strip */
+    .specs {
+      display: flex;
+      flex-wrap: wrap;
+      align-content: flex-start;
+      border-top: 1px solid var(--rule);
+      font-family: var(--mono);
+      margin: 0;
+    }
+    .specs > div {
+      display: flex;
+      align-items: baseline;
+      gap: 9px;
+      padding: 13px 28px 13px 0;
+      margin-right: 28px;
+      border-bottom: 1px solid var(--rule);
+      border-right: 1px solid var(--rule);
+      white-space: nowrap;
+    }
+    .specs > div:last-child { border-right: 0; margin-right: 0; padding-right: 0; }
+    .specs dt {
+      font-size: 0.64rem;
+      font-weight: 700;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+      color: var(--ink-4);
+    }
+    .specs dd { margin: 0; font-size: 0.88rem; font-weight: 600; color: var(--ink); }
+
+    /* ————— sections ————— */
+    section { border-bottom: 1px solid var(--rule); }
+    section .wrap { padding-top: clamp(44px, 7vw, 76px); padding-bottom: clamp(44px, 7vw, 76px); }
+    .kicker {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      margin: 0 0 8px;
+      color: var(--ink);
+    }
+    .kicker::before { content: "§ "; color: var(--ink-4); }
+    h2 {
+      font-family: var(--serif);
+      font-size: clamp(1.7rem, 3.4vw, 2.3rem);
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      line-height: 1.15;
+      margin: 0 0 14px;
+    }
+    .lead { font-size: 1.02rem; max-width: 68ch; color: var(--ink-2); margin: 0 0 32px; }
+
+    .sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 24px; margin-bottom: 14px; }
+    .sec-head h2 { margin: 0; }
+    .sec-no { font-family: var(--mono); font-size: 0.75rem; color: var(--ink-4); white-space: nowrap; }
+
+    /* ————— component table (not cards) ————— */
+    table.blocks { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+    table.blocks td, table.blocks th { text-align: left; vertical-align: top; padding: 18px 20px 18px 0; border-bottom: 1px solid var(--rule); }
+    table.blocks th {
+      font-family: var(--mono); font-weight: 700; font-size: 0.66rem;
+      letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-4);
+      padding-top: 0;
+    }
+    table.blocks td:first-child { font-family: var(--mono); font-size: 0.8rem; font-weight: 700; white-space: nowrap; color: var(--ink); padding-right: 32px; }
+    table.blocks td { color: var(--ink-2); }
+    table.blocks td b { color: var(--ink); font-weight: 600; }
+    @media (max-width: 720px) {
+      table.blocks, table.blocks tbody, table.blocks tr, table.blocks td, table.blocks th { display: block; width: 100%; }
+      table.blocks th { display: none; }
+      table.blocks td:first-child { padding: 16px 0 4px; white-space: normal; }
+    }
+
+    /* ————— terminal mock / animation ————— */
+    .term {
+      background: var(--paper-2); border: 1px solid var(--rule-dark);
+      overflow: hidden; max-width: 680px; margin: 44px 0 0;
+      text-align: left; position: relative;
+    }
+    .term-bar {
+      display: flex; align-items: center; gap: 7px; padding: 10px 14px;
+      background: var(--paper-3); border-bottom: 1px solid var(--rule);
+      font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3);
+    }
+    .term-dot { width: 9px; height: 9px; border-radius: 50%; border: 1px solid var(--ink-3); background: transparent; }
+    .term-title { margin-left: 10px; }
+    .term-body {
+      padding: 18px 20px; font-family: var(--mono); font-size: 13px; line-height: 1.75;
+      min-height: 268px; color: var(--ink-3);
+    }
+    .t-line { white-space: pre-wrap; word-break: break-word; }
+    .t-prompt { color: var(--ink); }
+    .t-cmd { color: var(--ink-2); }
+    .t-out { color: var(--ink-3); }
+    .t-ok { color: var(--ink); }
+    .caret {
+      display: inline-block; width: 7px; height: 15px; vertical-align: -2px;
+      background: var(--ink); animation: blink 1.1s steps(1) infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+    .t-tool {
+      opacity: 0; transform: translateY(4px);
+      transition: opacity 0.35s var(--ease, ease), transform 0.35s var(--ease, ease);
+    }
+    .t-tool.in { opacity: 1; transform: none; }
+    .t-row { display: flex; align-items: center; gap: 9px; }
+    .t-chip {
+      flex: none; width: 20px; height: 20px; display: grid; place-items: center;
+      font-size: 11px; background: var(--paper); border: 1px solid var(--rule); color: var(--ink-2);
+    }
+    .t-name { color: var(--ink); }
+    .t-arg { color: var(--ink-3); }
+    .t-diff { margin: 2px 0 6px 29px; border-left: 2px solid var(--rule-dark); padding-left: 12px; font-size: 12.5px; }
+    .t-add { color: var(--ink); }
+    .t-del { color: var(--ink-3); }
+    .thinking-dots::after { content: '…'; animation: dots 1.2s steps(4) infinite; }
+    @keyframes dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '…'; } }
+
+    /* ————— mode switcher (paper / ink) ————— */
+    .modebar { display: flex; align-items: center; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
+    .modebar > span { font-family: var(--mono); font-size: 0.62rem; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-4); }
+    .modebtn {
+      font-family: var(--mono); font-size: 0.62rem; font-weight: 700;
+      letter-spacing: 0.14em; text-transform: uppercase;
+      background: var(--paper); color: var(--ink-2);
+      border: 1px solid var(--rule-dark); padding: 7px 14px; cursor: pointer;
+    }
+    .modebtn:hover { background: var(--paper-2); }
+    .modebtn[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+
+    /* ————— protocol marquee ————— */
+    .marquee {
+      overflow: hidden; margin-top: 8px; position: relative;
+      mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+      -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+    }
+    .marquee-track { display: flex; gap: 12px; width: max-content; animation: scroll 34s linear infinite; }
+    .marquee:hover .marquee-track { animation-play-state: paused; }
+    @keyframes scroll { to { transform: translateX(-50%); } }
+    .chip {
+      background: var(--paper); border: 1px solid var(--rule);
+      font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase;
+      padding: 9px 16px; color: var(--ink-2); white-space: nowrap;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    .chip:hover { border-color: var(--ink); color: var(--ink); }
+
+    /* ————— stats strip ————— */
+    .stats dd { font-size: 1.5rem; letter-spacing: -0.02em; }
+
+    /* ————— note callouts ————— */
+    .note {
+      border-left: 3px solid var(--rule-dark);
+      padding: 4px 0 4px 22px;
+      margin: 28px 0 0;
+      max-width: 72ch;
+    }
+    .note p { margin: 0; font-size: 0.95rem; color: var(--ink-2); }
+    .note b { color: var(--ink); }
+
+    /* ————— install ————— */
+    .os-tabs { display: flex; flex-wrap: wrap; width: max-content; max-width: 100%; border: 1px solid var(--rule-dark); }
+    .os-tab {
+      border: 0; border-right: 1px solid var(--rule-dark);
+      background: var(--paper); color: var(--ink-2);
+      font-family: var(--mono); font-size: 0.7rem; font-weight: 700;
+      letter-spacing: 0.1em; text-transform: uppercase;
+      padding: 12px 20px; cursor: pointer;
+    }
+    .os-tab:last-child { border-right: 0; }
+    .os-tab[aria-selected="true"] { background: var(--ink); color: var(--paper); }
+    .os-panel { display: none; max-width: 620px; }
+    .os-panel.active { display: block; }
+    .os-card {
+      background: var(--paper-2); border: 1px solid var(--rule-dark); border-top: 0;
+      padding: 24px 26px; text-align: left;
+    }
+    .os-card h4 {
+      font-family: var(--mono); font-size: 0.72rem; font-weight: 700;
+      letter-spacing: 0.14em; text-transform: uppercase; margin: 0 0 8px; color: var(--ink);
+    }
+    .os-card p { font-size: 0.95rem; color: var(--ink-2); margin: 0 0 18px; max-width: 60ch; }
+    .os-meta {
+      display: flex; gap: 18px; flex-wrap: wrap;
+      font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase;
+      color: var(--ink-3); margin-top: 20px;
+    }
+    .os-meta b { color: var(--ink); font-weight: 600; }
+
+    /* ————— footer / colophon ————— */
+    footer { background: var(--ink); color: var(--paper); border-bottom: 0; }
+    footer .wrap { padding-top: 40px; padding-bottom: 40px; display: flex; flex-wrap: wrap; gap: 32px; justify-content: space-between; align-items: baseline; }
+    footer .fn { font-family: var(--serif); font-size: 1.3rem; }
+    footer .fn img { display: inline-block; width: 22px; height: 22px; vertical-align: -4px; margin-right: 10px; }
+    footer p { margin: 0; font-family: var(--mono); font-size: 0.72rem; line-height: 1.8; color: #a0a09e; max-width: 46ch; }
+    footer a { color: var(--paper); }
+    @media (prefers-color-scheme: dark) { footer p { color: #909090; } }
+
+    /* ————— responsive ————— */
+    @media (max-width: 720px) {
+      section .wrap { padding-top: 48px; padding-bottom: 48px; }
+      .topbar-links { display: none; }
+      .term-body { font-size: 12px; min-height: 240px; }
+      .stats dd { font-size: 1.15rem; }
+    }
+
+    /* ————— motion ————— */
+    .fade-in { opacity: 0; transform: translateY(20px); transition: opacity 0.6s var(--ease, ease), transform 0.6s var(--ease, ease); }
+    .fade-in.visible { opacity: 1; transform: none; }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+      .fade-in { opacity: 1; transform: none; }
+      html { scroll-behavior: auto; }
+    }
+  </style>
 </head>
 <body>
+  <a class="skip" href="#features">Skip to content</a>
 
-<header>
-  <div class="wrap">
-    <nav>
-      <a class="logo" href="#">
-        <svg width="22" height="22" viewBox="0 0 100 100"><path d="M20 30 L50 55 L80 30 M20 70 L50 45 L80 70" stroke="#4f8cff" stroke-width="12" fill="none" stroke-linecap="round"/></svg>
-        Browserr
-      </a>
-      <a href="#features">Features</a>
-      <a href="#protocol">Protocol</a>
-      <a href="#sdk">SDK</a>
-      <a href="#compare">Compare</a>
-      <span class="spacer"></span>
-      <a class="pill" href="https://github.com/Omodaka9375/browserr">GitHub</a>
-    </nav>
-  </div>
-</header>
-
-<div class="hero wrap">
-  <div class="badges">
-    <a href="https://github.com/Omodaka9375/browserr/actions/workflows/ci.yml"><img src="https://github.com/Omodaka9375/browserr/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-    <img src="https://img.shields.io/badge/engine-servo-4f8cff" alt="engine: servo">
-    <img src="https://img.shields.io/badge/platform-windows--x64-39d98a" alt="windows x64">
-    <img src="https://img.shields.io/badge/MCP-19%20tools-ffb454" alt="MCP">
-  </div>
-  <h1>A headless browser engine<br>built for AI agents</h1>
-  <p class="sub">
-    <b>Browserr</b> is a Servo-based alternative to embedding Chromium in your
-    agent stack. One binary. One crypto stack. A protocol small enough to audit
-    in an afternoon. <b>No UI, no CDP, no Chromium.</b>
-  </p>
-  <div class="cta">
-    <a class="primary" href="https://github.com/Omodaka9375/browserr">View on GitHub</a>
-    <a class="ghost" href="#protocol">Read the protocol</a>
-  </div>
-
-  <div class="term">
-    <div class="bar"><i></i><i></i><i></i></div>
-    <pre><span class="c"># headless, ephemeral profile, MCP over stdio</span>
-<span class="k">$</span> python tools/browserr_mcp.py
-
-<span class="c"># or drive it directly from python</span>
-<span class="k">&gt;&gt;&gt;</span> <span class="k">from</span> driver <span class="k">import</span> Driver
-<span class="k">&gt;&gt;&gt;</span> d = Driver(ephemeral=<span class="k">True</span>)
-<span class="k">&gt;&gt;&gt;</span> d.navigate(<span class="s">"https://example.com"</span>); d.wait_ready()
-<span class="k">&gt;&gt;&gt;</span> d.read_structure()[<span class="s">"buttons"</span>]
-[{<span class="s">"text"</span>: <span class="s">"More information..."</span>, <span class="s">"selector"</span>: <span class="s">"#go"</span>, ...}]
-<span class="k">&gt;&gt;&gt;</span> d.click_element(<span class="s">"#go"</span>)          <span class="c"># real pointer, not JS .click()</span>
-<span class="r">engine: click dispatched, focus: true</span></pre>
-  </div>
-</div>
-
-<section id="features">
-  <div class="wrap">
-    <h2>Everything an agent needs</h2>
-    <p class="section-sub">Built agent-first: extraction over pixels, selectors over coordinates, failures you can catch instead of hangs.</p>
-    <div class="grid">
-      <div class="card"><h3><span class="tag">extract</span>Structured page reads</h3><p>Prose via <code>read_page()</code>, or <code>read_structure()</code>: headings, buttons, inputs, selects, links, images - each with a viewport rect <em>and</em> a CSS selector that feeds the element commands.</p></div>
-      <div class="card"><h3><span class="tag">act</span>Selector-based interaction</h3><p><code>click_element()</code> scrolls into view and clicks with a real pointer event. <code>set_value()</code> uses the native setter + input/change events, so React and Vue controlled inputs accept it.</p></div>
-      <div class="card"><h3><span class="tag">wait</span>SPA-aware timing</h3><p><code>wait_for_selector()</code> polls until an element is visible. <code>wait_ready()</code> gates on <code>document.readyState</code>. No sleeps, no flaky scripts.</p></div>
-      <div class="card"><h3><span class="tag">observe</span>Console capture</h3><p>Page <code>console.log/warn/error</code> arrives as events - and Servo routes network &amp; TLS load errors through the same channel, so agents see <em>why</em> a page failed.</p></div>
-      <div class="card"><h3><span class="tag">files</span>Downloads</h3><p><code>download(url, path)</code> fetches straight to disk with size caps and an ok/bytes/error event. Public URLs only - no page cookies involved.</p></div>
-      <div class="card"><h3><span class="tag">survive</span>Fast failure, not hangs</h3><p><code>EngineDeadError</code> surfaces a dead engine in 0.07 s instead of a timeout. <code>ping</code> health-checks. Ephemeral profiles give every run a clean slate.</p></div>
-      <div class="card"><h3><span class="tag">block</span>Adblock built in</h3><p>EasyList-based subresource blocking at the engine's request-interception hook, auto-refreshed weekly. Never blocks main-frame documents.</p></div>
-      <div class="card"><h3><span class="tag">gpu</span>Fast rendering</h3><p>Servo renders on the GPU; frames cross processes as D3D12 shared textures (no pixel copies) with byte-frame fallback. Screenshots on demand, per tab.</p></div>
-      <div class="card"><h3><span class="tag">secure</span>Token-gated attach</h3><p><code>--driver-port=N</code> accepts multiple concurrent drivers; <code>--driver-token=T</code> requires an auth line first. Unauthenticated sockets get nothing, not even events.</p></div>
+  <!-- Top rule -->
+  <div class="topbar">
+    <div class="wrap">
+      <span class="brand"><a href="#"><img src="icon.svg" alt="">browserr / engine</a></span>
+      <span class="topbar-links">
+        <a href="#features">Features</a>
+        <a href="#protocol">Protocol</a>
+        <a href="#sdk">SDK</a>
+        <a href="#install">Install</a>
+        <a href="https://github.com/Omodaka9375/browserr">GitHub</a>
+      </span>
+      <span><span id="heroVersion">v0.1.0</span> · <b id="heroStars">★ open source</b></span>
     </div>
   </div>
-</section>
 
-<section>
-  <div class="wrap">
-    <div class="stats">
-      <div class="stat"><div class="n">15</div><div class="l">protocol commands</div></div>
-      <div class="stat"><div class="n">19</div><div class="l">MCP tools</div></div>
-      <div class="stat"><div class="n">14</div><div class="l">tests in the CI gate</div></div>
-      <div class="stat"><div class="n">~105MB</div><div class="l">single release binary</div></div>
-      <div class="stat"><div class="n">0</div><div class="l">CDP endpoints. by design</div></div>
+  <!-- Masthead -->
+  <header class="masthead">
+    <div class="wrap">
+      <h1><img src="icon.svg" alt="Browserr icon">browserr<span class="cursor">_</span></h1>
+      <p class="dek">
+        A <strong>Servo-based, headless browser engine</strong> for AI agents. One binary, one crypto
+        stack, and a protocol small enough to <strong>audit in an afternoon</strong> — no UI, no CDP,
+        no Chromium.
+      </p>
+      <div class="mast-actions">
+        <a href="https://github.com/Omodaka9375/browserr/releases/latest" class="btn-primary">↓ Download Browserr</a>
+        <a href="https://github.com/Omodaka9375/browserr" class="btn-secondary">View on GitHub</a>
+      </div>
+      <dl class="specs">
+        <div><dt>Platform</dt><dd>Windows x64</dd></div>
+        <div><dt>Engine</dt><dd>Servo + SpiderMonkey</dd></div>
+        <div><dt>MCP tools</dt><dd>19</dd></div>
+        <div><dt>Protocol</dt><dd>15 commands</dd></div>
+        <div><dt>Telemetry</dt><dd>0</dd></div>
+      </dl>
+
+      <!-- Animated agent session -->
+      <div class="term" role="img" aria-label="An AI agent driving Browserr through MCP tools">
+        <div class="term-bar">
+          <span class="term-dot"></span>
+          <span class="term-dot"></span>
+          <span class="term-dot"></span>
+          <span class="term-title">agent — browserr mcp</span>
+        </div>
+        <div class="term-body" id="termBody"></div>
+      </div>
+
+      <!-- Mode switcher -->
+      <div class="modebar">
+        <span>Mode</span>
+        <button class="modebtn" type="button" data-mode="light" aria-pressed="false">Paper</button>
+        <button class="modebtn" type="button" data-mode="dark" aria-pressed="false">Ink</button>
+      </div>
     </div>
-  </div>
-</section>
+  </header>
 
-<section id="protocol">
-  <div class="wrap">
-    <h2>The protocol, in full</h2>
-    <p class="section-sub">Newline-delimited JSON over loopback. One client. No hidden state. This is the entire command surface - the opposite of CDP's 1000+ endpoints.</p>
-    <div class="tbl">
-      <table>
-        <tr><th>command</th><th>what it does</th></tr>
-        <tr><td>{"cmd":"navigate"|"back"|"forward"}</td><td class="desc">navigation, per tab</td></tr>
-        <tr><td>{"cmd":"new_tab"|"activate"|"close_tab"}</td><td class="desc">tab lifecycle</td></tr>
-        <tr><td>{"cmd":"input"|"wheel"|"key"}</td><td class="desc">per-tab pointer, wheel, keyboard input</td></tr>
-        <tr><td>{"cmd":"eval", "js":..., "id":N}</td><td class="desc">run JS; result returns as an evalresult event (any JSON value)</td></tr>
-        <tr><td>{"cmd":"screenshot"}</td><td class="desc">paint + answer with a BGRA frame</td></tr>
-        <tr><td>{"cmd":"zoom"}</td><td class="desc">per-tab page zoom</td></tr>
-        <tr><td>{"cmd":"ping"}</td><td class="desc">health check: tab count + active tab</td></tr>
-        <tr><td>{"cmd":"download"}</td><td class="desc">fetch a URL straight to disk, capped</td></tr>
-        <tr><td>{"cmd":"resize"}</td><td class="desc">viewport size</td></tr>
-      </table>
+  <main>
+
+    <!-- Features -->
+    <section id="features">
+      <div class="wrap">
+        <div class="sec-head">
+          <p class="kicker">Scope</p>
+          <span class="sec-no">01 / 05</span>
+        </div>
+        <h2>Everything an agent needs.</h2>
+        <p class="lead">
+          Built agent-first: extraction over pixels, selectors over coordinates, failures you can
+          catch instead of hangs. The automation surface is deliberately small.
+        </p>
+        <table class="blocks">
+          <thead><tr><th>Command</th><th>Covers</th></tr></thead>
+          <tbody>
+            <tr><td>read</td><td><b>Structured page reads.</b> Prose via read_page(), or read_structure(): headings, buttons, inputs, selects, links, images — each with a viewport rect and a CSS selector that feeds the element commands.</td></tr>
+            <tr><td>act</td><td><b>Selector-based interaction.</b> click_element() scrolls into view and clicks with a real pointer event; set_value() uses the native setter plus input/change events, so React and Vue controlled inputs accept it.</td></tr>
+            <tr><td>wait</td><td><b>SPA-aware timing.</b> wait_for_selector() polls until an element is visible; wait_ready() gates on document.readyState. No sleeps, no flaky scripts.</td></tr>
+            <tr><td>observe</td><td><b>Console capture.</b> Page console.log/warn/error arrives as events — and Servo routes network and TLS load errors through the same channel, so agents see why a page failed.</td></tr>
+            <tr><td>files</td><td><b>Downloads.</b> download(url, path) fetches straight to disk with size caps and an ok/bytes/error event. Public URLs only — no page cookies involved.</td></tr>
+            <tr><td>survive</td><td><b>Fast failure, not hangs.</b> EngineDeadError surfaces a dead engine in 0.07 s instead of a timeout. ping health-checks. Ephemeral profiles give every run a clean slate.</td></tr>
+            <tr><td>block</td><td><b>Adblock built in.</b> EasyList-based subresource blocking at the engine's request-interception hook, auto-refreshed weekly. Never blocks main-frame documents.</td></tr>
+            <tr><td>gpu</td><td><b>Fast rendering.</b> Servo renders on the GPU; frames cross processes as D3D12 shared textures (no pixel copies) with a byte-frame fallback. Screenshots on demand, per tab.</td></tr>
+            <tr><td>secure</td><td><b>Token-gated attach.</b> --driver-port accepts multiple concurrent drivers; --driver-token requires an auth line first. Unauthenticated sockets get nothing — not even events.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Protocol -->
+    <section id="protocol">
+      <div class="wrap">
+        <div class="sec-head">
+          <p class="kicker">Protocol</p>
+          <span class="sec-no">02 / 05</span>
+        </div>
+        <h2>The entire protocol, in full.</h2>
+        <p class="lead">
+          Newline-delimited JSON over loopback. One client, no hidden state — the opposite of CDP's
+          1000+ endpoints. Events: url, title, history, cursor, favicon, pwcapture, evalresult,
+          pong, console, download.
+        </p>
+      </div>
+      <div class="marquee">
+        <div class="marquee-track" id="marqueeTrack"></div>
+      </div>
+      <div class="wrap">
+        <dl class="specs stats">
+          <div><dt>Commands</dt><dd>15</dd></div>
+          <div><dt>MCP tools</dt><dd>19</dd></div>
+          <div><dt>Binary</dt><dd>~105 MB</dd></div>
+          <div><dt>CDP endpoints</dt><dd>0</dd></div>
+          <div><dt>Dependencies</dt><dd>0</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <!-- SDK -->
+    <section id="sdk">
+      <div class="wrap">
+        <div class="sec-head">
+          <p class="kicker">SDK</p>
+          <span class="sec-no">03 / 05</span>
+        </div>
+        <h2>Three ways in.</h2>
+        <p class="lead">Same engine underneath; pick the integration you already have.</p>
+        <table class="blocks">
+          <thead><tr><th>Surface</th><th>Covers</th></tr></thead>
+          <tbody>
+            <tr><td>mcp</td><td><b>Model Context Protocol server</b> with 19 tools, stdlib only. Any MCP-capable agent — Claude, Kai, your own — drives Browserr with zero integration code.</td></tr>
+            <tr><td>python</td><td><b>driver.py wraps the raw protocol:</b> navigation, extraction, element commands, console capture, downloads, screenshots, a PNG helper. No dependencies.</td></tr>
+            <tr><td>raw</td><td><b>Anything that can write JSON lines to a socket.</b> The whole protocol fits on one screen; bindings in any language are an afternoon.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Compare -->
+    <section id="compare">
+      <div class="wrap">
+        <div class="sec-head">
+          <p class="kicker">Position</p>
+          <span class="sec-no">04 / 05</span>
+        </div>
+        <h2>Where it sits in 2026.</h2>
+        <p class="lead">Chromium wrappers are the default; alternative engines are the bet. This is the honest comparison.</p>
+        <table class="blocks">
+          <thead><tr><th></th><th>Browserr</th><th>Lightpanda</th><th>Obscura</th><th>Chromium headless</th></tr></thead>
+          <tbody>
+            <tr><td>engine</td><td><b>Servo</b></td><td>own (Zig)</td><td>own (Rust)</td><td>Blink</td></tr>
+            <tr><td>js engine</td><td><b>SpiderMonkey</b></td><td>own</td><td>own</td><td>V8</td></tr>
+            <tr><td>mcp-native</td><td><b>yes, 19 tools</b></td><td>no</td><td>partial</td><td>via wrappers</td></tr>
+            <tr><td>protocol size</td><td><b>15 commands</b></td><td>CDP-compatible</td><td>own + CDP</td><td>1000+ endpoints</td></tr>
+            <tr><td>footprint</td><td><b>one ~105 MB binary</b></td><td>~16× less than Chromium</td><td>~30 MB</td><td>~200 MB+</td></tr>
+            <tr><td>web compat</td><td><b>Servo 0.8 (text, docs, forms)</b></td><td>growing</td><td>growing</td><td>full</td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <p><b>Honest limits.</b> No site sandbox on Windows (treat page loads as untrusted; use ephemeral profiles), web compatibility bounded by Servo 0.8, Windows x64 only, and rendering needs a GPU with a D3D11 driver. Text, documents, search and forms work well; heavy SPAs and DRM video may not.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Install -->
+    <section id="install">
+      <div class="wrap">
+        <div class="sec-head">
+          <p class="kicker">Install</p>
+          <span class="sec-no">05 / 05</span>
+        </div>
+        <h2>Get Browserr in seconds.</h2>
+        <p class="lead">
+          One zip: the engine binary, the Python SDK, and the MCP server. No account, no telemetry.
+        </p>
+        <div class="os-tabs" role="tablist" id="osTabs">
+          <button class="os-tab" role="tab" data-os="windows" aria-selected="true">Windows</button>
+        </div>
+        <div class="os-panel active" data-os="windows">
+          <div class="os-card">
+            <h4>Windows x64</h4>
+            <p>Download the zip, unpack anywhere, and point your agent at the MCP server — or drive the engine directly from Python. A GPU with a D3D11 driver is required for rendering.</p>
+            <a href="https://github.com/Omodaka9375/browserr/releases/latest" class="btn-primary">↓ Download for Windows</a>
+            <div class="os-meta">
+              <span>Format <b>.zip</b></span>
+              <span>Contents <b>engine.exe · driver.py · browserr_mcp.py</b></span>
+              <span>Requires <b>GPU (D3D11) · Python 3.10+</b></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section id="cta">
+      <div class="wrap">
+        <div class="sec-head">
+          <p class="kicker">Start</p>
+          <span class="sec-no"></span>
+        </div>
+        <h2>Start driving the web with your agents.</h2>
+        <p class="lead">Free, open source, no account required.</p>
+        <div class="mast-actions" style="margin-bottom: 0;">
+          <a href="https://github.com/Omodaka9375/browserr/releases/latest" class="btn-primary">↓ Download for free</a>
+          <a href="https://github.com/Omodaka9375/browserr" class="btn-secondary">Star on GitHub</a>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <div class="fn"><img src="icon.svg" alt="">browserr_</div>
+      <p>
+        Browserr is open source.<br />
+        <a href="https://github.com/Omodaka9375/browserr">GitHub</a> ·
+        <a href="https://github.com/Omodaka9375/browserr/releases">Releases</a> ·
+        <a href="https://github.com/Omodaka9375/browserr/issues">Issues</a>
+      </p>
     </div>
-    <p class="section-sub" style="margin-top:24px">
-      Events: <code>url</code>, <code>title</code>, <code>history</code>, <code>cursor</code>,
-      <code>favicon</code>, <code>pwcapture</code>, <code>evalresult</code>, <code>pong</code>,
-      <code>console</code>, <code>download</code>.
-    </p>
-  </div>
-</section>
+  </footer>
 
-<section id="sdk">
-  <div class="wrap">
-    <h2>Three ways in</h2>
-    <p class="section-sub">Same engine underneath; pick the integration you already have.</p>
-    <div class="grid">
-      <div class="card"><h3>MCP server</h3><p>Stdlib-only Model Context Protocol server with 19 tools. Any MCP-capable agent - Claude, Kai, your own - drives Browserr with zero integration code.</p></div>
-      <div class="card"><h3>Python SDK</h3><p><code>driver.py</code> wraps the raw protocol: navigation, extraction, element commands, console capture, downloads, screenshots, and a PNG helper. No dependencies.</p></div>
-      <div class="card"><h3>Raw protocol</h3><p>Anything that can write JSON lines to a socket can drive the engine. The whole protocol fits on one screen; bindings in any language are an afternoon.</p></div>
-    </div>
-  </div>
-</section>
+  <script>
+    /* ─────────────────────────────  Mode (paper / ink)  ───────────────── */
+    const metaTheme = document.querySelector('meta[name="theme-color"]');
+    const modeButtons = document.querySelectorAll('.modebtn');
+    const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const initialMode = darkQuery.matches ? 'dark' : 'light';
 
-<section id="compare">
-  <div class="wrap">
-    <h2>Where it sits in 2026</h2>
-    <p class="section-sub">Chromium wrappers are the default; alternative engines are the bet. This is the honest comparison.</p>
-    <div class="tbl">
-      <table class="cmp">
-        <tr><th></th><th>Browserr</th><th>Lightpanda</th><th>Obscura</th><th>Chromium headless</th></tr>
-        <tr><td>Engine</td><td class="us">Servo</td><td>own (Zig)</td><td>own (Rust)</td><td class="no">Blink</td></tr>
-        <tr><td>JS engine</td><td class="us">SpiderMonkey</td><td>own</td><td>own</td><td class="no">V8</td></tr>
-        <tr><td>MCP-native</td><td class="us us">yes, 19 tools</td><td class="no">no</td><td class="no">partial</td><td class="no">via wrappers</td></tr>
-        <tr><td>Protocol size</td><td class="us">15 commands, auditable in an afternoon</td><td>CDP-compatible</td><td>own + CDP</td><td class="no">CDP, 1000+ endpoints</td></tr>
-        <tr><td>Memory footprint</td><td class="us">one ~105MB binary</td><td>~16x less than Chromium</td><td>~30MB</td><td class="no">~200MB+</td></tr>
-        <tr><td>Token-gated multi-driver</td><td class="us yes">yes</td><td class="no">-</td><td class="no">-</td><td class="no">-</td></tr>
-        <tr><td>Web compat ceiling</td><td class="us warn">Servo 0.8 (text, docs, forms)</td><td>growing</td><td>growing</td><td class="yes">full</td></tr>
-      </table>
-    </div>
-    <p class="section-sub" style="margin-top:24px">
-      Honest limits: no site sandbox on Windows (treat page loads as untrusted; use ephemeral
-      profiles), web compatibility bounded by Servo 0.8, Windows x64 only. Text, documents,
-      search and forms work well; heavy SPAs and DRM video may not.
-    </p>
-  </div>
-</section>
+    function syncModeButtons(mode) {
+      for (const b of modeButtons) {
+        b.setAttribute('aria-pressed', b.dataset.mode === mode ? 'true' : 'false');
+      }
+    }
 
-<footer>
-  <div class="wrap">
-    <div>Browserr - a Servo-based headless engine for AI agents.</div>
-    <div><a href="https://github.com/Omodaka9375/browserr">GitHub</a> &middot; MIT-friendly &middot; built with Rust + Servo</div>
-  </div>
-</footer>
+    function applyMode(mode) {
+      document.documentElement.setAttribute('data-mode', mode);
+      if (metaTheme) metaTheme.setAttribute('content', mode === 'dark' ? '#101010' : '#ffffff');
+      syncModeButtons(mode);
+    }
 
+    for (const b of modeButtons) {
+      b.addEventListener('click', () => applyMode(b.dataset.mode));
+    }
+    syncModeButtons(initialMode);
+    if (metaTheme) metaTheme.setAttribute('content', initialMode === 'dark' ? '#101010' : '#ffffff');
+
+    /* ───────────────────────────  Protocol marquee  ──────────────────── */
+    const COMMANDS = [
+      'navigate', 'back', 'forward', 'new_tab', 'activate', 'close_tab',
+      'input', 'wheel', 'key', 'eval', 'screenshot', 'zoom', 'ping',
+      'download', 'resize',
+    ];
+    const track = document.getElementById('marqueeTrack');
+    if (track) {
+      const chips = COMMANDS.map((c) => '<span class="chip">' + c + '</span>').join('');
+      // Duplicate for a seamless -50% loop.
+      track.innerHTML = chips + chips;
+    }
+
+    /* ─────────────────────────  Live GitHub info  ─────────────────────── */
+    (async () => {
+      const REPO = 'Omodaka9375/browserr';
+      try {
+        const r = await fetch('https://api.github.com/repos/' + REPO, { headers: { Accept: 'application/vnd.github+json' } });
+        if (!r.ok) throw new Error(String(r.status));
+        const j = await r.json();
+        const stars = document.getElementById('heroStars');
+        if (stars && typeof j.stargazers_count === 'number') {
+          stars.textContent = '★ ' + j.stargazers_count.toLocaleString() + ' stars';
+        }
+      } catch (e) { /* offline / rate-limited — keep fallback text */ }
+      try {
+        const r = await fetch('https://api.github.com/repos/' + REPO + '/releases/latest', { headers: { Accept: 'application/vnd.github+json' } });
+        if (!r.ok) throw new Error(String(r.status));
+        const j = await r.json();
+        const v = document.getElementById('heroVersion');
+        if (v && j.tag_name) v.textContent = j.tag_name;
+      } catch (e) { /* keep static fallback */ }
+    })();
+
+    /* ──────────────────────  Animated agent session  ──────────────────── */
+    const body = document.getElementById('termBody');
+    const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    if (body) {
+      const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      function frame() {
+        body.innerHTML = '';
+        const frag = document.createDocumentFragment();
+        // 1. prompt (typed char by char)
+        const prompt = document.createElement('div');
+        prompt.className = 't-line';
+        prompt.innerHTML = '<span class="t-prompt">agent $ </span><span class="t-cmd"></span><span class="caret"></span>';
+        frag.appendChild(prompt);
+        // 2. thinking
+        const thinking = document.createElement('div');
+        thinking.className = 't-line t-out thinking-dots';
+        thinking.style.display = 'none';
+        thinking.textContent = '● thinking';
+        frag.appendChild(thinking);
+        // 3-6. tool + result lines (revealed one by one)
+        const lines = [
+          { icon: '→', name: 'browser_navigate', arg: 'example.com' },
+          { icon: '☰', name: 'browser_read_structure', arg: '', diff: true },
+          { icon: '⌖', name: 'browser_click_element', arg: '#go' },
+        ];
+        const toolEls = lines.map((l) => {
+          const row = document.createElement('div');
+          row.className = 't-line t-tool';
+          row.innerHTML =
+            '<div class="t-row"><span class="t-chip">' + l.icon + '</span>' +
+            '<span><span class="t-name">' + l.name + '</span> <span class="t-arg">' + esc(l.arg) + '</span></span></div>' +
+            (l.diff
+              ? '<div class="t-diff"><div class="t-add">{ "buttons": [ "More information..." ] }</div><div class="t-add">{ "inputs": [ "#q" ] }</div></div>'
+              : '');
+          frag.appendChild(row);
+          return row;
+        });
+        const result = document.createElement('div');
+        result.className = 't-line t-ok';
+        result.style.display = 'none';
+        result.textContent = '✓ click dispatched, focus: true';
+        frag.appendChild(result);
+
+        const end = document.createElement('div');
+        end.className = 't-line';
+        end.innerHTML = '<span class="t-prompt">agent $ </span><span class="caret"></span>';
+        end.style.display = 'none';
+        frag.appendChild(end);
+
+        body.appendChild(frag);
+        return { prompt: prompt.querySelector('.t-cmd'), thinking, toolEls, result, end };
+      }
+
+      async function run() {
+        const el = frame();
+        // type the request
+        const text = 'open example.com and click the link';
+        for (let i = 1; i <= text.length; i++) {
+          el.prompt.textContent = text.slice(0, i);
+          await sleep(26);
+        }
+        await sleep(220);
+        el.thinking.style.display = '';
+        await sleep(900);
+        el.thinking.style.display = 'none';
+        for (const t of el.toolEls) { t.classList.add('in'); await sleep(520); }
+        el.result.style.display = '';
+        await sleep(300);
+        el.end.style.display = '';
+        await sleep(2600);
+      }
+
+      async function loop() {
+        while (true) { await run(); }
+      }
+
+      if (REDUCED) {
+        // Static, complete frame — no motion.
+        const el = frame();
+        el.prompt.textContent = 'open example.com and click the link';
+        for (const t of el.toolEls) t.classList.add('in');
+        el.result.style.display = '';
+        el.end.style.display = '';
+        el.thinking.style.display = 'none';
+      } else {
+        // Pause the animation while the tab is hidden; restart cleanly.
+        let running = false;
+        const start = () => { if (!running) { running = true; loop(); } };
+        document.addEventListener('visibilitychange', () => {
+          if (document.hidden) { running = false; } else { start(); }
+        });
+        if (!document.hidden) { start(); }
+      }
+    }
+
+    /* ──────────────────────  Scroll fade-ins  ─────────────────────────── */
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) { e.target.classList.add('visible'); io.unobserve(e.target); }
+      }
+    }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+    document.querySelectorAll('.fade-in').forEach((el) => io.observe(el));
+  </script>
 </body>
 </html>
