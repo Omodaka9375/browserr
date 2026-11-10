@@ -56,3 +56,11 @@ jobs:
         run: |
           cargo build --release --manifest-path engine/Cargo.toml *> release-build.log
           if ($LASTEXITCODE -ne 0) { Get-Content release-build.log -Tail 8; exit 1 }
+
+      - name: Upload engine.exe (release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-windows-x64
+          path: engine/target/release/engine.exe
+          if-no-files-found: error
+          retention-days: 14
