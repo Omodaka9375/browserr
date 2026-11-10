@@ -1,256 +1,231 @@
 # Browserr
 
-A minimal, Safari-like browser for Windows.
+A thin browser engine for agents, and a minimal browser for people.
+
+Browserr is a servo-based browser built as two small processes: a headless
+`engine.exe` that renders pages and speaks a 15-command loopback protocol, and
+an optional `chrome.exe` (Rune UI) for when a human wants to watch. Agents can
+drive it headless, through a Python SDK, or through MCP with zero integration
+code. It is not another Chromium wrapper: it is an alternative engine in an
+agent stack, with an automation surface small enough to audit in an afternoon.
 
 ```text
-chrome/  Rust + Rune (GPU-drawn UI: 40px top bar, address pill, tabs, traffic lights)
-engine/  Rust + Servo (page engine child process: per-tab webviews, GPU render, BGRA frames)
+engine/  Rust + Servo. Per-tab webviews, GPU render, adblock, automation.
+         Runs headless. One binary, one crypto stack, ~105 MB release.
+chrome/  Rust + Rune. 40px bar, address pill, tabs, settings, passwords.
+         Optional; the engine never needs it.
+tools/   driver.py (SDK), browserr_mcp.py (MCP server), test suite.
 ```
 
-The chrome and the engine are separate processes (their dependency trees conflict:
-Rune's parley needs icu_normalizer 2.3+, Servo's mozjs_sys pins icu_capi =2.1.2).
-They talk over 127.0.0.1:7411.
+The split exists because the dependency trees conflict (Rune's parley needs
+icu 2.3+, Servo's mozjs_sys pins icu_capi =2.1.2). They talk over
+127.0.0.1:7411.
 
-## Build
+## Quick start
+
+Build (each crate has its own target dir):
 
 ```powershell
-cd engine; cargo build --release
-cd chrome; cargo build --release
+cargo build --release --manifest-path engine\Cargo.toml
+cargo build --release --manifest-path chrome\Cargo.toml
 ```
 
-## Run (dev)
+Run the browser (dev tree needs the engine path; dist/ does not):
 
 ```powershell
 $env:BROWSERR_ENGINE = "D:\Code\2026\Browserr\engine\target\release\engine.exe"
-D:\Code\2026\Browserr\chrome\target\debug\chrome.exe
+chrome\target\release\chrome.exe --profile work
 ```
 
-The engine's stderr goes to `%TEMP%\browserr-engine.log`; the chrome logs
-commands and frame pushes to its own console.
+Ship a zip: `scripts\package.ps1` builds both into `dist\` and compresses to
+`browserr-<version>-windows-x64.zip` (measured: engine 105.4 MB, zip 47.8 MB).
 
-## Run (dist)
+Drive it as an agent:
 
-```powershell
-powershell -File scripts\dist.ps1   # release-builds both into dist\
-.\dist\chrome.exe                   # finds engine.exe next to itself
+```text
+python tools\browserr_mcp.py              # headless, ephemeral profile, MCP on stdio
+python tools\browserr_mcp.py --port 7412  # drive a visible --driver-port window
 ```
 
 ## Protocol (v2)
 
-Commands (chrome -> engine, newline JSON, all tab-addressed):
+Commands are newline JSON, tab-addressed. The socket is loopback and single
+client (the chrome, or one driver, or the MCP server).
 
 ```text
 {"cmd":"navigate","url":"...","tab":N}
 {"cmd":"back"|"forward","tab":N}
 {"cmd":"new_tab"|"activate"|"close_tab","tab":N}
 {"cmd":"resize","w":N,"h":N}
-{"cmd":"input"|"wheel"|"key","tab":N,...}   page input forwarding
-{"cmd":"eval","tab":N,"js":"..."}          run JS (password autofill; discarded)
-{"cmd":"eval","tab":N,"js":"...","id":X}   run JS, report result as an evalresult event
-{"cmd":"screenshot","tab":N}              paint + answer with a SHT1 frame
-{"cmd":"zoom","tab":N,"zoom":F}           page zoom (chrome: Ctrl+wheel)
+{"cmd":"input"|"wheel"|"key","tab":N,...}     page input forwarding
+{"cmd":"eval","tab":N,"js":"..."}            run JS, discard the result
+{"cmd":"eval","tab":N,"js":"...","id":X}     run JS, report via evalresult
+{"cmd":"screenshot","tab":N}                 paint, answer with a SHT1 frame
+{"cmd":"zoom","tab":N,"zoom":F}              page zoom (chrome: Ctrl+wheel)
+{"cmd":"ping","id":X}                        health check
 ```
 
-Responses (engine -> chrome, 20-byte header + payload):
+Responses use a 20-byte header (magic u32, id u64, then two u32 fields):
 
 ```text
-FRM1 + id + w + h      -> w*h*4 BGRA pixels (active tab, deduped, capped at 30fps)
-EVT1 + id + len + 0    -> JSON events: {"ev":"url"|"title"|"history"|"cursor"|"favicon"|"pwcapture"|"evalresult","tab":N,...}
-SHT1 + id + w + h      -> w*h*4 BGRA pixels (screenshot answer, automation only)
+FRM1 + id + w + h    -> w*h*4 BGRA pixels (active tab, deduped, 30fps cap)
+EVT1 + id + len + 0  -> JSON events, see below
+SHT1 + id + w + h    -> w*h*4 BGRA pixels (screenshot answer, automation only)
 ```
 
-Only the active tab is painted; switching tabs re-sends that tab's url/title/
-history/cursor. Tab 0 exists from startup. The cursor event carries the page's
-requested pointer shape (servo Cursor name, lowercase); the chrome maps it onto
-rune's cursor set over the page area.
+Events: `url`, `title`, `history`, `cursor`, `favicon`, `pwcapture`,
+`evalresult`, `pong`. The `pong` answers `ping` with the tab count and the
+active tab. `evalresult` returns any JSON value (arrays, objects, booleans,
+numbers, strings; DOM handles come back tagged). Only the active tab is
+painted; switching tabs re-sends that tab's url/title/history/cursor.
 
-## Status / v2 scope (done)
+Frames normally cross the socket as D3D12 named shared textures plus fences
+(no pixel bytes); if the chrome cannot import them, it asks the engine to
+fall back to byte frames. `engine --probe-shared` tests the path.
 
-- Frameless Rune window, drag region, traffic-light close/minimize
-- Address pill: live page URL, click to edit (URL or DuckDuckGo search), Enter navigates
-- Real multi-tab: one Servo webview + GPU context per tab, per-tab history,
-  tab pills with live titles and close buttons
-- Back/forward wired to Servo history, greyed out per active tab
-- User data: per-profile dirs (chrome data + Servo storage via --profile-dir),
-  settings.json (homepage, user agent, search engine, default page zoom),
-  history.jsonl, bookmarks (star button), session restore across restarts
-  (urls + per-tab zoom), bookmarks/history panel
-- Page input forwarding: pointer down/up/move, wheel, keyboard; cursor shape
-  feedback from the page (hand over links, I-beam over text, ...); Ctrl+wheel
-  page zoom per tab with a toolbar chip and Ctrl+0/-/= shortcuts
-- Clear browsing history and clear cookies/site data (engine storage wiped
-  in place, tabs reloaded) from the settings page
-- GPU rendering: surfman WGL hardware context (software fallback), ~3-20ms per
-  frame cycle; identical frames skipped, animated pages capped at 30fps
-- Two-exe distribution via scripts/dist.ps1 (side-by-side, no env var needed);
-  scripts/package.ps1 adds a browserr-<version>-windows-x64.zip
+## Automation
 
-## User data (Phase 1)
+`tools/driver.py` is the SDK. Two modes, one API.
 
-Profiles are separate data dirs, selected on the command line:
-
-```text
-chrome.exe --profile work
-```
-
-Everything lives in `%APPDATA%\browserr\profiles\<name>\` as plain files:
-
-```text
-settings.json   { "homepage": "...", "user_agent": "...", "adblock": bool,
-                  "search": "...", "default_zoom": 1.0 }
-history.jsonl   appended on every navigation: {"ts": secs, "url": "..."}
-bookmarks.json  [{"url": "...", "title": "..."}]  (star button in the toolbar)
-session.json    {"urls": [...], "active": N, "zooms": [...]}  (restored on launch)
-engine\         Servo's own storage (cookies, HSTS, auth cache, localStorage), per profile
-easylist.txt    adblock filter list (downloaded once, refreshed weekly)
-```
-
-No `--profile` argument opens the profile picker window instead of a browser:
-click a profile to open it in a new window, or type a name and press Enter to
-create one. The picker itself is CLI-only free; profile names are sanitized to
-letters, digits, dashes and underscores.
-
-Settings live on a full settings page (hamburger menu -> open settings):
-homepage, search engine cycle, default page zoom (applies to new tabs), user
-agent, adblock toggle, clear browsing history, clear cookies and site data,
-and the saved-password list. User agent and adblock restart the engine in
-place; so does clearing site data (tabs are reloaded afterwards).
-
-## Automation (driver)
-
-The browser is fully drivable from an external script - not via CDP (servo has
-no CDP server), but over its own loopback protocol. `tools/driver.py` wraps it
-in two modes:
-
-**Headless** - spawn a bare engine, no UI:
+Headless (spawn a bare engine, no UI):
 
 ```python
 import sys; sys.path.insert(0, "tools")
 from driver import Driver, save_png
 
-d = Driver(log="engine.log")   # spawns engine.exe headless
+d = Driver(ephemeral=True)          # throwaway profile, auto-removed on exit
 try:
     d.navigate("https://example.com"); d.wait_load(); d.wait_ready()
-    print(d.eval_js("document.title"))       # results returned (any JSON value)
+    print(d.eval_js("document.title"))       # results returned
+    title, text = d.read_page()              # token-cheap markdown-ish text
+    d.fill("q", "search terms"); d.click_text("Next page")
     w, h, bgra = d.screenshot(); save_png("shot.png", w, h, bgra)
-    d.click(300, 300); d.type_text("hi")
+    print(d.ping())                          # {'tabs': 1, 'active': 0}
 finally:
-    d.close()
+    d.close()                                 # socket close = engine exit
 ```
 
-**Computer use** - start the browser with a driver port and attach; the window
-stays visible and interactive while the script drives it:
+Computer use (the window stays visible and interactive):
 
 ```text
 chrome.exe --driver-port=7412 --profile=test
 ```
 
 ```python
-d = Driver.attach(7412)       # same API as headless
-d.navigate("https://example.com"); d.wait_ready()
-w, h, bgra = d.screenshot()   # what the window shows
+d = Driver.attach(7412)   # same API; input coords are page-relative
 ...
-d.close()                     # detaches; the window keeps running
+d.close()                  # detaches, the window keeps running
 ```
 
-The driver port is opt-in (`--driver-port=N`), loopback-only, and accepts
-multiple drivers: commands are forwarded to the engine and engine events and
-screenshot answers are mirrored to every attached driver. Only page-level
-commands are allowed through; resize and the frame-stream controls stay
-chrome-owned. Input coordinates are page-relative - in attach mode the page
-starts below the 40px toolbar.
+The driver port is opt-in, loopback-only, and accepts multiple drivers:
+commands are validated (page-level commands only; resize and frame-stream
+controls stay chrome-owned) and forwarded to the engine; engine events and
+screenshot answers are mirrored to every attached driver.
 
-Notes: the bare engine accepts exactly one connection, which is why headless
-mode spawns its own engine. The url event fires when navigation commits,
-before the page accepts input - call `wait_ready()` after `wait_load()`
-before clicking or typing. In attach mode the driver port opens before the
-engine finishes booting - wait for the first `url` event before navigating
-(`tools/test_attach.py` shows the pattern). See `tools/test_driver.py` and
-`tools/test_attach.py` for complete examples.
+Extraction helpers: `read_page()` (title plus body text, links as
+`[label](href)`, invisible elements skipped), `links()` and `forms()`
+(visible items with viewport rectangles), `click_text()`, `fill()`.
+
+Timing rules that matter:
+
+- The url event fires when navigation commits, before the page accepts
+  input. Call `wait_ready()` (polls `document.readyState`) before clicking
+  or typing, and leave a beat between a focus click and `type_text()`.
+- In attach mode the driver port opens before the engine finishes booting.
+  Wait for the first url event before the first navigate.
+- The engine accepts exactly one connection, so headless mode always spawns
+  its own engine.
 
 ## Agent browser (MCP)
 
-Browserr doubles as an agent browser: `tools/browserr_mcp.py` is a Model
-Context Protocol server (stdlib only, stdio transport) exposing 13 tools -
-start/stop/ping, navigate, read (token-cheap markdown-ish extraction),
-links/forms with viewport geometry, click/click_text/fill/key, screenshot,
-tabs. Any MCP-capable agent can drive it with zero integration code:
+`tools/browserr_mcp.py` is a Model Context Protocol server (stdlib only,
+newline JSON-RPC on stdio) with 13 tools: start, stop, ping, navigate, read,
+links, forms, click, click_text, fill, key, screenshot, tabs. Headless with
+an ephemeral profile by default; `--port N` drives a visible window.
+
+Reliability for unattended runs: `ping` health check, `--ephemeral` profiles
+(deleted on exit; a detached helper finishes the delete after servo releases
+its SQLite handles), graceful shutdown on socket close.
+
+## The chrome (human mode)
+
+- Frameless Rune window, Windows-style controls, hamburger menu, scrollable
+  tab strip with live titles and favicons
+- Address pill: live URL, click to edit, Enter navigates or searches
+  (configurable engine: DuckDuckGo, Google, Bing)
+- Multi-tab with per-tab history, back/forward, session restore
+  (urls plus per-tab zoom)
+- Page input forwarding with cursor-shape feedback (hand over links, I-beam
+  over text), Ctrl+wheel zoom with a toolbar chip and Ctrl+0/-/= shortcuts
+- Bookmarks (star button), history panel, full settings page: homepage,
+  search engine, default page zoom, user agent, adblock toggle, clear
+  browsing history, clear cookies and site data, saved-password list
+- Passwords: Windows Credential Manager per profile, autofill, save-on-submit
+  prompt, masked fields with a reveal toggle. Fill runs in-page via the
+  engine's eval command. Form detection is heuristic; SPA logins without a
+  submit event are not captured.
+- Adblock: the engine cancels subresource requests that match an EasyList
+  list (never main-frame documents; a cancelled document wedges the
+  pipeline). The list downloads on first use and refreshes weekly.
+
+## Profiles
+
+Everything lives in `%APPDATA%\browserr\profiles\<name>\` as plain files:
 
 ```text
-python tools/browserr_mcp.py            # headless, ephemeral profile
-python tools/browserr_mcp.py --port 7412  # drive a visible --driver-port window
+settings.json   { homepage, user_agent, adblock, search, default_zoom }
+history.jsonl   appended per navigation: { "ts": secs, "url": "..." }
+bookmarks.json  [{ "url": "...", "title": "..." }]
+session.json    { urls, active, zooms }   (restored on launch)
+engine\         servo storage (cookies, HSTS, localStorage), per profile
+easylist.txt    adblock filter list
 ```
 
-Reliability pieces for unattended runs: `ping` health check (tab count +
-active tab over the same socket), `--ephemeral` engine flag (throwaway profile
-under %TEMP%, deleted when the engine exits - a detached helper finishes the
-delete after servo releases its SQLite handles), and graceful shutdown on
-socket close (driver.close() waits for the engine to exit instead of killing).
+No `--profile` opens the picker window instead of a browser. `--ephemeral`
+(engine flag) uses a throwaway dir under %TEMP% instead.
 
-## Passwords
+## Build notes (thin)
 
-Passwords are stored per profile in the Windows Credential Manager (encrypted
-at rest under the logged-in user), one entry per site host. The key button
-fills the current page's login form; the menu panel's Passwords section saves,
-fills or forgets the credential for the current host. Fill runs a small script
-in the page via the engine's eval command (loopback-only, chrome -> engine).
-Known limits: the panel's password field is masked (no reveal toggle yet) and
-form detection is heuristic (first password input + first username-like
-input).
-
-## Adblock
-
-The engine implements `load_web_resource` (Servo's request interception hook)
-and cancels every subresource request that matches an EasyList-format filter
-list via the `adblock` crate. Main-frame documents are never blocked (a
-cancelled document wedges the pipeline). The list is downloaded from
-easylist.to on first run and re-downloaded after a week.
-
-- The chrome passes `user_agent` to the engine as `--user-agent=...`; it
-  overrides Servo's preference (engine/src/main.rs).
-- The ellipsis button opens a panel with bookmarks and the last 15 history
-  entries; click an entry to navigate.
-- Do Not Track and adblocking need a request hook inside Servo's network
-  stack, which servo 0.8 does not expose. Parked with the Phase 2 adblock work.
-
-## GPU shared frames
-
-Frames normally cross the engine->chrome socket as ~4MB BGRA buffers. When
-the engine can create a D3D12 device, it instead renders each frame into a
-named shared BGRA8 texture (per size) plus a named shared fence, and sends a
-small {"ev":"frame"} event; the chrome imports the texture via
-`NativeSurface::push_shared` and copies it on its own GPU queue, signaling
-the fence when done. No pixel bytes cross the socket. If anything fails
-(no D3D12, adapter mismatch), the chrome asks the engine to fall back to
-byte frames; `engine --probe-shared` tests the path at startup.
-
-## Save-on-submit password prompt
-
-Pages with a password field get a submit listener installed by the engine
-(capture-phase, stashes username + password + origin into sessionStorage).
-After the next navigation the engine reads and clears it and reports a
-{"ev":"pwcapture"} event; the chrome shows an inline "Save password for
-host?" prompt with Save / Not now. sessionStorage is origin-scoped, so the
-data never reaches other sites. Limitations: SPA logins without a submit
-event or navigation are not captured, and the prompt's username is not
-editable (use the menu panel for that).
-
-Favicons: the engine reads the page's `<link rel=icon>` via JS after load,
-fetches and decodes the image (PNG/ICO/JPEG/WebP/BMP/GIF), resizes it to
-16x16 RGBA and sends it once per icon url; the chrome renders it in tab
-pills. `--probe-shared` on the engine tests the shared-frame path.
+- servo features: `default-features = false, features = ["bundled", "js_jit"]`
+  drops devtools, clipboard and multiprocess; media is already the dummy
+  backend on Windows. Release profile: thin LTO, codegen-units 1, symbols
+  stripped. `panic` stays unwind: tab close needs catch_unwind.
+- One crypto stack: servo-net pins rustls with aws-lc-rs. The engine's two
+  small downloads (EasyList, favicons) use a minimal rustls client with the
+  platform verifier instead of pulling a second stack (ureq/ring).
 
 ## Known limitations
 
-- Frames stream over loopback TCP (~4MB each); a GPU shared-texture path would
-  remove the copy
-- No favicon, no scroll position persistence across tab switches, no downloads
-- History is url-only (no page titles stored)
-- No site sandbox: servo's multiprocess/sandbox feature is compiled out on
-  Windows (`not(target_os = "windows")` in servo 0.8). The engine runs in a
-  job object so it is killed if the chrome dies, and it self-exits when the
-  chrome disconnects, but content runs in-process with the engine.
-- Do Not Track: no request-header hook in servo 0.8 (the interception hook is
-  read-only and can only cancel or replace responses)
-- Engine exits with a cosmetic surfman panic on shutdown ("Should have
-  destroyed the surface first")
+- No site sandbox. Servo's multiprocess mode is compiled out on Windows, so
+  page code runs in-process with the engine. The engine is in a job object
+  (killed when the chrome dies) and self-exits on disconnect. Agents should
+  still treat it as untrusted code execution.
+- Web compatibility is servo 0.8's ceiling: an experimental engine. Text,
+  docs, search and forms work well; heavy SPAs, DRM video and some modern
+  APIs may not.
+- No downloads handling, no find-in-page, no devtools UI.
+- No CDP. The automation protocol is our own; deliberately small instead.
+- Do Not Track is impossible without forking servo-net (the request hook is
+  read-only; it can cancel or replace responses but not edit headers).
+- History is url-only (no titles stored).
+- Windows only.
+
+## Tests
+
+`tools/test_*.py` act as the chrome (raw protocol) or as MCP clients:
+
+```text
+test_close.py        tab close must not kill the engine
+test_input.py        clicks, wheel, keys reach the page
+test_cursor_zoom.py  cursor events + zoom via devicePixelRatio
+test_scroll.py       scroll survives tab switches
+test_driver.py       SDK: eval results, click, typing, screenshot pixels
+test_attach.py       computer use: drive a real window, detach keeps it alive
+test_agent.py        ping, ephemeral, read_page/links/forms/fill/click_text
+test_mcp.py          full MCP session over stdio
+test_https.py        engine TLS client: real EasyList download
+test_thin.py         release build smoke (set BROWSERR_ENGINE)
+```
+
+Engine logs go to `%TEMP%\browserr-engine.log`; the chrome logs to its
+console and the frame reader reports engine drops.
