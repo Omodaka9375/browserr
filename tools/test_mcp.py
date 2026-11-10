@@ -4,6 +4,10 @@ Covers initialize, tools/list, and a full headless session through the tools:
 start, ping, navigate, read, links, forms, fill, click_text, screenshot, tabs,
 stop. Uses newline-delimited JSON-RPC on stdin/stdout (the MCP stdio shape).
 """
+
+import os as _os
+TOOLS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+ROOT = _os.path.dirname(TOOLS_DIR)
 import functools
 import http.server
 import json
@@ -12,7 +16,7 @@ import sys
 import threading
 import time
 
-sys.path.insert(0, r"D:/Code/2026/Browserr/tools")
+sys.path.insert(0, TOOLS_DIR)
 
 PAGE = """<!doctype html><html><head><title>MCP Test Page</title></head><body>
 <p>Agent content here.</p>
@@ -24,22 +28,22 @@ NEXT = """<!doctype html><html><head><title>MCP Next</title></head><body>
 <p>Second page content.</p></body></html>"""
 
 import os
-with open(r"D:/Code/2026/Browserr/tools/mcp-dl.bin", "wb") as f:
+with open(TOOLS_DIR + "/mcp-dl.bin", "wb") as f:
     f.write(os.urandom(4096))
 
 handler = functools.partial(http.server.SimpleHTTPRequestHandler,
-                            directory=r"D:/Code/2026/Browserr/tools")
+                            directory=TOOLS_DIR)
 httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 8130), handler)
 threading.Thread(target=httpd.serve_forever, daemon=True).start()
-with open(r"D:/Code/2026/Browserr/tools/mcp-test.html", "w") as f:
+with open(TOOLS_DIR + "/mcp-test.html", "w") as f:
     f.write(PAGE)
-with open(r"D:/Code/2026/Browserr/tools/mcp-next.html", "w") as f:
+with open(TOOLS_DIR + "/mcp-next.html", "w") as f:
     f.write(NEXT)
 
 proc = subprocess.Popen(
-    [sys.executable, r"D:/Code/2026/Browserr/tools/browserr_mcp.py"],
+    [sys.executable, TOOLS_DIR + "/browserr_mcp.py"],
     stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8",
-    cwd=r"D:/Code/2026/Browserr/tools")
+    cwd=TOOLS_DIR)
 
 
 def send(msg):
@@ -132,9 +136,9 @@ try:
     print("console OK:", len(r["messages"]), "messages")
 
     r = call("browser_download", {"url": "http://127.0.0.1:8130/mcp-dl.bin",
-                                  "path": r"D:/Code/2026/Browserr/tools/mcp-dl.bin"})
+                                  "path": TOOLS_DIR + "/mcp-dl.bin"})
     assert r["bytes"] == 4096, r
-    assert os.path.getsize(r"D:/Code/2026/Browserr/tools/mcp-dl.bin") == 4096
+    assert os.path.getsize(TOOLS_DIR + "/mcp-dl.bin") == 4096
     print("download OK:", r["bytes"], "bytes")
 
     # Element tools: back on the first page (click_text navigated away).

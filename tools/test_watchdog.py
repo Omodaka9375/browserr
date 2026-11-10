@@ -3,14 +3,18 @@ process is killed mid-session (no hanging until timeout).
 
 Also verifies the ping path works before the kill.
 """
+
+import os as _os
+TOOLS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+ROOT = _os.path.dirname(TOOLS_DIR)
 import subprocess
 import sys
 import time
 
-sys.path.insert(0, r"D:/Code/2026/Browserr/tools")
+sys.path.insert(0, TOOLS_DIR)
 from driver import Driver, EngineDeadError
 
-d = Driver(log="D:/Code/2026/Browserr/engine-watchdog-test.log")
+d = Driver(log=f"{ROOT}/engine-watchdog-test.log")
 try:
     d.navigate("https://example.com")
     d.wait_load()

@@ -16,3 +16,7 @@ tools/__pycache__/
 __pycache__/
 mcp-crash.log
 mcp-wrap.log
+tools/mcp-shots/
+tools/*.html
+tools/*.bin
+tools/*-shot.png

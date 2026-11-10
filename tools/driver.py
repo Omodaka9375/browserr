@@ -26,6 +26,10 @@ the driver port accepts multiple drivers and mirrors engine
 events/screenshots to all of them. With --driver-token, drivers must send
 {"cmd":"auth","token":...} as their first line.
 """
+
+import os as _os
+TOOLS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+ROOT = _os.path.dirname(TOOLS_DIR)
 import json
 import socket
 import struct
@@ -110,7 +114,7 @@ class Driver:
 
         engine_path = engine_path or os.environ.get(
             "BROWSERR_ENGINE",
-            r"D:/Code/2026/Browserr/engine/target/debug/engine.exe")
+            ROOT + "/engine/target/debug/engine.exe")
         args = [engine_path]
         if ephemeral:
             # Throwaway profile under %TEMP%; the engine deletes it on exit.

@@ -1,3 +1,6 @@
+import os as _os
+TOOLS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+ROOT = _os.path.dirname(TOOLS_DIR)
 import sys
 
 import functools
@@ -5,12 +8,12 @@ import http.server
 import sys
 import threading
 
-sys.path.insert(0, r"D:/Code/2026/Browserr/tools")
+sys.path.insert(0, TOOLS_DIR)
 from driver import Driver
 
 PAGE_URL = "http://127.0.0.1:8133/struct-test.html"
 
-with open(r"D:/Code/2026/Browserr/tools/struct-test.html", "w") as f:
+with open(TOOLS_DIR + "/struct-test.html", "w") as f:
     f.write('<!doctype html><html><head><title>Struct Test</title></head><body>'
             '<h1>Main Heading</h1><h2>Sub</h2>'
             '<form><input name=q placeholder="type here">'
@@ -18,11 +21,11 @@ with open(r"D:/Code/2026/Browserr/tools/struct-test.html", "w") as f:
             '<a href="/x">A link</a><img src="/i.png" alt="pic"></body></html>')
 
 handler = functools.partial(http.server.SimpleHTTPRequestHandler,
-                            directory=r"D:/Code/2026/Browserr/tools")
+                            directory=TOOLS_DIR)
 httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 8133), handler)
 threading.Thread(target=httpd.serve_forever, daemon=True).start()
 
-d = Driver(log="D:/Code/2026/Browserr/engine-struct-test.log")
+d = Driver(log=f"{ROOT}/engine-struct-test.log")
 try:
     d.navigate(PAGE_URL)
     d.wait_load(contains="struct-test.html")

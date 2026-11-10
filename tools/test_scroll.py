@@ -3,6 +3,10 @@
 Loads a tall page, scrolls it, switches to a second tab and back, then reads
 scrollY via eval (results flow back as title events).
 """
+
+import os as _os
+TOOLS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+ROOT = _os.path.dirname(TOOLS_DIR)
 import json
 import socket
 import struct
@@ -23,11 +27,11 @@ PAGE = """<!doctype html><body style='margin:0'>
 </body>"""
 
 handler = functools.partial(http.server.SimpleHTTPRequestHandler,
-                            directory=r"D:/Code/2026/Browserr/tools")
+                            directory=TOOLS_DIR)
 httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 8125), handler)
 threading.Thread(target=httpd.serve_forever, daemon=True).start()
 
-with open(r"D:/Code/2026/Browserr/tools/scroll-test.html", "w") as f:
+with open(TOOLS_DIR + "/scroll-test.html", "w") as f:
     f.write(PAGE)
 
 
@@ -83,11 +87,11 @@ def title_with(prefix, timeout=10.0):
 
 def engine_path():
     return os.environ.get("BROWSERR_ENGINE",
-                          r"D:/Code/2026/Browserr/engine/target/debug/engine.exe")
+                          ROOT + "/engine/target/debug/engine.exe")
 
 
 engine = subprocess.Popen([engine_path()],
-                          stderr=open(r"D:/Code/2026/Browserr/engine-scroll-test.log", "w"))
+                          stderr=open(ROOT + "/engine-scroll-test.log", "w"))
 s = None
 try:
     for _ in range(100):

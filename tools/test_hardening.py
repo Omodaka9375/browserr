@@ -4,6 +4,10 @@
    driver connections (no events reach them) and accepts authed ones.
 2. Oversized lines are dropped without effect.
 """
+
+import os as _os
+TOOLS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+ROOT = _os.path.dirname(TOOLS_DIR)
 import json
 import os
 import socket
@@ -11,18 +15,18 @@ import subprocess
 import sys
 import time
 
-sys.path.insert(0, r"D:/Code/2026/Browserr/tools")
+sys.path.insert(0, TOOLS_DIR)
 from driver import Driver
 
 TOKEN = "test-secret-token"
 engine = os.environ.get(
     "BROWSERR_ENGINE",
-    r"D:/Code/2026/Browserr/engine/target/debug/engine.exe")
+    ROOT + "/engine/target/debug/engine.exe")
 
 ui = subprocess.Popen(
     [engine, "--ephemeral", "--driver-port=7412", f"--driver-token={TOKEN}"],
     stdout=subprocess.DEVNULL,
-    stderr=open(r"D:/Code/2026/Browserr/engine-hardening-test.log", "w"))
+    stderr=open(ROOT + "/engine-hardening-test.log", "w"))
 
 # Hold the engine's main connection (the driver port opens after it).
 main_sock = None

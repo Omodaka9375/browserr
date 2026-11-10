@@ -5,6 +5,10 @@
 3. load errors: a bad TLS cert / dead host surfaces as a console message
    (servo logs network errors to the console path).
 """
+
+import os as _os
+TOOLS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+ROOT = _os.path.dirname(TOOLS_DIR)
 import functools
 import http.server
 import os
@@ -12,7 +16,7 @@ import sys
 import tempfile
 import threading
 
-sys.path.insert(0, r"D:/Code/2026/Browserr/tools")
+sys.path.insert(0, TOOLS_DIR)
 from driver import Driver
 
 PAGE = """<!doctype html><html><head><title>Console Test</title></head><body>
@@ -25,15 +29,15 @@ console.error("an error");
 </body></html>"""
 
 handler = functools.partial(http.server.SimpleHTTPRequestHandler,
-                            directory=r"D:/Code/2026/Browserr/tools")
+                            directory=TOOLS_DIR)
 httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 8131), handler)
 threading.Thread(target=httpd.serve_forever, daemon=True).start()
-with open(r"D:/Code/2026/Browserr/tools/features-test.html", "w") as f:
+with open(TOOLS_DIR + "/features-test.html", "w") as f:
     f.write(PAGE)
-with open(r"D:/Code/2026/Browserr/tools/features-file.bin", "wb") as f:
+with open(TOOLS_DIR + "/features-file.bin", "wb") as f:
     f.write(os.urandom(4096))
 
-d = Driver(log="D:/Code/2026/Browserr/engine-features-test.log")
+d = Driver(log=f"{ROOT}/engine-features-test.log")
 try:
     d.navigate("http://127.0.0.1:8131/features-test.html")
     d.wait_load(contains="features-test.html")
@@ -76,6 +80,6 @@ try:
 finally:
     d.close()
 
-os.remove(r"D:/Code/2026/Browserr/tools/features-test.html")
-os.remove(r"D:/Code/2026/Browserr/tools/features-file.bin")
+os.remove(TOOLS_DIR + "/features-test.html")
+os.remove(TOOLS_DIR + "/features-file.bin")
 print("ALL OK")

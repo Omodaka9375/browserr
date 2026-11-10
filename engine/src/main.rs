@@ -1202,8 +1202,10 @@ fn main() {
                                                 e.insert(t);
                                             }
                                             None => {
-                                                cleanup_ephemeral(&ephemeral_dir);
-                                                std::process::exit(0);
+                                                eprintln!(
+                                                    "engine: make_tab {tab_id} failed (context?) - ignoring command"
+                                                );
+                                                continue;
                                             }
                                         }
                                     }
@@ -1222,8 +1224,10 @@ fn main() {
                                             e.insert(t);
                                         }
                                         None => {
-                                            cleanup_ephemeral(&ephemeral_dir);
-                                            std::process::exit(0);
+                                            eprintln!(
+                                                "engine: make_tab {tab_id} failed (context?) - ignoring command"
+                                            );
+                                            continue;
                                         }
                                     }
                                 }
@@ -1237,8 +1241,10 @@ fn main() {
                                             e.insert(t);
                                         }
                                         None => {
-                                            cleanup_ephemeral(&ephemeral_dir);
-                                            std::process::exit(0);
+                                            eprintln!(
+                                                "engine: make_tab {tab_id} failed (context?) - ignoring command"
+                                            );
+                                            continue;
                                         }
                                     }
                                 }

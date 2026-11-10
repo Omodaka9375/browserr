@@ -2,6 +2,10 @@
 
 Covers the reliability + extraction features an automation agent relies on.
 """
+
+import os as _os
+TOOLS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+ROOT = _os.path.dirname(TOOLS_DIR)
 import functools
 import http.server
 import os
@@ -10,7 +14,7 @@ import tempfile
 import threading
 import time
 
-sys.path.insert(0, r"D:/Code/2026/Browserr/tools")
+sys.path.insert(0, TOOLS_DIR)
 from driver import Driver
 
 PAGE = """<!doctype html><html><head><title>Browserr Agent Test</title></head><body style='margin:0'>
@@ -28,17 +32,17 @@ ABOUT = """<!doctype html><html><head><title>About</title></head><body><h1>About
 <p>This is the about page.</p></body></html>"""
 
 handler = functools.partial(http.server.SimpleHTTPRequestHandler,
-                            directory=r"D:/Code/2026/Browserr/tools")
+                            directory=TOOLS_DIR)
 httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 8129), handler)
 threading.Thread(target=httpd.serve_forever, daemon=True).start()
 
-with open(r"D:/Code/2026/Browserr/tools/agent-test.html", "w") as f:
+with open(TOOLS_DIR + "/agent-test.html", "w") as f:
     f.write(PAGE)
-with open(r"D:/Code/2026/Browserr/tools/about.html", "w") as f:
+with open(TOOLS_DIR + "/about.html", "w") as f:
     f.write(ABOUT)
 
 # 1. ping works headless
-d = Driver(log="D:/Code/2026/Browserr/engine-agent-test.log")
+d = Driver(log=f"{ROOT}/engine-agent-test.log")
 try:
     info = d.ping()
     assert info["tabs"] >= 1, info
@@ -91,7 +95,7 @@ finally:
 # 7. ephemeral: close() shuts the engine down gracefully and the temp profile
 #    directory the engine created is gone afterwards.
 before = set(os.listdir(tempfile.gettempdir()))
-d2 = Driver(ephemeral=True, log="D:/Code/2026/Browserr/engine-agent-eph.log")
+d2 = Driver(ephemeral=True, log=f"{ROOT}/engine-agent-eph.log")
 try:
     d2.navigate("http://127.0.0.1:8129/about.html")
     d2.wait_load(contains="about.html")

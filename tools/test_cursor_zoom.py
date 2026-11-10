@@ -6,6 +6,10 @@ Serves a page with a pointer-cursor hit area and a text input. Verifies:
   3. moving back to plain body reports cursor "default"
   4. a zoom command changes devicePixelRatio (reported via the title)
 """
+
+import os as _os
+TOOLS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+ROOT = _os.path.dirname(TOOLS_DIR)
 import json
 import socket
 import struct
@@ -30,11 +34,11 @@ PAGE = """<!doctype html><body style='margin:0'>
 </body>"""
 
 handler = functools.partial(http.server.SimpleHTTPRequestHandler,
-                            directory=r"D:/Code/2026/Browserr/tools")
+                            directory=TOOLS_DIR)
 httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 8124), handler)
 threading.Thread(target=httpd.serve_forever, daemon=True).start()
 
-with open(r"D:/Code/2026/Browserr/tools/cursor-zoom-test.html", "w") as f:
+with open(TOOLS_DIR + "/cursor-zoom-test.html", "w") as f:
     f.write(PAGE)
 
 
@@ -101,11 +105,11 @@ def engine_path():
     override = os.environ.get("BROWSERR_ENGINE")
     if override:
         return override
-    return r"D:/Code/2026/Browserr/engine/target/debug/engine.exe"
+    return ROOT + "/engine/target/debug/engine.exe"
 
 
 engine = subprocess.Popen([engine_path()],
-                          stderr=open(r"D:/Code/2026/Browserr/engine-cursor-test.log", "w"))
+                          stderr=open(ROOT + "/engine-cursor-test.log", "w"))
 s = None
 try:
     for _ in range(100):

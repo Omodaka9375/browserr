@@ -5,6 +5,10 @@
    missing file must download EasyList (easylist.to redirects and is chunked).
 The old ureq path is gone, so this proves the replacement works.
 """
+
+import os as _os
+TOOLS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+ROOT = _os.path.dirname(TOOLS_DIR)
 import os
 import subprocess
 import sys
@@ -12,8 +16,8 @@ import time
 import tempfile
 
 ENGINE = os.environ.get("BROWSERR_ENGINE",
-                        r"D:/Code/2026/Browserr/engine/target/release/engine.exe")
-LOG = r"D:/Code/2026/Browserr/engine-https-test.log"
+                        ROOT + "/engine/target/release/engine.exe")
+LOG = ROOT + "/engine-https-test.log"
 
 # Fresh temp profile: the engine sees no easylist.txt -> downloads over HTTPS.
 tmp = tempfile.mkdtemp(prefix="browserr-https-")

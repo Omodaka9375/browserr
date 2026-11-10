@@ -3,13 +3,17 @@
 Serves a page with a red hit area; verifies eval_js returns values, a driver
 click reaches the page, and a screenshot contains the red pixels.
 """
+
+import os as _os
+TOOLS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+ROOT = _os.path.dirname(TOOLS_DIR)
 import functools
 import http.server
 import threading
 import time
 import sys
 
-sys.path.insert(0, r"D:/Code/2026/Browserr/tools")
+sys.path.insert(0, TOOLS_DIR)
 from driver import Driver, save_png
 
 PAGE = """<!doctype html><body style='margin:0'>
@@ -18,14 +22,14 @@ PAGE = """<!doctype html><body style='margin:0'>
 </body>"""
 
 handler = functools.partial(http.server.SimpleHTTPRequestHandler,
-                            directory=r"D:/Code/2026/Browserr/tools")
+                            directory=TOOLS_DIR)
 httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 8126), handler)
 threading.Thread(target=httpd.serve_forever, daemon=True).start()
 
-with open(r"D:/Code/2026/Browserr/tools/driver-test.html", "w") as f:
+with open(TOOLS_DIR + "/driver-test.html", "w") as f:
     f.write(PAGE)
 
-d = Driver(log="D:/Code/2026/Browserr/engine-driver-test.log")
+d = Driver(log=f"{ROOT}/engine-driver-test.log")
 try:
     d.navigate("http://127.0.0.1:8126/driver-test.html")
     d.wait_load(contains="driver-test.html")
@@ -64,7 +68,7 @@ try:
     assert len(bgra) == w * h * 4
     r, g, b = bgra[2], bgra[1], bgra[0]
     assert r > 200 and g < 50 and b < 50, (r, g, b)
-    save_png(r"D:/Code/2026/Browserr/tools/driver-test-shot.png", w, h, bgra)
+    save_png(TOOLS_DIR + "/driver-test-shot.png", w, h, bgra)
     print("screenshot OK (red pixel at 10,10)")
 
     print("ALL OK")

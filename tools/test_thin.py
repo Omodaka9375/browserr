@@ -2,13 +2,17 @@
 points the driver's spawned engine at the release exe; boot + navigate +
 eval + screenshot all must work. Run after `cargo build --release` of engine.
 """
+
+import os as _os
+TOOLS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+ROOT = _os.path.dirname(TOOLS_DIR)
 import functools
 import http.server
 import threading
 import sys
 import os
 
-sys.path.insert(0, r"D:/Code/2026/Browserr/tools")
+sys.path.insert(0, TOOLS_DIR)
 from driver import Driver, save_png
 
 assert "BROWSERR_ENGINE" in os.environ, "set BROWSERR_ENGINE to the release engine.exe"
@@ -21,13 +25,13 @@ PAGE = """<!doctype html><body style='margin:0'>
 </body>"""
 
 handler = functools.partial(http.server.SimpleHTTPRequestHandler,
-                            directory=r"D:/Code/2026/Browserr/tools")
+                            directory=TOOLS_DIR)
 httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 8128), handler)
 threading.Thread(target=httpd.serve_forever, daemon=True).start()
-with open(r"D:/Code/2026/Browserr/tools/thin-test.html", "w") as f:
+with open(TOOLS_DIR + "/thin-test.html", "w") as f:
     f.write(PAGE)
 
-d = Driver(log="D:/Code/2026/Browserr/engine-thin-test.log")
+d = Driver(log=f"{ROOT}/engine-thin-test.log")
 try:
     d.navigate("http://127.0.0.1:8128/thin-test.html")
     d.wait_load(contains="thin-test.html")

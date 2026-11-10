@@ -3,13 +3,17 @@
 Drives a local page with a search form, a delayed SPA-rendered element and a
 click counter, all via CSS selectors - no coordinates, no text guessing.
 """
+
+import os as _os
+TOOLS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+ROOT = _os.path.dirname(TOOLS_DIR)
 import functools
 import http.server
 import sys
 import threading
 import time
 
-sys.path.insert(0, r"D:/Code/2026/Browserr/tools")
+sys.path.insert(0, TOOLS_DIR)
 from driver import Driver
 
 PAGE = """<!doctype html><html><head><title>Element Test</title></head>
@@ -35,13 +39,13 @@ setTimeout(function() {
 </script></body></html>"""
 
 handler = functools.partial(http.server.SimpleHTTPRequestHandler,
-                            directory=r"D:/Code/2026/Browserr/tools")
+                            directory=TOOLS_DIR)
 httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 8132), handler)
 threading.Thread(target=httpd.serve_forever, daemon=True).start()
-with open(r"D:/Code/2026/Browserr/tools/elements-test.html", "w") as f:
+with open(TOOLS_DIR + "/elements-test.html", "w") as f:
     f.write(PAGE)
 
-d = Driver(log="D:/Code/2026/Browserr/engine-elements-test.log")
+d = Driver(log=f"{ROOT}/engine-elements-test.log")
 try:
     d.navigate("http://127.0.0.1:8132/elements-test.html")
     d.wait_load(contains="elements-test.html")
@@ -84,5 +88,5 @@ finally:
     d.close()
 
 import os
-os.remove(r"D:/Code/2026/Browserr/tools/elements-test.html")
+os.remove(TOOLS_DIR + "/elements-test.html")
 print("ALL OK")

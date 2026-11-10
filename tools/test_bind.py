@@ -2,11 +2,14 @@
 A exits via chrome-disconnect, then B must bind and PRINT 'listening'. We check
 B's log for its own listening line, not just a connect (which could hit A's
 listen backlog)."""
+
+import os as _os
+TOOLS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+ROOT = _os.path.dirname(TOOLS_DIR)
 import subprocess
 import time
 
-ENGINE = r"D:/Code/2026/Browserr/engine/target/debug/engine.exe"
-ROOT = r"D:/Code/2026/Browserr"
+ENGINE = ROOT + "\\engine\\target\\debug\\engine.exe"
 
 a = subprocess.Popen([ENGINE], stderr=open(rf"{ROOT}/engine-bind-a.log", "wb"))
 time.sleep(1.5)

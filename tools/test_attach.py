@@ -6,6 +6,10 @@ verifies attach + auth, navigation, eval, click, typing, screenshots, and
 that the engine stays alive after the driver detaches (socket close on the
 driver port must NOT exit the engine; only the main client's disconnect does).
 """
+
+import os as _os
+TOOLS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+ROOT = _os.path.dirname(TOOLS_DIR)
 import functools
 import http.server
 import os
@@ -14,7 +18,7 @@ import sys
 import threading
 import time
 
-sys.path.insert(0, r"D:/Code/2026/Browserr/tools")
+sys.path.insert(0, TOOLS_DIR)
 from driver import Driver, save_png
 
 PAGE = """<!doctype html><body style='margin:0'>
@@ -23,23 +27,23 @@ PAGE = """<!doctype html><body style='margin:0'>
 </body>"""
 
 handler = functools.partial(http.server.SimpleHTTPRequestHandler,
-                            directory=r"D:/Code/2026/Browserr/tools")
+                            directory=TOOLS_DIR)
 httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 8127), handler)
 threading.Thread(target=httpd.serve_forever, daemon=True).start()
 
-with open(r"D:/Code/2026/Browserr/tools/attach-test.html", "w") as f:
+with open(TOOLS_DIR + "/attach-test.html", "w") as f:
     f.write(PAGE)
 
 engine = os.environ.get(
     "BROWSERR_ENGINE",
-    r"D:/Code/2026/Browserr/engine/target/debug/engine.exe")
+    ROOT + "/engine/target/debug/engine.exe")
 
 # The engine needs its MAIN client connected before the driver port opens
 # (the listener starts after the first accept). Connect a raw client first.
 main = subprocess.Popen(
     [engine, "--ephemeral", "--driver-port=7412", "--driver-token=secret"],
     stdout=subprocess.DEVNULL,
-    stderr=open(r"D:/Code/2026/Browserr/engine-attach-test.log", "w"))
+    stderr=open(ROOT + "/engine-attach-test.log", "w"))
 
 # The engine's main port must be connected before the driver port opens
 # (the listener starts after the first accept). Hold a raw main connection
@@ -93,7 +97,7 @@ try:
     assert len(bgra) == w * h * 4, (w, h)
     r, g, b = bgra[2], bgra[1], bgra[0]
     assert r > 200 and g < 50 and b < 50, (r, g, b)
-    save_png(r"D:/Code/2026/Browserr/tools/attach-test-shot.png", w, h, bgra)
+    save_png(TOOLS_DIR + "/attach-test-shot.png", w, h, bgra)
     print("screenshot OK")
 
     d.new_tab(1)
@@ -113,4 +117,4 @@ finally:
     print("engine alive after detach:", alive)
     assert alive, "detach killed the engine"
 
-os.remove(r"D:/Code/2026/Browserr/tools/attach-test.html")
+os.remove(TOOLS_DIR + "/attach-test.html")

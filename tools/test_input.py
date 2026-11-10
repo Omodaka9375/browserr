@@ -4,6 +4,10 @@ Serves a page over http.server (data: URLs do not report titles). The page
 sets document.title on click and wheel, and mirrors typed text into the title
 via an input handler. Events are sent raw over the socket, like the chrome.
 """
+
+import os as _os
+TOOLS_DIR = _os.path.dirname(_os.path.abspath(__file__))
+ROOT = _os.path.dirname(TOOLS_DIR)
 import json
 import socket
 import struct
@@ -24,11 +28,11 @@ PAGE = """<!doctype html><body style='margin:0'>
 </body>"""
 
 handler = functools.partial(http.server.SimpleHTTPRequestHandler,
-                            directory=r"D:/Code/2026/Browserr/tools")
+                            directory=TOOLS_DIR)
 httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 8123), handler)
 threading.Thread(target=httpd.serve_forever, daemon=True).start()
 
-with open(r"D:/Code/2026/Browserr/tools/input-test.html", "w") as f:
+with open(TOOLS_DIR + "/input-test.html", "w") as f:
     f.write(PAGE)
 
 
