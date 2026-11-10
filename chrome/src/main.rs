@@ -388,10 +388,13 @@ fn setup(s: &mut State, wake: rune::Waker) {
     };
     let profile_dir = store::data_dir().join("engine");
     // Computer-use mode: expose the driver port before the engine connects
-    // so an automation client can attach from the first frame on.
+    // so an automation client can attach from the first frame on. A token
+    // (--driver-token=...) requires drivers to auth before commands pass.
     let hub = engine::DriverHub::new();
     if let Some(port) = store::driver_port() {
-        engine::start_driver_listener(port, hub.clone());
+        let token = std::env::args()
+            .find_map(|a| a.strip_prefix("--driver-token=").map(str::to_string));
+        engine::start_driver_listener(port, hub.clone(), token);
     }
     match Engine::start(
         s.surface.clone(),

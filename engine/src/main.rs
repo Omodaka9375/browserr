@@ -971,6 +971,14 @@ fn main() {
                     if line.is_empty() {
                         break;
                     }
+                    // Hardening: a command line larger than 8 MB is not a
+                    // legitimate command (the biggest legitimate payload is
+                    // an eval script); drop it instead of parsing (a hostile
+                    // local process could otherwise balloon memory).
+                    if line.len() > 8 << 20 {
+                        eprintln!("engine: dropping oversized command ({} bytes)", line.len());
+                        break;
+                    }
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
                         let tab_id = v["tab"].as_u64().unwrap_or(0);
                         match v["cmd"].as_str() {

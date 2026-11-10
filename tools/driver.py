@@ -77,8 +77,10 @@ class Driver:
     """
 
     @classmethod
-    def attach(cls, port=7412, log=None):
-        """Attach to a running Browserr window started with --driver-port=N."""
+    def attach(cls, port=7412, log=None, token=None):
+        """Attach to a running Browserr window started with --driver-port=N.
+        If the window was started with --driver-token=T, pass token=T: it is
+        sent as the auth line before anything else."""
         self = cls.__new__(cls)
         self._init_common(port, log=log)
         last = None
@@ -92,6 +94,9 @@ class Driver:
         if self.sock is None:
             raise ConnectionError(f"no driver port on {self.port} (is the "
                                   f"browser running with --driver-port={port}?): {last}")
+        if token:
+            self.sock.sendall((json.dumps(
+                {"cmd": "auth", "token": token}) + "\n").encode())
         threading.Thread(target=self._read_loop, daemon=True).start()
         return self
 
@@ -119,19 +124,71 @@ class Driver:
                                     stderr=self._log or subprocess.DEVNULL)
 
         last = None
-        for _ in range(100):
+        deadline = time.time() + 10.0
+        while time.time() < deadline:
             try:
                 self.sock = socket.create_connection(("127.0.0.1", self.port), timeout=1)
-                break
+                # Prove this socket belongs to a LIVE engine before using it:
+                # a just-spawned engine can connect against a DYING engine's
+                # listen backlog (both hold the port briefly during handover).
+                # Ping/pong resolves it; a stale socket dies on the exchange.
+                req = self._next_id
+                self._next_id += 1
+                self.sock.sendall((json.dumps(
+                    {"cmd": "ping", "tab": 0, "id": req}) + "\n").encode())
+                self.sock.settimeout(2)
+                pong = self._read_frame_raw()
+                if (pong and pong.get("ev") == "pong"
+                        and pong.get("id") == req):
+                    break
+                # Stale socket (old engine): close, retry on the new one.
+                self.sock.close()
+                self.sock = None
+                time.sleep(0.1)
             except OSError as e:
                 last = e
+                self.sock = None
                 time.sleep(0.1)
         if self.sock is None:
-            self.proc.kill()
-            raise ConnectionError(f"engine did not listen on {self.port}: {last}")
+            if self.proc:
+                self.proc.kill()
+            raise ConnectionError(f"engine did not answer on {self.port}: {last}")
 
         self.cmd({"cmd": "resize", "w": width, "h": height})
         threading.Thread(target=self._read_loop, daemon=True).start()
+
+    def _read_frame_raw(self):
+        """Read one EVT1 frame off the socket without the reader thread
+        (startup verification only). Returns the parsed JSON or None.
+        Skips FRM1 frames (pixel data) if any arrive."""
+        while True:
+            hdr = b""
+            while len(hdr) < 20:
+                chunk = self.sock.recv(20 - len(hdr))
+                if not chunk:
+                    return None
+                hdr += chunk
+            magic = struct.unpack("<I", hdr[:4])[0]
+            a = struct.unpack("<I", hdr[12:16])[0]
+            b = struct.unpack("<I", hdr[16:20])[0]
+            if magic == FRM1:
+                # Skip pixel data, keep reading for the event.
+                n = a * b * 4
+                while n > 0:
+                    chunk = self.sock.recv(min(n, 65536))
+                    if not chunk:
+                        return None
+                    n -= len(chunk)
+                continue
+            if magic != EVT1:
+                return None  # SHT1 or garbage: not what we're waiting for
+            payload = b""
+            while len(payload) < a:
+                chunk = self.sock.recv(a - len(payload))
+                if not chunk:
+                    return None
+                payload += chunk
+            return json.loads(payload)
 
     def _init_common(self, port, log=None):
         """Shared state for both modes (headless spawn vs attach)."""

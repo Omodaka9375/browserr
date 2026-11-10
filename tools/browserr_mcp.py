@@ -45,12 +45,12 @@ class State:
                 raise McpError("browser not started; call browser_start first")
             return self.driver
 
-    def start(self, attach_port=None):
+    def start(self, attach_port=None, token=None):
         with self.lock:
             if self.driver is not None:
                 return {"started": False, "note": "already running"}
             if attach_port:
-                self.driver = Driver.attach(attach_port)
+                self.driver = Driver.attach(attach_port, token=token)
             else:
                 self.driver = Driver(ephemeral=True)
             return {"started": True, "mode": "attach" if attach_port else "headless"}
@@ -70,10 +70,14 @@ TOOLS = [
         "name": "browser_start",
         "description": "Start the browser. Headless by default; pass attach_port "
                        "to drive a visible Browserr window started with "
-                       "--driver-port (computer-use mode).",
+                       "--driver-port (computer-use mode). Pass token if "
+                       "the window was started with --driver-token.",
         "inputSchema": {"type": "object", "properties": {
             "attach_port": {"type": "integer",
-                            "description": "driver port of a running window"}},
+                            "description": "driver port of a running window"},
+            "token": {"type": "string",
+                      "description": "driver auth token if the window was "
+                                      "started with --driver-token"}},
             "required": []},
     },
     {
@@ -176,7 +180,7 @@ TOOLS = [
 
 def call_tool(name, args):
     if name == "browser_start":
-        return STATE.start(args.get("attach_port"))
+        return STATE.start(args.get("attach_port"), token=args.get("token"))
     if name == "browser_stop":
         return STATE.stop()
 

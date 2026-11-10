@@ -47,6 +47,12 @@ python tools\browserr_mcp.py              # headless, ephemeral profile, MCP on 
 python tools\browserr_mcp.py --port 7412  # drive a visible --driver-port window
 ```
 
+Computer-use hardening: `chrome.exe --driver-port=N` accepts any local process
+by default. Start it with `--driver-token=T` to require drivers to send
+`{"cmd":"auth","token":"T"}` as their first line; unauthenticated sockets
+get no engine events and are dropped. `Driver.attach(port, token=T)` and the
+MCP `browser_start` `token` argument handle this automatically.
+
 ## Protocol (v2)
 
 Commands are newline JSON, tab-addressed. The socket is loopback and single
@@ -124,7 +130,9 @@ d.close()                  # detaches, the window keeps running
 The driver port is opt-in, loopback-only, and accepts multiple drivers:
 commands are validated (page-level commands only; resize and frame-stream
 controls stay chrome-owned) and forwarded to the engine; engine events and
-screenshot answers are mirrored to every attached driver.
+screenshot answers are mirrored to every attached driver. With
+`--driver-token=T` the first line must authenticate or the socket is dropped
+without events. Command lines over 8 MB are dropped without parsing.
 
 Extraction helpers: `read_page()` (title plus body text, links as
 `[label](href)`, invisible elements skipped), `links()` and `forms()`
@@ -231,6 +239,7 @@ test_driver.py       SDK: eval results, click, typing, screenshot pixels
 test_attach.py       computer use: drive a real window, detach keeps it alive
 test_agent.py        ping, ephemeral, read_page/links/forms/fill/click_text
 test_features.py     console capture, downloads, load-error surfacing
+test_hardening.py    driver-token gate + oversized-line rejection
 test_mcp.py          full MCP session over stdio
 test_https.py        engine TLS client: real EasyList download
 test_thin.py         release build smoke (set BROWSERR_ENGINE)

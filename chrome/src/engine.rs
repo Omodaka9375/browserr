@@ -398,6 +398,16 @@ impl DriverHub {
         });
     }
 
+    /// Register a driver client for broadcasts. Called after successful auth
+    /// when a token is required (an unauthed socket gets nothing).
+    pub fn add_client(&self, stream: &TcpStream) {
+        if let Ok(clone) = stream.try_clone() {
+            let mut clients = self.clients.lock().unwrap();
+            clients.push(clone);
+            eprintln!("chrome: driver attached ({} open)", clients.len());
+        }
+    }
+
     /// Send one command line to the engine. A single write, so the UI thread
     /// and driver clients can never interleave mid-line.
     fn send_command(&self, line: &str) -> bool {
@@ -419,8 +429,10 @@ const DRIVER_CMDS: [&str; 14] = [
 ];
 
 /// Accept automation-driver connections on 127.0.0.1:port (opt-in via
-/// --driver-port=N; loopback only, like the engine port).
-pub fn start_driver_listener(port: u16, hub: Arc<DriverHub>) {
+/// --driver-port=N; loopback only, like the engine port). If a token is
+/// given (--driver-token=...), drivers must authenticate ({"cmd":"auth",...})
+/// before any command goes through.
+pub fn start_driver_listener(port: u16, hub: Arc<DriverHub>, token: Option<String>) {
     std::thread::spawn(move || {
         let listener = match TcpListener::bind(("127.0.0.1", port)) {
             Ok(l) => l,
@@ -434,22 +446,23 @@ pub fn start_driver_listener(port: u16, hub: Arc<DriverHub>) {
             let Ok(stream) = client else { return; };
             // A driver that stops reading must not wedge the frame reader.
             let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(2)));
-            if let Ok(clone) = stream.try_clone() {
-                let mut clients = hub.clients.lock().unwrap();
-                clients.push(clone);
-                eprintln!("chrome: driver attached ({} open)", clients.len());
-            }
             let hub = hub.clone();
-            std::thread::spawn(move || driver_client_loop(stream, hub));
+            let token = token.clone();
+            std::thread::spawn(move || driver_client_loop(stream, hub, token));
         }
     });
 }
 
 /// Read JSON command lines from one driver and forward the allowed ones to
 /// the engine. Exits on disconnect (broadcast prunes the socket later).
-fn driver_client_loop(stream: TcpStream, hub: Arc<DriverHub>) {
+/// If `token` is set (chrome --driver-token=...), the FIRST line a driver
+/// sends must be {"cmd":"auth","token":"..."} - anything else drops the
+/// connection. Hardening against other local processes driving the browser.
+fn driver_client_loop(stream: TcpStream, hub: Arc<DriverHub>, token: Option<String>) {
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
+    let mut authed = token.is_none();
+    let mut registered = false;
     loop {
         line.clear();
         match reader.read_line(&mut line) {
@@ -460,6 +473,11 @@ fn driver_client_loop(stream: TcpStream, hub: Arc<DriverHub>) {
         if trimmed.is_empty() {
             continue;
         }
+        // Hardening: reject oversized lines without parsing.
+        if trimmed.len() > 8 << 20 {
+            eprintln!("chrome: driver sent oversized line ({} bytes), dropping", trimmed.len());
+            break;
+        }
         let v: serde_json::Value = match serde_json::from_str(trimmed) {
             Ok(v) => v,
             Err(_) => continue,
@@ -468,6 +486,26 @@ fn driver_client_loop(stream: TcpStream, hub: Arc<DriverHub>) {
             Some(c) => c,
             None => continue,
         };
+        if !authed {
+            let ok = cmd == "auth"
+                && v["token"].as_str().map(|t| t == token.as_deref().unwrap_or("")).unwrap_or(false);
+            if ok {
+                authed = true;
+                registered = true;
+                eprintln!("chrome: driver authenticated");
+                // Register for broadcasts only now: an unauthed socket gets
+                // no engine events or screenshot answers.
+                hub.add_client(reader.get_ref());
+                continue;
+            }
+            eprintln!("chrome: driver failed auth, dropping connection");
+            break;
+        }
+        if !registered {
+            // No token required: register on the first command.
+            registered = true;
+            hub.add_client(reader.get_ref());
+        }
         if !DRIVER_CMDS.contains(&cmd) {
             eprintln!("chrome: driver command rejected: {cmd}");
             continue;
