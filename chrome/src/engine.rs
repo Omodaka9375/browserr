@@ -51,6 +51,9 @@ const SHOT_MAGIC: u32 = 0x53_48_54_31; // SHT1 (screenshot answer)
 /// A login captured from a submitted password form.
 #[derive(Clone, Debug)]
 pub struct PwCapture {
+    /// Tab that captured it (not read by the UI yet; kept for the prompt
+    /// to target the right tab when multi-tab prompts arrive).
+    #[allow(dead_code)]
     pub tab: u64,
     pub user: String,
     pub pass: String,
@@ -175,7 +178,8 @@ impl Engine {
         let exe = std::env::var("BROWSERR_ENGINE")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| {
-                let here = std::env::current_exe().ok()
+                let here = std::env::current_exe()
+                    .ok()
                     .and_then(|p| p.parent().map(|p| p.to_path_buf()))
                     .unwrap_or_default();
                 here.join("engine.exe")
@@ -223,7 +227,8 @@ impl Engine {
         let waker = args.waker.clone();
         let ui = args.ui.clone();
         let hub = args.hub.clone();
-        let reader = std::thread::spawn(move || read_frames(reader_stream, surface, waker, ui, hub));
+        let reader =
+            std::thread::spawn(move || read_frames(reader_stream, surface, waker, ui, hub));
 
         Ok(Engine {
             child,
@@ -296,7 +301,9 @@ impl Engine {
 
     pub fn navigate(&mut self, url: &str, tab: u64) {
         let safe = url.replace('\\', "\\\\").replace('"', "\\\"");
-        self.send(&format!("{{\"cmd\":\"navigate\",\"url\":\"{safe}\",\"tab\":{tab}}}"));
+        self.send(&format!(
+            "{{\"cmd\":\"navigate\",\"url\":\"{safe}\",\"tab\":{tab}}}"
+        ));
     }
 
     pub fn resize(&mut self, w: u32, h: u32) {
@@ -346,7 +353,9 @@ impl Engine {
 
     /// Set a tab's page zoom (1.0 = 100%; the engine clamps).
     pub fn zoom(&mut self, tab: u64, zoom: f32) {
-        self.send(&format!("{{\"cmd\":\"zoom\",\"tab\":{tab},\"zoom\":{zoom}}}"));
+        self.send(&format!(
+            "{{\"cmd\":\"zoom\",\"tab\":{tab},\"zoom\":{zoom}}}"
+        ));
     }
 
     /// Forward a keyboard event: name from key_name(), text for text keys,
@@ -391,11 +400,7 @@ impl DriverHub {
     /// clients that went away are dropped.
     fn broadcast(&self, bytes: &[u8]) {
         let mut clients = self.clients.lock().unwrap();
-        clients.retain_mut(|c| {
-            let ok = c.write_all(bytes).is_ok();
-            let ok = ok && c.flush().is_ok();
-            ok
-        });
+        clients.retain_mut(|c| c.write_all(bytes).is_ok() && c.flush().is_ok());
     }
 
     /// Register a driver client for broadcasts. Called after successful auth
@@ -424,8 +429,20 @@ impl DriverHub {
 /// Commands an attached driver may send; all are tab-addressed and forwarded
 /// to the engine 1:1. resize/frames are chrome-owned and rejected.
 const DRIVER_CMDS: [&str; 14] = [
-    "navigate", "back", "forward", "new_tab", "activate", "close_tab",
-    "input", "wheel", "key", "eval", "screenshot", "zoom", "ping", "download",
+    "navigate",
+    "back",
+    "forward",
+    "new_tab",
+    "activate",
+    "close_tab",
+    "input",
+    "wheel",
+    "key",
+    "eval",
+    "screenshot",
+    "zoom",
+    "ping",
+    "download",
 ];
 
 /// Accept automation-driver connections on 127.0.0.1:port (opt-in via
@@ -443,7 +460,9 @@ pub fn start_driver_listener(port: u16, hub: Arc<DriverHub>, token: Option<Strin
         };
         eprintln!("chrome: driver port listening on 127.0.0.1:{port}");
         for client in listener.incoming() {
-            let Ok(stream) = client else { return; };
+            let Ok(stream) = client else {
+                return;
+            };
             // A driver that stops reading must not wedge the frame reader.
             let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(2)));
             let hub = hub.clone();
@@ -475,7 +494,10 @@ fn driver_client_loop(stream: TcpStream, hub: Arc<DriverHub>, token: Option<Stri
         }
         // Hardening: reject oversized lines without parsing.
         if trimmed.len() > 8 << 20 {
-            eprintln!("chrome: driver sent oversized line ({} bytes), dropping", trimmed.len());
+            eprintln!(
+                "chrome: driver sent oversized line ({} bytes), dropping",
+                trimmed.len()
+            );
             break;
         }
         let v: serde_json::Value = match serde_json::from_str(trimmed) {
@@ -488,7 +510,10 @@ fn driver_client_loop(stream: TcpStream, hub: Arc<DriverHub>, token: Option<Stri
         };
         if !authed {
             let ok = cmd == "auth"
-                && v["token"].as_str().map(|t| t == token.as_deref().unwrap_or("")).unwrap_or(false);
+                && v["token"]
+                    .as_str()
+                    .map(|t| t == token.as_deref().unwrap_or(""))
+                    .unwrap_or(false);
             if ok {
                 authed = true;
                 registered = true;
@@ -667,7 +692,12 @@ fn read_frames_inner(
                         let pass = d["p"].as_str().unwrap_or("").to_string();
                         let origin = d["o"].as_str().unwrap_or("").to_string();
                         if !pass.is_empty() {
-                            *ui.pw.lock().unwrap() = Some(PwCapture { tab, user, pass, origin });
+                            *ui.pw.lock().unwrap() = Some(PwCapture {
+                                tab,
+                                user,
+                                pass,
+                                origin,
+                            });
                         }
                     }
                     #[cfg(windows)]
@@ -678,7 +708,8 @@ fn read_frames_inner(
                         let fence = v["fence"].as_str().unwrap_or("");
                         let value = v["value"].as_u64().unwrap_or(0);
                         if !name.is_empty() && w > 0 && h > 0 {
-                            let frame = SharedTexture::named(name, w, h).release_fence(fence, value);
+                            let frame =
+                                SharedTexture::named(name, w, h).release_fence(fence, value);
                             let id = counter.fetch_add(1, Ordering::SeqCst);
                             if surface.push_shared(frame, id).is_err() {
                                 request_bytes(&reader);

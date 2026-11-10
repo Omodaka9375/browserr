@@ -62,8 +62,12 @@ pub fn profile() -> &'static str {
 
 /// Host portion of a URL ("https://a.b/c" -> "a.b"); "" when unparseable.
 pub fn host(url: &str) -> String {
-    url.split("://").nth(1).unwrap_or(url)
-        .split('/').next().unwrap_or(url)
+    url.split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or(url)
         .to_string()
 }
 
@@ -239,10 +243,9 @@ pub fn clear_history() {
 }
 
 pub fn load_session() -> Option<Session> {
-    let v: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(data_dir().join("session.json")).ok()?,
-    )
-    .ok()?;
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(data_dir().join("session.json")).ok()?)
+            .ok()?;
     let urls: Vec<String> = v["urls"]
         .as_array()?
         .iter()
@@ -255,11 +258,7 @@ pub fn load_session() -> Option<Session> {
     let len = urls.len();
     let zooms: Vec<f32> = v["zooms"]
         .as_array()
-        .map(|a| {
-            a.iter()
-                .map(|z| z.as_f64().unwrap_or(1.0) as f32)
-                .collect()
-        })
+        .map(|a| a.iter().map(|z| z.as_f64().unwrap_or(1.0) as f32).collect())
         .unwrap_or_default();
     Some(Session {
         urls,

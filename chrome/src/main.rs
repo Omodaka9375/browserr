@@ -1,8 +1,11 @@
 use rune::tok::{self, type_};
-use rune::{App, AppSpec, Color, Cx, El, Icon, NativeSurface, ScrollSpec, SurfaceFit, TextEdit, Tx, WindowOptions, col, el, icon, row, spacer, text, text_input};
+use rune::{
+    col, el, icon, row, spacer, text, text_input, App, AppSpec, Color, Cx, El, Icon, NativeSurface,
+    ScrollSpec, SurfaceFit, TextEdit, Tx, WindowOptions,
+};
 
-mod engine;
 mod creds;
+mod engine;
 mod store;
 
 use engine::{Engine, Ui};
@@ -68,7 +71,11 @@ struct State {
 
 impl Default for Tab {
     fn default() -> Self {
-        Self { id: 0, url: String::new(), title: "New Tab".into() }
+        Self {
+            id: 0,
+            url: String::new(),
+            title: "New Tab".into(),
+        }
     }
 }
 
@@ -115,8 +122,15 @@ fn state() -> State {
     } else {
         match store::load_session() {
             Some(s) => {
-                let tabs: Vec<Tab> = s.urls.iter().enumerate()
-                    .map(|(i, u)| Tab { id: i as u64, url: u.clone(), title: host(u) })
+                let tabs: Vec<Tab> = s
+                    .urls
+                    .iter()
+                    .enumerate()
+                    .map(|(i, u)| Tab {
+                        id: i as u64,
+                        url: u.clone(),
+                        title: host(u),
+                    })
                     .collect();
                 (tabs, s.active, s.urls.len() as u64, s.zooms)
             }
@@ -143,7 +157,11 @@ fn state() -> State {
         menu_open: false,
         history_view: Vec::new(),
         picker,
-        profiles: if picker { store::list_profiles() } else { Vec::new() },
+        profiles: if picker {
+            store::list_profiles()
+        } else {
+            Vec::new()
+        },
         profile_input: TextEdit::new(""),
         settings,
         settings_home,
@@ -262,11 +280,17 @@ fn renavigate_all(s: &mut State) {
     e.resize(w, h);
     s.ui.clear_cursors();
     // Prefer the engine-reported url; fall back to the chrome-side record.
-    let tabs: Vec<(u64, String)> = s.tabs.iter().map(|t| {
-        let url = s.ui.url(t.id).filter(|u| !u.is_empty())
-            .unwrap_or_else(|| t.url.clone());
-        (t.id, url)
-    }).collect();
+    let tabs: Vec<(u64, String)> = s
+        .tabs
+        .iter()
+        .map(|t| {
+            let url =
+                s.ui.url(t.id)
+                    .filter(|u| !u.is_empty())
+                    .unwrap_or_else(|| t.url.clone());
+            (t.id, url)
+        })
+        .collect();
     for (id, url) in tabs {
         if !url.is_empty() {
             e.navigate(&url, id);
@@ -320,7 +344,10 @@ fn recover_engine(s: &mut State) {
 /// respawns it. Also saves the session whenever the engine reports a URL
 /// change (crash resilience: the last session state survives engine loss).
 fn poll(s: &mut State, _t: f64, _tx: &mut Tx) -> bool {
-    if s.ui.engine_dead.swap(false, std::sync::atomic::Ordering::SeqCst) {
+    if s.ui
+        .engine_dead
+        .swap(false, std::sync::atomic::Ordering::SeqCst)
+    {
         recover_engine(s);
         return true;
     }
@@ -352,7 +379,11 @@ fn save_settings_ui(s: &mut State) {
 /// Open a new chrome window for `name` and close the picker.
 fn launch_profile(tx: &mut Tx, name: &str) {
     if let Ok(exe) = std::env::current_exe() {
-        if Command::new(exe).arg(format!("--profile={name}")).spawn().is_ok() {
+        if Command::new(exe)
+            .arg(format!("--profile={name}"))
+            .spawn()
+            .is_ok()
+        {
             tx.close_window();
         }
     }
@@ -382,7 +413,10 @@ fn setup(s: &mut State, wake: rune::Waker) {
     }
     let user_agent = s.settings.user_agent.clone();
     let adblock_list = if s.settings.adblock {
-        store::data_dir().join("easylist.txt").to_string_lossy().to_string()
+        store::data_dir()
+            .join("easylist.txt")
+            .to_string_lossy()
+            .to_string()
     } else {
         String::new()
     };
@@ -392,8 +426,8 @@ fn setup(s: &mut State, wake: rune::Waker) {
     // (--driver-token=...) requires drivers to auth before commands pass.
     let hub = engine::DriverHub::new();
     if let Some(port) = store::driver_port() {
-        let token = std::env::args()
-            .find_map(|a| a.strip_prefix("--driver-token=").map(str::to_string));
+        let token =
+            std::env::args().find_map(|a| a.strip_prefix("--driver-token=").map(str::to_string));
         engine::start_driver_listener(port, hub.clone(), token);
     }
     match Engine::start(
@@ -410,7 +444,9 @@ fn setup(s: &mut State, wake: rune::Waker) {
             s.engine_adblock = s.settings.adblock;
             // Restore open tabs: navigate() creates missing engine tabs on demand.
             let active_id = s.tabs[s.active].id;
-            let restored: Vec<(u64, String)> = s.tabs.iter()
+            let restored: Vec<(u64, String)> = s
+                .tabs
+                .iter()
                 .map(|t| (t.id, t.url.clone()))
                 .filter(|(_, u)| !u.is_empty())
                 .collect();
@@ -420,7 +456,8 @@ fn setup(s: &mut State, wake: rune::Waker) {
                 }
                 push_zooms_to(&mut e, s);
                 e.activate(active_id);
-                s.ui.active.store(active_id, std::sync::atomic::Ordering::SeqCst);
+                s.ui.active
+                    .store(active_id, std::sync::atomic::Ordering::SeqCst);
             } else if !s.settings.homepage.is_empty() {
                 e.navigate(&s.settings.homepage, 0);
                 if s.settings.default_zoom != 1.0 {
@@ -496,9 +533,19 @@ static ICON_EYE: Icon = Icon {
     body: r#"<path d="M2.5 8s2-4 5.5-4 5.5 4 5.5 4-2 4-5.5 4S2.5 8 2.5 8z" stroke="currentColor" stroke-width="1.2" fill="none"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/>"#,
 };
 
-fn icon_btn(id: &'static str, ic: &'static Icon, enabled: bool, action: Option<impl Fn(&mut State) + 'static>) -> El {
+fn icon_btn(
+    id: &'static str,
+    ic: &'static Icon,
+    enabled: bool,
+    action: Option<impl Fn(&mut State) + 'static>,
+) -> El {
     let t = tok::theme(true);
-    let e = el().key(id).size(28.0, 28.0).radius(14.0).center_y().child(icon(ic, 16.0));
+    let e = el()
+        .key(id)
+        .size(28.0, 28.0)
+        .radius(14.0)
+        .center_y()
+        .child(icon(ic, 16.0));
     match (enabled, action) {
         (true, Some(action)) => e.fill(Color::TRANSPARENT).hover(t.hover).on_press(action),
         _ => e.layer_opacity(0.35),
@@ -506,17 +553,31 @@ fn icon_btn(id: &'static str, ic: &'static Icon, enabled: bool, action: Option<i
 }
 
 /// Windows-style window control: outline triangle glyph, hover highlight.
-fn win_btn(key: &'static str, ic: &'static Icon, action: impl Fn(&mut State, &mut Tx) + 'static) -> El {
+fn win_btn(
+    key: &'static str,
+    ic: &'static Icon,
+    action: impl Fn(&mut State, &mut Tx) + 'static,
+) -> El {
     let t = tok::theme(true);
-    el().key(key).w(32.0).h(24.0).center().radius(6.0)
-        .fill(Color::TRANSPARENT).hover(t.hover).press(t.hover)
+    el().key(key)
+        .w(32.0)
+        .h(24.0)
+        .center()
+        .radius(6.0)
+        .fill(Color::TRANSPARENT)
+        .hover(t.hover)
+        .press(t.hover)
         .on_press_tx(action)
         .child(icon(ic, 12.0))
 }
 
 fn text_btn(id: &'static str, label: String, action: impl Fn(&mut State) + 'static) -> El {
     let t = tok::theme(true);
-    el().key(id).px(12.0).py(4.0).radius(14.0).fill(t.hover)
+    el().key(id)
+        .px(12.0)
+        .py(4.0)
+        .radius(14.0)
+        .fill(t.hover)
         .on_press(action)
         .child(text(label).font(type_::BODY.lh(18.0)).color(t.text))
 }
@@ -549,10 +610,18 @@ fn key_name(k: &rune::Key) -> Option<(String, String)> {
 /// Modifier bitmask for the engine: 1 shift, 2 ctrl, 4 alt, 8 cmd/logo.
 fn key_mods(m: rune::Mods) -> u8 {
     let mut v = 0u8;
-    if m.shift { v |= 1; }
-    if m.ctrl { v |= 2; }
-    if m.alt { v |= 4; }
-    if m.cmd || m.logo { v |= 8; }
+    if m.shift {
+        v |= 1;
+    }
+    if m.ctrl {
+        v |= 2;
+    }
+    if m.alt {
+        v |= 4;
+    }
+    if m.cmd || m.logo {
+        v |= 8;
+    }
     v
 }
 
@@ -564,62 +633,103 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         let label = |txt: String| text(txt).font(type_::BODY.lh(16.0)).color(t.text_secondary);
         let section = |txt: &str| text(txt).font(type_::BODY.lh(24.0)).color(t.text);
 
-        let mut c = col().key("settings-page").w_full().grow(1.0).min_h(0.0)
-            .px(28.0).py(18.0).gap(14.0).scroll(ScrollSpec { stick_bottom: false });
+        let mut c = col()
+            .key("settings-page")
+            .w_full()
+            .grow(1.0)
+            .min_h(0.0)
+            .px(28.0)
+            .py(18.0)
+            .gap(14.0)
+            .scroll(ScrollSpec {
+                stick_bottom: false,
+            });
         c = c.child(section("General"));
         c = c.child(label("Homepage".into()));
         c = c.child(
-            text_input(&s.settings_home, type_::BODY.lh(20.0)).key("set-home").single_line().w(420.0)
+            text_input(&s.settings_home, type_::BODY.lh(20.0))
+                .key("set-home")
+                .single_line()
+                .w(420.0)
                 .color(t.text)
                 .placeholder("Homepage url", t.text_secondary)
                 .on_edit(|s: &mut State| &mut s.settings_home),
         );
-        c = c.child(label("Search engine (for searches typed in the address bar)".into()));
-        c = c.child(
-            text_btn("set-search", format!("Use {}", search_name(&s.settings.search)), |s: &mut State| {
-                let next = SEARCHES.iter().position(|t| *t == s.settings.search)
+        c = c.child(label(
+            "Search engine (for searches typed in the address bar)".into(),
+        ));
+        c = c.child(text_btn(
+            "set-search",
+            format!("Use {}", search_name(&s.settings.search)),
+            |s: &mut State| {
+                let next = SEARCHES
+                    .iter()
+                    .position(|t| *t == s.settings.search)
                     .map(|i| (i + 1) % SEARCHES.len())
                     .unwrap_or(0);
                 s.settings.search = SEARCHES[next].to_string();
                 save_settings_ui(s);
-            }),
-        );
+            },
+        ));
         c = c.child(label("Default page zoom (applies to new tabs)".into()));
-        c = c.child(
-            text_btn("set-zoom", format!("{}%", (s.settings.default_zoom * 100.0).round() as u32), |s: &mut State| {
-                let next = ZOOM_LEVELS.iter().position(|z| *z == s.settings.default_zoom)
+        c = c.child(text_btn(
+            "set-zoom",
+            format!("{}%", (s.settings.default_zoom * 100.0).round() as u32),
+            |s: &mut State| {
+                let next = ZOOM_LEVELS
+                    .iter()
+                    .position(|z| *z == s.settings.default_zoom)
                     .map(|i| (i + 1) % ZOOM_LEVELS.len())
                     .unwrap_or(0);
                 s.settings.default_zoom = ZOOM_LEVELS[next];
                 save_settings_ui(s);
-            }),
-        );
+            },
+        ));
 
         c = c.child(section("Privacy and network"));
         c = c.child(
-            row().gap(8.0).center_y()
-                .child(text_btn("set-adblock", format!("Adblock: {}", if s.settings.adblock { "on" } else { "off" }), |s: &mut State| {
-                    s.settings.adblock = !s.settings.adblock;
-                    save_settings_ui(s);
-                }))
+            row()
+                .gap(8.0)
+                .center_y()
+                .child(text_btn(
+                    "set-adblock",
+                    format!("Adblock: {}", if s.settings.adblock { "on" } else { "off" }),
+                    |s: &mut State| {
+                        s.settings.adblock = !s.settings.adblock;
+                        save_settings_ui(s);
+                    },
+                ))
                 .child(label("(applies on save; the engine restarts)".into())),
         );
-        c = c.child(
-            text_btn("clear-history", "Clear browsing history".to_string(), |s: &mut State| {
+        c = c.child(text_btn(
+            "clear-history",
+            "Clear browsing history".to_string(),
+            |s: &mut State| {
                 store::clear_history();
                 s.history_view = Vec::new();
-            }),
-        );
+            },
+        ));
         c = c.child(
-            row().gap(8.0).center_y()
-                .child(text_btn("clear-site-data", "Clear cookies and site data".to_string(), |s: &mut State| {
-                    clear_site_data(s);
-                }))
+            row()
+                .gap(8.0)
+                .center_y()
+                .child(text_btn(
+                    "clear-site-data",
+                    "Clear cookies and site data".to_string(),
+                    |s: &mut State| {
+                        clear_site_data(s);
+                    },
+                ))
                 .child(label("(the engine restarts; tabs are reloaded)".into())),
         );
-        c = c.child(label("User agent (applies on save; the engine restarts)".into()));
+        c = c.child(label(
+            "User agent (applies on save; the engine restarts)".into(),
+        ));
         c = c.child(
-            text_input(&s.settings_ua, type_::BODY.lh(20.0)).key("set-ua").single_line().w(420.0)
+            text_input(&s.settings_ua, type_::BODY.lh(20.0))
+                .key("set-ua")
+                .single_line()
+                .w(420.0)
                 .color(t.text)
                 .placeholder("Leave empty for default", t.text_secondary)
                 .on_edit(|s: &mut State| &mut s.settings_ua),
@@ -631,53 +741,116 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         }
         for (h, u) in s.creds_view.clone() {
             c = c.child(
-                row().key(format!("cred-{h}")).w_full().py(4.0).gap(12.0).center_y()
-                    .child(text(h.clone()).font(type_::BODY.lh(18.0)).color(t.text).grow(1.0))
+                row()
+                    .key(format!("cred-{h}"))
+                    .w_full()
+                    .py(4.0)
+                    .gap(12.0)
+                    .center_y()
+                    .child(
+                        text(h.clone())
+                            .font(type_::BODY.lh(18.0))
+                            .color(t.text)
+                            .grow(1.0),
+                    )
                     .child(label(u))
-                    .child(text_btn("pw-forget", "Forget".to_string(), move |s: &mut State| {
-                        creds::forget(&h);
-                        s.creds_view = creds::list();
-                    })),
+                    .child(text_btn(
+                        "pw-forget",
+                        "Forget".to_string(),
+                        move |s: &mut State| {
+                            creds::forget(&h);
+                            s.creds_view = creds::list();
+                        },
+                    )),
             );
         }
-        c = c.child(label("New logins are offered for saving when you submit a login form.".into()));
+        c = c.child(label(
+            "New logins are offered for saving when you submit a login form.".into(),
+        ));
 
         c = c.child(section("About"));
         c = c.child(label(format!("Profile: {}", store::profile())));
         c = c.child(label("Browserr 0.1.0".into()));
 
-        let header = row().key("settings-header").h(BAR_H).w_full().px(14.0).gap(10.0).center_y()
+        let header = row()
+            .key("settings-header")
+            .h(BAR_H)
+            .w_full()
+            .px(14.0)
+            .gap(10.0)
+            .center_y()
             .window_drag()
-            .child(icon_btn("set-back", &ICON_BACK, true, Some(|s: &mut State| {
-                s.settings_open = false;
-            })))
+            .child(icon_btn(
+                "set-back",
+                &ICON_BACK,
+                true,
+                Some(|s: &mut State| {
+                    s.settings_open = false;
+                }),
+            ))
             .child(text("Settings").font(type_::BODY.lh(24.0)).color(t.text))
             .child(spacer())
-            .child(win_btn("win-min", &ICON_WIN_MIN, |_, tx: &mut Tx| tx.minimize()))
-            .child(win_btn("win-max", &ICON_WIN_MAX, |_, tx: &mut Tx| tx.toggle_maximized()))
-            .child(win_btn("win-close", &ICON_WIN_CLOSE, |_, tx: &mut Tx| tx.close_window()));
+            .child(win_btn("win-min", &ICON_WIN_MIN, |_, tx: &mut Tx| {
+                tx.minimize()
+            }))
+            .child(win_btn("win-max", &ICON_WIN_MAX, |_, tx: &mut Tx| {
+                tx.toggle_maximized()
+            }))
+            .child(win_btn("win-close", &ICON_WIN_CLOSE, |_, tx: &mut Tx| {
+                tx.close_window()
+            }));
         return col().w_full().h_full().fill(t.bg).child(header).child(c);
     }
 
     // Profile picker: pick an existing profile or type a new name + Enter.
     if s.picker {
-        let mut p = col().w_full().h_full().fill(t.bg).px(20.0).py(14.0).gap(6.0).window_drag();
+        let mut p = col()
+            .w_full()
+            .h_full()
+            .fill(t.bg)
+            .px(20.0)
+            .py(14.0)
+            .gap(6.0)
+            .window_drag();
         p = p.child(
-            row().w_full().center_y()
-                .child(text("Choose a profile").font(type_::BODY.lh(24.0)).color(t.text).grow(1.0))
-                .child(win_btn("picker-close", &ICON_WIN_CLOSE, |_, tx: &mut Tx| tx.close_window())),
+            row()
+                .w_full()
+                .center_y()
+                .child(
+                    text("Choose a profile")
+                        .font(type_::BODY.lh(24.0))
+                        .color(t.text)
+                        .grow(1.0),
+                )
+                .child(win_btn(
+                    "picker-close",
+                    &ICON_WIN_CLOSE,
+                    |_, tx: &mut Tx| tx.close_window(),
+                )),
         );
         for name in &s.profiles {
             let n = name.clone();
             p = p.child(
-                el().key(format!("profile-{name}")).w_full().py(6.0).px(10.0).radius(8.0).fill(t.card).hover(t.hover)
+                el().key(format!("profile-{name}"))
+                    .w_full()
+                    .py(6.0)
+                    .px(10.0)
+                    .radius(8.0)
+                    .fill(t.card)
+                    .hover(t.hover)
                     .on_press_tx(move |_: &mut State, tx: &mut Tx| launch_profile(tx, &n))
                     .child(text(name.clone()).font(type_::BODY.lh(20.0)).color(t.text)),
             );
         }
-        p = p.child(text("New profile (Enter)").font(type_::BODY.lh(18.0)).color(t.text_secondary));
         p = p.child(
-            text_input(&s.profile_input, type_::BODY.lh(20.0)).key("profile-input").single_line()
+            text("New profile (Enter)")
+                .font(type_::BODY.lh(18.0))
+                .color(t.text_secondary),
+        );
+        p = p.child(
+            text_input(&s.profile_input, type_::BODY.lh(20.0))
+                .key("profile-input")
+                .single_line()
                 .color(t.text)
                 .placeholder("Profile name", t.text_secondary)
                 .on_edit(|s: &mut State| &mut s.profile_input)
@@ -693,31 +866,62 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
 
     // Window controls live on the right (Windows style); the menu is a
     // hamburger on the left.
-    let win_controls = row().gap(2.0).center_y()
-        .child(win_btn("win-min", &ICON_WIN_MIN, |_, tx: &mut Tx| tx.minimize()))
-        .child(win_btn("win-max", &ICON_WIN_MAX, |_, tx: &mut Tx| tx.toggle_maximized()))
-        .child(win_btn("win-close", &ICON_WIN_CLOSE, |_, tx: &mut Tx| tx.close_window()));
+    let win_controls = row()
+        .gap(2.0)
+        .center_y()
+        .child(win_btn("win-min", &ICON_WIN_MIN, |_, tx: &mut Tx| {
+            tx.minimize()
+        }))
+        .child(win_btn("win-max", &ICON_WIN_MAX, |_, tx: &mut Tx| {
+            tx.toggle_maximized()
+        }))
+        .child(win_btn("win-close", &ICON_WIN_CLOSE, |_, tx: &mut Tx| {
+            tx.close_window()
+        }));
 
     let active_id = s.tabs[s.active].id;
-    let shown_url = s.ui.url(active_id).unwrap_or_else(|| s.tabs[s.active].url.clone());
+    let shown_url =
+        s.ui.url(active_id)
+            .unwrap_or_else(|| s.tabs[s.active].url.clone());
     let (back_ok, fwd_ok) = s.ui.history(active_id).unwrap_or((false, false));
     let starred = !shown_url.is_empty() && s.bookmarks.iter().any(|(u, _)| u == &shown_url);
 
     // Bookmarks + history panel, opened by the ellipsis button.
     let menu_panel = {
         // Compact dropdown: fixed width, capped height, scrolls when long.
-        let mut p = col().key("menu-panel").w(340.0).max_h(440.0).min_h(0.0)
-            .px(14.0).py(10.0).gap(4.0).fill(t.card)
-            .scroll(ScrollSpec { stick_bottom: false });
-        p = p.child(text("Bookmarks").font(type_::BODY.lh(20.0)).color(t.text_secondary));
+        let mut p = col()
+            .key("menu-panel")
+            .w(340.0)
+            .max_h(440.0)
+            .min_h(0.0)
+            .px(14.0)
+            .py(10.0)
+            .gap(4.0)
+            .fill(t.card)
+            .scroll(ScrollSpec {
+                stick_bottom: false,
+            });
+        p = p.child(
+            text("Bookmarks")
+                .font(type_::BODY.lh(20.0))
+                .color(t.text_secondary),
+        );
         if s.bookmarks.is_empty() {
-            p = p.child(text("No bookmarks yet").font(type_::BODY.lh(18.0)).color(t.text_secondary));
+            p = p.child(
+                text("No bookmarks yet")
+                    .font(type_::BODY.lh(18.0))
+                    .color(t.text_secondary),
+            );
         }
         for (url, title) in s.bookmarks.clone() {
             let label = if title.is_empty() { host(&url) } else { title };
             p = p.child(
-                el().w_full().py(4.0).px(8.0).radius(6.0)
-                    .fill(Color::TRANSPARENT).hover(t.hover)
+                el().w_full()
+                    .py(4.0)
+                    .px(8.0)
+                    .radius(6.0)
+                    .fill(Color::TRANSPARENT)
+                    .hover(t.hover)
                     .on_press(move |s: &mut State| {
                         s.menu_open = false;
                         go(s, url.clone());
@@ -725,15 +929,27 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                     .child(text(label).font(type_::BODY.lh(18.0)).color(t.text)),
             );
         }
-        p = p.child(text("History").font(type_::BODY.lh(20.0)).color(t.text_secondary));
+        p = p.child(
+            text("History")
+                .font(type_::BODY.lh(20.0))
+                .color(t.text_secondary),
+        );
         if s.history_view.is_empty() {
-            p = p.child(text("Nothing yet").font(type_::BODY.lh(18.0)).color(t.text_secondary));
+            p = p.child(
+                text("Nothing yet")
+                    .font(type_::BODY.lh(18.0))
+                    .color(t.text_secondary),
+            );
         }
         for url in s.history_view.clone() {
             let u = url.clone();
             p = p.child(
-                el().w_full().py(4.0).px(8.0).radius(6.0)
-                    .fill(Color::TRANSPARENT).hover(t.hover)
+                el().w_full()
+                    .py(4.0)
+                    .px(8.0)
+                    .radius(6.0)
+                    .fill(Color::TRANSPARENT)
+                    .hover(t.hover)
                     .on_press(move |s: &mut State| {
                         s.menu_open = false;
                         go(s, u.clone());
@@ -741,76 +957,139 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                     .child(text(url).font(type_::BODY.lh(18.0)).color(t.text_secondary)),
             );
         }
-        p = p.child(text("Settings").font(type_::BODY.lh(20.0)).color(t.text_secondary));
         p = p.child(
-            text_btn("open-settings", "Open settings".to_string(), |s: &mut State| {
+            text("Settings")
+                .font(type_::BODY.lh(20.0))
+                .color(t.text_secondary),
+        );
+        p = p.child(text_btn(
+            "open-settings",
+            "Open settings".to_string(),
+            |s: &mut State| {
                 s.menu_open = false;
                 s.settings_open = true;
                 s.creds_view = creds::list();
-            }),
+            },
+        ));
+        p = p.child(
+            text("Passwords")
+                .font(type_::BODY.lh(20.0))
+                .color(t.text_secondary),
         );
-        p = p.child(text("Passwords").font(type_::BODY.lh(20.0)).color(t.text_secondary));
         let pw_host = host(&shown_url);
         if pw_host.is_empty() {
-            p = p.child(text("Open a site first").font(type_::BODY.lh(16.0)).color(t.text_secondary));
+            p = p.child(
+                text("Open a site first")
+                    .font(type_::BODY.lh(16.0))
+                    .color(t.text_secondary),
+            );
         } else {
             p = p.child(
-                text(if s.cred_saved { format!("Saved for {pw_host}") } else { format!("Not saved for {pw_host}") })
-                    .font(type_::BODY.lh(16.0)).color(t.text_secondary),
+                text(if s.cred_saved {
+                    format!("Saved for {pw_host}")
+                } else {
+                    format!("Not saved for {pw_host}")
+                })
+                .font(type_::BODY.lh(16.0))
+                .color(t.text_secondary),
             );
             p = p.child(
-                row().gap(8.0).center_y()
-                    .child(text_input(&s.cred_user, type_::BODY.lh(20.0)).key("cred-user").single_line()
-                        .grow(1.0).min_w(80.0)
-                        .color(t.text).placeholder("Username", t.text_secondary)
-                        .on_edit(|s: &mut State| &mut s.cred_user))
-                    .child(text_input(&s.cred_pass, type_::BODY.lh(20.0)).key("cred-pass").single_line().w(110.0)
-                        .color(t.text).placeholder("Password", t.text_secondary)
-                        .on_edit(|s: &mut State| &mut s.cred_pass))
-                    .child(icon_btn("cred-reveal", &ICON_EYE, true, Some(|s: &mut State| {
-                        s.cred_pass.set_revealed(!s.cred_pass.is_revealed());
-                    }))),
+                row()
+                    .gap(8.0)
+                    .center_y()
+                    .child(
+                        text_input(&s.cred_user, type_::BODY.lh(20.0))
+                            .key("cred-user")
+                            .single_line()
+                            .grow(1.0)
+                            .min_w(80.0)
+                            .color(t.text)
+                            .placeholder("Username", t.text_secondary)
+                            .on_edit(|s: &mut State| &mut s.cred_user),
+                    )
+                    .child(
+                        text_input(&s.cred_pass, type_::BODY.lh(20.0))
+                            .key("cred-pass")
+                            .single_line()
+                            .w(110.0)
+                            .color(t.text)
+                            .placeholder("Password", t.text_secondary)
+                            .on_edit(|s: &mut State| &mut s.cred_pass),
+                    )
+                    .child(icon_btn(
+                        "cred-reveal",
+                        &ICON_EYE,
+                        true,
+                        Some(|s: &mut State| {
+                            s.cred_pass.set_revealed(!s.cred_pass.is_revealed());
+                        }),
+                    )),
             );
             p = p.child(
-                row().gap(8.0).center_y()
+                row()
+                    .gap(8.0)
+                    .center_y()
                     .child(text_btn("pw-save", "Save".to_string(), |s: &mut State| {
                         let url = s.ui.url(s.tabs[s.active].id).unwrap_or_default();
                         let host = host(&url);
-                        if host.is_empty() { return; }
+                        if host.is_empty() {
+                            return;
+                        }
                         creds::save(&host, s.cred_user.text.trim(), &s.cred_pass.text);
                         refresh_creds(s);
                     }))
-                    .child(text_btn("pw-fill", "Fill now".to_string(), |s: &mut State| {
-                        fill_password(s);
-                    }))
-                    .child(text_btn("pw-forget", "Forget".to_string(), |s: &mut State| {
-                        let url = s.ui.url(s.tabs[s.active].id).unwrap_or_default();
-                        let host = host(&url);
-                        if host.is_empty() { return; }
-                        creds::forget(&host);
-                        refresh_creds(s);
-                    })),
+                    .child(text_btn(
+                        "pw-fill",
+                        "Fill now".to_string(),
+                        |s: &mut State| {
+                            fill_password(s);
+                        },
+                    ))
+                    .child(text_btn(
+                        "pw-forget",
+                        "Forget".to_string(),
+                        |s: &mut State| {
+                            let url = s.ui.url(s.tabs[s.active].id).unwrap_or_default();
+                            let host = host(&url);
+                            if host.is_empty() {
+                                return;
+                            }
+                            creds::forget(&host);
+                            refresh_creds(s);
+                        },
+                    )),
             );
         }
         p
     };
 
     // Address pill: shows the page's live URL; click to edit.
-    let pill = row().key("address-pill").h(28.0).min_w(120.0).max_w(460.0).grow(1.0)
-        .px(12.0).radius(14.0).center_y()
+    let pill = row()
+        .key("address-pill")
+        .h(28.0)
+        .min_w(120.0)
+        .max_w(460.0)
+        .grow(1.0)
+        .px(12.0)
+        .radius(14.0)
+        .center_y()
         .fill(t.card)
         .on_press(|s: &mut State| {
             if !s.editing {
                 s.editing = true;
                 // Start from the current page url so it can be edited or
                 // re-entered, not cleared.
-                let shown = s.ui.url(s.tabs[s.active].id)
-                    .unwrap_or_else(|| s.tabs[s.active].url.clone());
+                let shown =
+                    s.ui.url(s.tabs[s.active].id)
+                        .unwrap_or_else(|| s.tabs[s.active].url.clone());
                 s.address = TextEdit::new(&shown);
             }
         })
         .child(if s.editing {
-            text_input(&s.address, type_::BODY.lh(20.0)).key("address").single_line().grow(1.0)
+            text_input(&s.address, type_::BODY.lh(20.0))
+                .key("address")
+                .single_line()
+                .grow(1.0)
                 .color(t.text)
                 .placeholder("Search or enter website name", t.text_secondary)
                 .on_edit(|s: &mut State| &mut s.address)
@@ -824,7 +1103,9 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 })
                 .on_submit(|s: &mut State, _tx: &mut Tx| {
                     let raw = s.address.text.trim().to_string();
-                    if raw.is_empty() { return; }
+                    if raw.is_empty() {
+                        return;
+                    }
                     let url = if raw.contains("://") || raw.starts_with("about:") {
                         raw
                     } else if raw.contains('.') && !raw.contains(' ') {
@@ -832,16 +1113,24 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                     } else {
                         s.settings.search.replace("{}", &urlencode(&raw))
                     };
-                        s.address = TextEdit::new("");
-                        s.editing = false;
-                        go(s, url);
-                    })
+                    s.address = TextEdit::new("");
+                    s.editing = false;
+                    go(s, url);
+                })
         } else {
             let placeholder = shown_url.is_empty();
-            text(if placeholder { "Search or enter website name".to_string() } else { shown_url.clone() })
-                .grow(1.0)
-                .font(type_::BODY.lh(20.0))
-                .color(if placeholder { t.text_secondary } else { t.text })
+            text(if placeholder {
+                "Search or enter website name".to_string()
+            } else {
+                shown_url.clone()
+            })
+            .grow(1.0)
+            .font(type_::BODY.lh(20.0))
+            .color(if placeholder {
+                t.text_secondary
+            } else {
+                t.text
+            })
         });
 
     // Tab pills: titles come from engine events; an x closes each tab.
@@ -858,12 +1147,18 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             };
             let label_color = if is_active { t.text } else { t.text_secondary };
             let tab_host = s.ui.url(tab.id).map(|u| host(&u)).unwrap_or_default();
-            let mut pill_el = el().key(format!("tab-{}", tab.id)).h(28.0).px(12.0).radius(14.0).center_y()
+            let mut pill_el = el()
+                .key(format!("tab-{}", tab.id))
+                .h(28.0)
+                .px(12.0)
+                .radius(14.0)
+                .center_y()
                 .fill(if is_active { t.hover } else { t.card });
             if let Some(px) = s.ui.icon(&tab_host) {
                 pill_el = pill_el.child(el().size(14.0, 14.0).center_y().pixels(&px).px(4.0));
             }
-            pill_el = pill_el.child(text(title).font(type_::BODY.lh(20.0)).color(label_color))
+            pill_el = pill_el
+                .child(text(title).font(type_::BODY.lh(20.0)).color(label_color))
                 .on_press(move |s: &mut State| {
                     if s.active != i {
                         s.active = i;
@@ -878,7 +1173,9 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 });
             if s.tabs.len() > 1 {
                 pill_el = pill_el.child(
-                    el().key("tab-close").size(14.0, 14.0).center_y()
+                    el().key("tab-close")
+                        .size(14.0, 14.0)
+                        .center_y()
                         .child(icon(&ICON_CLOSE, 10.0))
                         .on_press(move |s: &mut State| {
                             let closed_id = s.tabs[i].id;
@@ -887,7 +1184,11 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                                 // Last tab closed: start a fresh one.
                                 let id = s.next_tab_id;
                                 s.next_tab_id += 1;
-                                s.tabs.push(Tab { id, url: String::new(), title: "New Tab".into() });
+                                s.tabs.push(Tab {
+                                    id,
+                                    url: String::new(),
+                                    title: "New Tab".into(),
+                                });
                                 s.active = 0;
                                 s.address = TextEdit::new("");
                                 s.editing = true;
@@ -911,7 +1212,8 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                                     s.active = s.tabs.len() - 1;
                                 }
                                 let new_active = s.tabs[s.active].id;
-                                s.ui.active.store(new_active, std::sync::atomic::Ordering::SeqCst);
+                                s.ui.active
+                                    .store(new_active, std::sync::atomic::Ordering::SeqCst);
                                 if let Some(engine) = &mut s.engine {
                                     engine.close_tab(closed_id);
                                     engine.activate(new_active);
@@ -926,91 +1228,145 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         r
     };
 
-    let bar = row().key("bar").h(BAR_H).w_full().px(14.0).gap(10.0).center_y()
+    let bar = row()
+        .key("bar")
+        .h(BAR_H)
+        .w_full()
+        .px(14.0)
+        .gap(10.0)
+        .center_y()
         .window_drag()
-        .child(icon_btn("br-menu", &ICON_HAMBURGER, true, Some(|s: &mut State| {
-            s.menu_open = !s.menu_open;
-            if s.menu_open {
-                // Skip about:blank noise from redirects; keep the newest real pages.
-                s.history_view = store::read_history(60).into_iter()
-                    .filter(|u| !u.starts_with("about:") && !u.is_empty())
-                    .take(15)
-                    .collect();
-                refresh_creds(s);
-            }
-        })))
+        .child(icon_btn(
+            "br-menu",
+            &ICON_HAMBURGER,
+            true,
+            Some(|s: &mut State| {
+                s.menu_open = !s.menu_open;
+                if s.menu_open {
+                    // Skip about:blank noise from redirects; keep the newest real pages.
+                    s.history_view = store::read_history(60)
+                        .into_iter()
+                        .filter(|u| !u.starts_with("about:") && !u.is_empty())
+                        .take(15)
+                        .collect();
+                    refresh_creds(s);
+                }
+            }),
+        ))
         .child(spacer())
-        .child(icon_btn("br-back", &ICON_BACK, back_ok, Some(move |s: &mut State| {
-            if let Some(e) = &mut s.engine {
-                e.back(active_id);
-            }
-        })))
-        .child(icon_btn("br-fwd", &ICON_FWD, fwd_ok, Some(move |s: &mut State| {
-            if let Some(e) = &mut s.engine {
-                e.forward(active_id);
-            }
-        })))
-        .child(icon_btn("br-star", if starred { &ICON_STAR_FILLED } else { &ICON_STAR },
+        .child(icon_btn(
+            "br-back",
+            &ICON_BACK,
+            back_ok,
+            Some(move |s: &mut State| {
+                if let Some(e) = &mut s.engine {
+                    e.back(active_id);
+                }
+            }),
+        ))
+        .child(icon_btn(
+            "br-fwd",
+            &ICON_FWD,
+            fwd_ok,
+            Some(move |s: &mut State| {
+                if let Some(e) = &mut s.engine {
+                    e.forward(active_id);
+                }
+            }),
+        ))
+        .child(icon_btn(
+            "br-star",
+            if starred {
+                &ICON_STAR_FILLED
+            } else {
+                &ICON_STAR
+            },
             !shown_url.is_empty(),
             Some(|s: &mut State| {
                 let url = s.ui.url(s.tabs[s.active].id).unwrap_or_default();
-                if url.is_empty() { return; }
+                if url.is_empty() {
+                    return;
+                }
                 if let Some(pos) = s.bookmarks.iter().position(|(u, _)| *u == url) {
                     s.bookmarks.remove(pos);
                 } else {
-                    let title = s.ui.title(s.tabs[s.active].id).unwrap_or_else(|| url.clone());
+                    let title =
+                        s.ui.title(s.tabs[s.active].id)
+                            .unwrap_or_else(|| url.clone());
                     s.bookmarks.insert(0, (url, title));
                 }
                 store::save_bookmarks(&s.bookmarks);
-            })))
-        .child(icon_btn("br-key", &ICON_KEY, !shown_url.is_empty(), Some(|s: &mut State| {
-            // Saved password: fill. None: open the panel to save one.
-            let url = s.ui.url(s.tabs[s.active].id).unwrap_or_default();
-            if url.is_empty() { return; }
-            if creds::load(&host(&url)).is_some() {
-                fill_password(s);
-            } else {
-                s.menu_open = true;
-                refresh_creds(s);
-            }
-        })))
+            }),
+        ))
+        .child(icon_btn(
+            "br-key",
+            &ICON_KEY,
+            !shown_url.is_empty(),
+            Some(|s: &mut State| {
+                // Saved password: fill. None: open the panel to save one.
+                let url = s.ui.url(s.tabs[s.active].id).unwrap_or_default();
+                if url.is_empty() {
+                    return;
+                }
+                if creds::load(&host(&url)).is_some() {
+                    fill_password(s);
+                } else {
+                    s.menu_open = true;
+                    refresh_creds(s);
+                }
+            }),
+        ))
         .child(pill)
         // Zoom chip: visible whenever the page is not at 100%; click resets.
         .child({
             let z = zoom_of(s, active_id);
             if z != 1.0 {
-                text_btn("br-zoom-chip", format!("{}%", (z * 100.0).round() as u32), |s: &mut State| {
-                    let id = s.tabs[s.active].id;
-                    set_zoom(s, id, 1.0);
-                })
+                text_btn(
+                    "br-zoom-chip",
+                    format!("{}%", (z * 100.0).round() as u32),
+                    |s: &mut State| {
+                        let id = s.tabs[s.active].id;
+                        set_zoom(s, id, 1.0);
+                    },
+                )
             } else {
                 spacer()
             }
         })
         .child(tabs_row)
-        .child(icon_btn("br-plus", &ICON_PLUS, true, Some(|s: &mut State| {
-            let id = s.next_tab_id;
-            s.next_tab_id += 1;
-            let tab_id = id; // engine tab id == chrome tab id
-            s.tabs.push(Tab { id, url: String::new(), title: "New Tab".into() });
-            s.active = s.tabs.len() - 1;
-            s.address = TextEdit::new("");
-            s.editing = true;
-            s.ui.active.store(tab_id, std::sync::atomic::Ordering::SeqCst);
-            if let Some(engine) = &mut s.engine {
-                engine.new_tab(tab_id);
-                engine.activate(tab_id);
-            }
-            if s.settings.default_zoom != 1.0 {
-                set_zoom(s, tab_id, s.settings.default_zoom);
-            }
-            // New tabs open the homepage (if set); the pill stays in edit mode
-            // so the user can type right away.
-            if !s.settings.homepage.is_empty() {
-                go(s, s.settings.homepage.clone());
-            }
-            save_session(s);
-        })))
+        .child(icon_btn(
+            "br-plus",
+            &ICON_PLUS,
+            true,
+            Some(|s: &mut State| {
+                let id = s.next_tab_id;
+                s.next_tab_id += 1;
+                let tab_id = id; // engine tab id == chrome tab id
+                s.tabs.push(Tab {
+                    id,
+                    url: String::new(),
+                    title: "New Tab".into(),
+                });
+                s.active = s.tabs.len() - 1;
+                s.address = TextEdit::new("");
+                s.editing = true;
+                s.ui.active
+                    .store(tab_id, std::sync::atomic::Ordering::SeqCst);
+                if let Some(engine) = &mut s.engine {
+                    engine.new_tab(tab_id);
+                    engine.activate(tab_id);
+                }
+                if s.settings.default_zoom != 1.0 {
+                    set_zoom(s, tab_id, s.settings.default_zoom);
+                }
+                // New tabs open the homepage (if set); the pill stays in edit mode
+                // so the user can type right away.
+                if !s.settings.homepage.is_empty() {
+                    go(s, s.settings.homepage.clone());
+                }
+                save_session(s);
+            }),
+        ))
         .child(spacer())
         .child(win_controls);
 
@@ -1021,10 +1377,26 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             let user = c.user.clone();
             let pass = c.pass.clone();
             Some(
-                row().key("pw-prompt").w_full().px(14.0).py(8.0).gap(10.0).center_y().fill(t.card)
+                row()
+                    .key("pw-prompt")
+                    .w_full()
+                    .px(14.0)
+                    .py(8.0)
+                    .gap(10.0)
+                    .center_y()
+                    .fill(t.card)
                     .child(
-                        text(format!("Save password for {host}{}", if user.is_empty() { String::new() } else { format!(" ({user})") }))
-                            .font(type_::BODY.lh(18.0)).color(t.text).grow(1.0),
+                        text(format!(
+                            "Save password for {host}{}",
+                            if user.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" ({user})")
+                            }
+                        ))
+                        .font(type_::BODY.lh(18.0))
+                        .color(t.text)
+                        .grow(1.0),
                     )
                     .child(text_btn("pw-prompt-save", "Save".to_string(), {
                         let host = host.clone();
@@ -1044,7 +1416,11 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         _ => None,
     };
 
-    let page = el().key("page").grow(1.0).min_h(0.0).fill(t.bg)
+    let page = el()
+        .key("page")
+        .grow(1.0)
+        .min_h(0.0)
+        .fill(t.bg)
         .native_surface(&s.surface, SurfaceFit::Fit)
         .cursor(cursor_shape(s))
         .focusable(true)
@@ -1081,7 +1457,11 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 // Ctrl+wheel zooms the page instead of scrolling (Chrome
                 // behavior): wheel up (rune dy > 0) zooms in.
                 let cur = zoom_of(s, id);
-                let next = if we.dy > 0.0 { cur * ZOOM_STEP } else { cur / ZOOM_STEP };
+                let next = if we.dy > 0.0 {
+                    cur * ZOOM_STEP
+                } else {
+                    cur / ZOOM_STEP
+                };
                 set_zoom(s, id, next);
             } else if let Some(e) = &mut s.engine {
                 e.wheel(id, we.dx, we.dy, we.x, we.y);
@@ -1111,7 +1491,9 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                     }
                 }
             }
-            let Some((name, text)) = key_name(&ev.key) else { return false };
+            let Some((name, text)) = key_name(&ev.key) else {
+                return false;
+            };
             if let Some(e) = &mut s.engine {
                 e.key(id, &name, &text, key_mods(ev.mods), true);
             }
@@ -1127,7 +1509,9 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                     }
                 }
             }
-            let Some((name, text)) = key_name(&ev.key) else { return false };
+            let Some((name, text)) = key_name(&ev.key) else {
+                return false;
+            };
             if let Some(e) = &mut s.engine {
                 e.key(id, &name, &text, key_mods(ev.mods), false);
             }
@@ -1156,13 +1540,20 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
 fn main() {
     rune::run_windows(|_| {
         let picker = !store::profile_selected();
-        let size = if picker { (420.0, 520.0) } else { (1280.0, 800.0) };
+        let size = if picker {
+            (420.0, 520.0)
+        } else {
+            (1280.0, 800.0)
+        };
         let app = App::new(AppSpec {
             setup: Some(setup),
             poll: Some(poll),
             ..AppSpec::new("Browserr", size, state, view)
         })
-        .window_options(WindowOptions { borderless: true, ..Default::default() });
+        .window_options(WindowOptions {
+            borderless: true,
+            ..Default::default()
+        });
         let windows: Vec<rune::AnyWindowSpec> =
             vec![rune::WindowSpec::from_app("browserr", app).into()];
         windows

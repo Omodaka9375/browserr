@@ -50,14 +50,14 @@ pub fn load(host: &str) -> Option<(String, String)> {
         if CredReadW(PCWSTR(t.as_ptr()), CRED_TYPE_GENERIC, None, &mut pcred).is_err() {
             return None;
         }
-        let blob = std::slice::from_raw_parts((*pcred).CredentialBlob, (*pcred).CredentialBlobSize as usize);
+        let blob = std::slice::from_raw_parts(
+            (*pcred).CredentialBlob,
+            (*pcred).CredentialBlobSize as usize,
+        );
         let json = String::from_utf8_lossy(blob).to_string();
         CredFree(pcred as *const _);
         let v: serde_json::Value = serde_json::from_str(&json).ok()?;
-        Some((
-            v["u"].as_str()?.to_string(),
-            v["p"].as_str()?.to_string(),
-        ))
+        Some((v["u"].as_str()?.to_string(), v["p"].as_str()?.to_string()))
     }
 }
 

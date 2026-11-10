@@ -10,7 +10,6 @@ use std::rc::Rc;
 use dpi::PhysicalSize;
 use euclid::Size2D;
 use gleam::gl::{self, Gl};
-use glow::HasContext;
 use surfman::chains::{PreserveBuffer, SwapChain};
 use surfman::{
     Adapter, Connection, Context, ContextAttributeFlags, ContextAttributes, Device, GLApi,
@@ -30,7 +29,7 @@ impl HardwareRenderingContext {
     pub fn new(size: PhysicalSize<u32>) -> Result<Self, surfman::Error> {
         let connection = Connection::new()?;
         let adapter: Adapter = connection.create_adapter()?;
-        let mut device = connection.create_device(&adapter)?;
+        let device = connection.create_device(&adapter)?;
 
         let flags = ContextAttributeFlags::ALPHA
             | ContextAttributeFlags::DEPTH
@@ -54,9 +53,7 @@ impl HardwareRenderingContext {
         };
 
         let glow_gl = unsafe {
-            glow::Context::from_loader_function(|name| {
-                device.get_proc_address(&context, name)
-            })
+            glow::Context::from_loader_function(|name| device.get_proc_address(&context, name))
         };
 
         let surfman_size = Size2D::new(size.width as i32, size.height as i32);
@@ -72,8 +69,7 @@ impl HardwareRenderingContext {
                 err
             })?;
 
-        let swap_chain =
-            SwapChain::create_attached(&mut device, &mut context, SurfaceAccess::GPUOnly)?;
+        let swap_chain = SwapChain::create_attached(&device, &mut context, SurfaceAccess::GPUOnly)?;
 
         Ok(HardwareRenderingContext {
             gleam_gl,
@@ -137,20 +133,18 @@ impl servo::RenderingContext for HardwareRenderingContext {
             return;
         }
         self.size.set(size);
-        let mut device = self.device.borrow_mut();
+        let device = self.device.borrow_mut();
         let mut context = self.context.borrow_mut();
         let surfman_size = Size2D::new(size.width as i32, size.height as i32);
-        let _ = self
-            .swap_chain
-            .resize(&mut device, &mut context, surfman_size);
+        let _ = self.swap_chain.resize(&device, &mut context, surfman_size);
     }
 
     fn present(&self) {
-        let mut device = self.device.borrow_mut();
+        let device = self.device.borrow_mut();
         let mut context = self.context.borrow_mut();
         let _ = self
             .swap_chain
-            .swap_buffers(&mut device, &mut context, PreserveBuffer::No);
+            .swap_buffers(&device, &mut context, PreserveBuffer::No);
     }
 
     fn make_current(&self) -> Result<(), surfman::Error> {

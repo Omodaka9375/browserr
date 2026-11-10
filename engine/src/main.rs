@@ -21,9 +21,9 @@
 //! Automation: eval with an "id" reports {"ev":"evalresult","tab","id","value"};
 //! {"cmd":"screenshot","tab":N} answers with a SHT1 frame (magic, id, w, h, w*h*4 BGRA).
 //! {"cmd":"ping","id":N} answers {"ev":"pong","id":N,"tabs":K,"active":A} (health check).
+use servo::RenderingContext;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use servo::RenderingContext;
 
 mod d3d;
 mod hw;
@@ -154,10 +154,7 @@ impl servo::ServoDelegate for ServoAdblockDelegate {
 /// Block the request if the filter list matches; default is pass-through.
 /// Main-frame documents are never blocked: a cancelled document response
 /// wedges the pipeline for later navigations on that tab.
-fn block_if_matching(
-    engine: &adblock::engine::Engine,
-    load: servo::WebResourceLoad,
-) {
+fn block_if_matching(engine: &adblock::engine::Engine, load: servo::WebResourceLoad) {
     if load.request().is_for_main_frame {
         return;
     }
@@ -170,7 +167,8 @@ fn block_if_matching(
     if engine.check_network_request(&req).should_block() {
         eprintln!("engine: adblock blocked {url}");
         let response_url = load.request().url.clone().into_url();
-        load.intercept(servo::WebResourceResponse::new(response_url)).cancel();
+        load.intercept(servo::WebResourceResponse::new(response_url))
+            .cancel();
     }
 }
 
@@ -193,21 +191,21 @@ impl FrameDelegate {
         let shared = self.shared.clone();
         let tab = self.tab;
         webview.evaluate_javascript(script, move |result| {
-            if let Ok(servo::JSValue::String(data)) = result {
-                if !data.is_empty() {
-                    shared.updates.lock().unwrap().push(Update {
-                        tab,
-                        url: None,
-                        title: None,
-                        history: None,
-                        pw: Some(data),
-                        icon: None,
-                        cursor: None,
-                        eval: None,
-            console: None,
-                    });
-                    shared.pump.kick();
-                }
+            if let Ok(servo::JSValue::String(data)) = result
+                && !data.is_empty()
+            {
+                shared.updates.lock().unwrap().push(Update {
+                    tab,
+                    url: None,
+                    title: None,
+                    history: None,
+                    pw: Some(data),
+                    icon: None,
+                    cursor: None,
+                    eval: None,
+                    console: None,
+                });
+                shared.pump.kick();
             }
         });
     }
@@ -217,8 +215,12 @@ impl FrameDelegate {
         let shared = self.shared.clone();
         let tab = self.tab;
         webview.evaluate_javascript(FAVICON_JS, move |result| {
-            let Ok(servo::JSValue::String(data)) = result else { return };
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) else { return };
+            let Ok(servo::JSValue::String(data)) = result else {
+                return;
+            };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) else {
+                return;
+            };
             let icon = v["icon"].as_str().unwrap_or("").to_string();
             let origin = v["origin"].as_str().unwrap_or("").to_string();
             if icon.is_empty() || origin.is_empty() {
@@ -234,9 +236,9 @@ impl FrameDelegate {
                     history: None,
                     pw: None,
                     icon: Some((origin, 16, 16, rgba)),
-                cursor: None,
-                eval: None,
-            console: None,
+                    cursor: None,
+                    eval: None,
+                    console: None,
                 });
                 shared.pump.kick();
                 return;
@@ -253,9 +255,9 @@ impl FrameDelegate {
                         history: None,
                         pw: None,
                         icon: Some((origin, w, h, rgba)),
-                cursor: None,
-                eval: None,
-            console: None,
+                        cursor: None,
+                        eval: None,
+                        console: None,
                     });
                     shared.pump.kick();
                 }
@@ -375,7 +377,12 @@ impl servo::WebViewDelegate for FrameDelegate {
         self.shared.pump.kick();
     }
 
-    fn notify_history_changed(&self, _webview: servo::WebView, entries: Vec<url::Url>, current: usize) {
+    fn notify_history_changed(
+        &self,
+        _webview: servo::WebView,
+        entries: Vec<url::Url>,
+        current: usize,
+    ) {
         let back = current > 0;
         let forward = current + 1 < entries.len();
         self.shared.updates.lock().unwrap().push(Update {
@@ -429,7 +436,9 @@ const EASYLIST_URL: &str = "https://easylist.to/easylist/easylist.txt";
 const FILTER_LIST_MAX_AGE_SECS: u64 = 7 * 24 * 3600;
 
 /// Serialize a servo JS evaluation result to JSON for the automation driver.
-fn jsvalue_to_json(result: Result<servo::JSValue, servo::JavaScriptEvaluationError>) -> serde_json::Value {
+fn jsvalue_to_json(
+    result: Result<servo::JSValue, servo::JavaScriptEvaluationError>,
+) -> serde_json::Value {
     use servo::JSValue;
     fn conv(v: JSValue) -> serde_json::Value {
         match v {
@@ -445,10 +454,12 @@ fn jsvalue_to_json(result: Result<servo::JSValue, servo::JavaScriptEvaluationErr
             JSValue::ShadowRoot(s) => serde_json::json!({ "__kind": "shadowroot", "handle": s }),
             JSValue::Frame(s) => serde_json::json!({ "__kind": "frame", "handle": s }),
             JSValue::Window(s) => serde_json::json!({ "__kind": "window", "handle": s }),
-            JSValue::Array(items) => serde_json::Value::Array(items.into_iter().map(conv).collect()),
-            JSValue::Object(map) => serde_json::Value::Object(
-                map.into_iter().map(|(k, v)| (k, conv(v))).collect(),
-            ),
+            JSValue::Array(items) => {
+                serde_json::Value::Array(items.into_iter().map(conv).collect())
+            }
+            JSValue::Object(map) => {
+                serde_json::Value::Object(map.into_iter().map(|(k, v)| (k, conv(v))).collect())
+            }
         }
     }
     match result {
@@ -475,12 +486,16 @@ fn http_get(url: &str, max_bytes: u64) -> Result<Vec<u8>, String> {
             path.push_str(q);
         }
         let secure = current.scheme() == "https";
-        let port = current.port_or_known_default().unwrap_or(if secure { 443 } else { 80 });
+        let port = current
+            .port_or_known_default()
+            .unwrap_or(if secure { 443 } else { 80 });
 
         let tcp = std::net::TcpStream::connect((host.as_str(), port))
             .map_err(|e| format!("connect {host}:{port}: {e}"))?;
-        tcp.set_read_timeout(Some(std::time::Duration::from_secs(15))).ok();
-        tcp.set_write_timeout(Some(std::time::Duration::from_secs(15))).ok();
+        tcp.set_read_timeout(Some(std::time::Duration::from_secs(15)))
+            .ok();
+        tcp.set_write_timeout(Some(std::time::Duration::from_secs(15)))
+            .ok();
 
         let stream: Box<dyn std::io::Read> = if secure {
             let verifier = rustls_platform_verifier::Verifier::new(Arc::new(
@@ -499,21 +514,25 @@ fn http_get(url: &str, max_bytes: u64) -> Result<Vec<u8>, String> {
             let req = format!(
                 "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: BrowserrEngine/0.1\r\nAccept: */*\r\nConnection: close\r\n\r\n"
             );
-            tls.write_all(req.as_bytes()).map_err(|e| format!("send: {e}"))?;
+            tls.write_all(req.as_bytes())
+                .map_err(|e| format!("send: {e}"))?;
             Box::new(tls)
         } else {
             let mut tcp = tcp;
             let req = format!(
                 "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: BrowserrEngine/0.1\r\nAccept: */*\r\nConnection: close\r\n\r\n"
             );
-            tcp.write_all(req.as_bytes()).map_err(|e| format!("send: {e}"))?;
+            tcp.write_all(req.as_bytes())
+                .map_err(|e| format!("send: {e}"))?;
             Box::new(tcp)
         };
 
         let (status, location, body) = read_response(stream, max_bytes)?;
         if (301..=308).contains(&status) && status != 306 {
             let loc = location.ok_or("redirect without Location")?;
-            current = current.join(&loc).map_err(|e| format!("bad redirect {loc}: {e}"))?;
+            current = current
+                .join(&loc)
+                .map_err(|e| format!("bad redirect {loc}: {e}"))?;
             continue;
         }
         if status != 200 {
@@ -593,7 +612,9 @@ fn read_response(
             }
             let start = body.len();
             body.resize(start + size as usize, 0);
-            reader.read_exact(&mut body[start..]).map_err(|e| e.to_string())?;
+            reader
+                .read_exact(&mut body[start..])
+                .map_err(|e| e.to_string())?;
             let mut crlf = [0u8; 2];
             let _ = reader.read_exact(&mut crlf); // chunk trailer
         }
@@ -626,7 +647,10 @@ fn ensure_filter_list(path: &std::path::Path) {
     if !stale {
         return;
     }
-    eprintln!("engine: downloading adblock filter list -> {}", path.display());
+    eprintln!(
+        "engine: downloading adblock filter list -> {}",
+        path.display()
+    );
     if let Ok(dir) = path.parent().ok_or(()) {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -642,9 +666,9 @@ fn ensure_filter_list(path: &std::path::Path) {
 fn load_adblock(path: &std::path::Path) -> Option<std::rc::Rc<adblock::engine::Engine>> {
     let text = std::fs::read_to_string(path).ok()?;
     eprintln!("engine: adblock enabled");
-    Some(std::rc::Rc::new(adblock::engine::Engine::new_with_list_text(
-        text,
-    )))
+    Some(std::rc::Rc::new(
+        adblock::engine::Engine::new_with_list_text(text),
+    ))
 }
 
 fn make_context(size: dpi::PhysicalSize<u32>) -> Option<std::rc::Rc<dyn RenderingContext>> {
@@ -667,7 +691,7 @@ fn make_context(size: dpi::PhysicalSize<u32>) -> Option<std::rc::Rc<dyn Renderin
 /// Map a chrome key event (name, text, modifier bitmask: 1 shift, 2 ctrl,
 /// 4 alt, 8 cmd/logo, down state) to a servo input event.
 fn map_key(name: &str, text: &str, mods: u8, down: bool) -> Option<servo::InputEvent> {
-    use keyboard_types::{Code, Key as K, KeyboardEvent, Location, Modifiers, NamedKey, KeyState};
+    use keyboard_types::{Code, Key as K, KeyboardEvent, Modifiers, NamedKey};
     let mut modifiers = Modifiers::empty();
     if mods & 1 != 0 {
         modifiers.insert(Modifiers::SHIFT);
@@ -698,9 +722,7 @@ fn map_key(name: &str, text: &str, mods: u8, down: bool) -> Option<servo::InputE
         "Escape" => (K::Named(NamedKey::Escape), Code::Escape),
         "Tab" => (K::Named(NamedKey::Tab), Code::Tab),
         other => {
-            let Some(n) = other.strip_prefix('F').and_then(|n| n.parse::<u8>().ok()) else {
-                return None;
-            };
+            let n = other.strip_prefix('F').and_then(|n| n.parse::<u8>().ok())?;
             let named = match n {
                 1..=12 => match n {
                     1 => NamedKey::F1,
@@ -810,8 +832,7 @@ fn main() {
     // isolation). A hard kill or crash can leave it behind; the next run
     // with the same pid and the OS temp cleaner take care of that.
     let ephemeral_dir: Option<std::path::PathBuf> = if ephemeral {
-        let dir = std::env::temp_dir()
-            .join(format!("browserr-ephemeral-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("browserr-ephemeral-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir); // a crashed predecessor
         Some(dir)
     } else {
@@ -888,7 +909,7 @@ fn main() {
 
     let initial_size = dpi::PhysicalSize::new(1200u32, 760u32);
 
-    let mut make_tab = |id: u64| -> Option<Tab> {
+    let make_tab = |id: u64| -> Option<Tab> {
         let context = make_context(initial_size)?;
         let _ = context.make_current();
         let delegate = std::rc::Rc::new(FrameDelegate {
@@ -931,7 +952,7 @@ fn main() {
 
     // Watchdog: proves the main thread's state without a debugger.
     {
-        let pump = pump.clone();
+        let _pump = pump.clone();
         std::thread::spawn(move || {
             loop {
                 std::thread::sleep(std::time::Duration::from_secs(2));
@@ -987,10 +1008,12 @@ fn main() {
                                     && let Ok(url) = url::Url::parse(u)
                                 {
                                     eprintln!("engine: queue navigate (tab {tab_id}) {url}");
-                                    if !tabs.contains_key(&tab_id) {
+                                    if let std::collections::hash_map::Entry::Vacant(e) =
+                                        tabs.entry(tab_id)
+                                    {
                                         match make_tab(tab_id) {
                                             Some(t) => {
-                                                tabs.insert(tab_id, t);
+                                                e.insert(t);
                                             }
                                             None => {
                                                 cleanup_ephemeral(&ephemeral_dir);
@@ -1004,29 +1027,33 @@ fn main() {
                                 }
                             }
                             Some("new_tab") => {
-                                if !tabs.contains_key(&tab_id) {
+                                if let std::collections::hash_map::Entry::Vacant(e) =
+                                    tabs.entry(tab_id)
+                                {
                                     eprintln!("engine: new tab {tab_id}");
                                     match make_tab(tab_id) {
                                         Some(t) => {
-                                            tabs.insert(tab_id, t);
+                                            e.insert(t);
                                         }
                                         None => {
                                             cleanup_ephemeral(&ephemeral_dir);
                                             std::process::exit(0);
-                                        },
+                                        }
                                     }
                                 }
                             }
                             Some("activate") => {
-                                if !tabs.contains_key(&tab_id) {
+                                if let std::collections::hash_map::Entry::Vacant(e) =
+                                    tabs.entry(tab_id)
+                                {
                                     match make_tab(tab_id) {
                                         Some(t) => {
-                                            tabs.insert(tab_id, t);
+                                            e.insert(t);
                                         }
                                         None => {
                                             cleanup_ephemeral(&ephemeral_dir);
                                             std::process::exit(0);
-                                        },
+                                        }
                                     }
                                 }
                                 eprintln!("engine: activate tab {tab_id}");
@@ -1040,7 +1067,9 @@ fn main() {
                                     send_event(
                                         &mut out,
                                         event_id,
-                                        &format!("{{\"ev\":\"url\",\"tab\":{tab_id},\"url\":\"{u}\"}}"),
+                                        &format!(
+                                            "{{\"ev\":\"url\",\"tab\":{tab_id},\"url\":\"{u}\"}}"
+                                        ),
                                     );
                                 }
                                 if let Some(t) = &tab.last_title {
@@ -1049,7 +1078,9 @@ fn main() {
                                     send_event(
                                         &mut out,
                                         event_id,
-                                        &format!("{{\"ev\":\"title\",\"tab\":{tab_id},\"title\":\"{esc}\"}}"),
+                                        &format!(
+                                            "{{\"ev\":\"title\",\"tab\":{tab_id},\"title\":\"{esc}\"}}"
+                                        ),
                                     );
                                 }
                                 if let Some((b, f)) = tab.last_history {
@@ -1057,7 +1088,9 @@ fn main() {
                                     send_event(
                                         &mut out,
                                         event_id,
-                                        &format!("{{\"ev\":\"history\",\"tab\":{tab_id},\"back\":{b},\"forward\":{f}}}"),
+                                        &format!(
+                                            "{{\"ev\":\"history\",\"tab\":{tab_id},\"back\":{b},\"forward\":{f}}}"
+                                        ),
                                     );
                                 }
                                 if let Some(c) = &tab.last_cursor {
@@ -1065,7 +1098,9 @@ fn main() {
                                     send_event(
                                         &mut out,
                                         event_id,
-                                        &format!("{{\"ev\":\"cursor\",\"tab\":{tab_id},\"cursor\":\"{c}\"}}"),
+                                        &format!(
+                                            "{{\"ev\":\"cursor\",\"tab\":{tab_id},\"cursor\":\"{c}\"}}"
+                                        ),
                                     );
                                 }
                                 shared.frame_ready.store(true, Ordering::SeqCst);
@@ -1079,9 +1114,9 @@ fn main() {
                                 // Contain the panic so one closed tab can't kill
                                 // the whole engine.
                                 if let Some(tab) = tabs.remove(&tab_id) {
-                                    let _ = std::panic::catch_unwind(
-                                        std::panic::AssertUnwindSafe(|| drop(tab)),
-                                    );
+                                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                                        || drop(tab),
+                                    ));
                                 }
                                 shared.started.lock().unwrap().remove(&tab_id);
                                 if shared.active.load(Ordering::SeqCst) == tab_id {
@@ -1121,21 +1156,24 @@ fn main() {
                                     eprintln!("engine: eval (tab {tab_id})");
                                     if let Some(req) = v["id"].as_u64() {
                                         let shared = shared.clone();
-                                        tab.webview.evaluate_javascript(js.to_string(), move |result| {
-                                            let value = jsvalue_to_json(result);
-                                            shared.updates.lock().unwrap().push(Update {
-                                                tab: tab_id,
-                                                url: None,
-                                                title: None,
-                                                history: None,
-                                                pw: None,
-                                                icon: None,
-                                                cursor: None,
-                                                eval: Some((req, value)),
-        console: None,
-                                            });
-                                            shared.pump.kick();
-                                        });
+                                        tab.webview.evaluate_javascript(
+                                            js.to_string(),
+                                            move |result| {
+                                                let value = jsvalue_to_json(result);
+                                                shared.updates.lock().unwrap().push(Update {
+                                                    tab: tab_id,
+                                                    url: None,
+                                                    title: None,
+                                                    history: None,
+                                                    pw: None,
+                                                    icon: None,
+                                                    cursor: None,
+                                                    eval: Some((req, value)),
+                                                    console: None,
+                                                });
+                                                shared.pump.kick();
+                                            },
+                                        );
                                     } else {
                                         tab.webview.evaluate_javascript(js.to_string(), |_| {});
                                     }
@@ -1158,7 +1196,7 @@ fn main() {
                                     );
                                     if let Some(image) = tab.context.read_to_image(rect) {
                                         let mut bgra = image.into_raw();
-                                        for px in bgra.chunks_exact_mut(4) {
+                                        for px in bgra.as_chunks_mut::<4>().0 {
                                             px.swap(0, 2);
                                         }
                                         frame_id += 1;
@@ -1295,14 +1333,15 @@ fn main() {
                                     Err("missing url or path".to_string())
                                 } else {
                                     http_get(url, max).and_then(|body| {
-                                        if let Some(dir) =
-                                            std::path::Path::new(path).parent()
+                                        if let Some(dir) = std::path::Path::new(path).parent()
                                             && !dir.as_os_str().is_empty()
                                         {
                                             let _ = std::fs::create_dir_all(dir);
                                         }
                                         let n = body.len() as u64;
-                                        std::fs::write(path, body).map(|_| n).map_err(|e| e.to_string())
+                                        std::fs::write(path, body)
+                                            .map(|_| n)
+                                            .map_err(|e| e.to_string())
                                     })
                                 };
                                 event_id += 1;
@@ -1344,18 +1383,20 @@ fn main() {
                                     }
                                 }
                             }
-                            Some("frames") => {
-                                if v["mode"].as_str() == Some("bytes") {
-                                    eprintln!("engine: chrome requested byte frames");
-                                    frame_mode = FrameMode::Bytes;
-                                }
+                            Some("frames") if v["mode"].as_str() == Some("bytes") => {
+                                eprintln!("engine: chrome requested byte frames");
+                                frame_mode = FrameMode::Bytes;
                             }
                             _ => {}
                         }
                     }
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut => break,
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    break;
+                }
                 Err(_) => {
                     cleanup_ephemeral(&ephemeral_dir);
                     std::process::exit(0);
@@ -1403,7 +1444,7 @@ fn main() {
         servo.spin_event_loop();
 
         tick += 1;
-        if tick % 60 == 0 {
+        if tick.is_multiple_of(60) {
             eprintln!("engine: tick {tick}");
         }
 
@@ -1445,21 +1486,30 @@ fn main() {
                     send_event(
                         &mut out,
                         event_id,
-                        &format!("{{\"ev\":\"history\",\"tab\":{},\"back\":{},\"forward\":{}}}", u.tab, b, f),
+                        &format!(
+                            "{{\"ev\":\"history\",\"tab\":{},\"back\":{},\"forward\":{}}}",
+                            u.tab, b, f
+                        ),
                     );
                 }
                 if let Some(c) = &u.cursor {
                     send_event(
                         &mut out,
                         event_id,
-                        &format!("{{\"ev\":\"cursor\",\"tab\":{},\"cursor\":\"{}\"}}", u.tab, c),
+                        &format!(
+                            "{{\"ev\":\"cursor\",\"tab\":{},\"cursor\":\"{}\"}}",
+                            u.tab, c
+                        ),
                     );
                 }
                 if let Some((req, value)) = &u.eval {
                     send_event(
                         &mut out,
                         event_id,
-                        &format!("{{\"ev\":\"evalresult\",\"tab\":{},\"id\":{},\"value\":{}}}", u.tab, req, value),
+                        &format!(
+                            "{{\"ev\":\"evalresult\",\"tab\":{},\"id\":{},\"value\":{}}}",
+                            u.tab, req, value
+                        ),
                     );
                 }
                 if let Some((level, message)) = &u.console {
@@ -1471,7 +1521,10 @@ fn main() {
                     send_event(
                         &mut out,
                         event_id,
-                        &format!("{{\"ev\":\"console\",\"tab\":{},\"level\":\"{}\",\"message\":\"{esc}\"}}", u.tab, level),
+                        &format!(
+                            "{{\"ev\":\"console\",\"tab\":{},\"level\":\"{}\",\"message\":\"{esc}\"}}",
+                            u.tab, level
+                        ),
                     );
                 }
                 if let Some(data) = &u.pw {
@@ -1479,7 +1532,10 @@ fn main() {
                     send_event(
                         &mut out,
                         event_id,
-                        &format!("{{\"ev\":\"pwcapture\",\"tab\":{},\"data\":{}}}", u.tab, data),
+                        &format!(
+                            "{{\"ev\":\"pwcapture\",\"tab\":{},\"data\":{}}}",
+                            u.tab, data
+                        ),
                     );
                 }
                 if let Some((origin, w, h, rgba)) = &u.icon {
@@ -1529,7 +1585,7 @@ fn main() {
                 );
                 if let Some(image) = tab.context.read_to_image(rect) {
                     let mut bgra = image.into_raw();
-                    for px in bgra.chunks_exact_mut(4) {
+                    for px in bgra.as_chunks_mut::<4>().0 {
                         px.swap(0, 2);
                     }
                     // Skip identical frames: Servo re-renders even when nothing
@@ -1561,7 +1617,9 @@ fn main() {
                                 match d3d::Pool::new(current_size.width, current_size.height) {
                                     Ok(p) => shared_pool = Some(p),
                                     Err(e) => {
-                                        eprintln!("engine: shared frames unavailable ({e}); using bytes");
+                                        eprintln!(
+                                            "engine: shared frames unavailable ({e}); using bytes"
+                                        );
                                         frame_mode = FrameMode::Bytes;
                                     }
                                 }
@@ -1584,7 +1642,9 @@ fn main() {
                                     sent_shared = true;
                                 }
                                 Err(e) => {
-                                    eprintln!("engine: shared frame write failed ({e}); using bytes");
+                                    eprintln!(
+                                        "engine: shared frame write failed ({e}); using bytes"
+                                    );
                                     frame_mode = FrameMode::Bytes;
                                 }
                             }

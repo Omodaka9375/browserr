@@ -9,33 +9,31 @@
 //! Upload path: CPU -> persistent-mapped upload buffer -> CopyBufferToTexture
 //! on our own queue (a CPU-write texture cannot be shared on discrete GPUs).
 
-use windows::core::Interface;
 use windows::Win32::Foundation::{CloseHandle, GENERIC_ALL, HANDLE};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::{
-    D3D12CreateDevice, ID3D12CommandAllocator, ID3D12CommandQueue, ID3D12CommandList,
-    ID3D12Device, ID3D12DeviceChild, ID3D12GraphicsCommandList, ID3D12Fence, ID3D12Resource,
-    D3D12_RESOURCE_STATE_GENERIC_READ,
-};
-use windows::Win32::Graphics::Direct3D12::{
-    D3D12_BOX, D3D12_COMMAND_LIST_FLAG_NONE, D3D12_COMMAND_LIST_TYPE_DIRECT,
-    D3D12_COMMAND_QUEUE_DESC, D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_FENCE_FLAG_NONE,
-    D3D12_FENCE_FLAG_SHARED, D3D12_HEAP_FLAG_NONE, D3D12_HEAP_FLAG_SHARED, D3D12_HEAP_FLAGS,
-    D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_UPLOAD,
-    D3D12_MEMORY_POOL_UNKNOWN,
-    D3D12_RESOURCE_BARRIER, D3D12_RESOURCE_BARRIER_0, D3D12_RESOURCE_BARRIER_FLAG_NONE,
-    D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, D3D12_RESOURCE_DESC,
+    D3D12_BOX, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC,
+    D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_FENCE_FLAG_NONE, D3D12_FENCE_FLAG_SHARED,
+    D3D12_HEAP_FLAG_NONE, D3D12_HEAP_FLAG_SHARED, D3D12_HEAP_FLAGS, D3D12_HEAP_PROPERTIES,
+    D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_UPLOAD, D3D12_MEMORY_POOL_UNKNOWN,
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RESOURCE_BARRIER, D3D12_RESOURCE_BARRIER_0,
+    D3D12_RESOURCE_BARRIER_FLAG_NONE, D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, D3D12_RESOURCE_DESC,
     D3D12_RESOURCE_DIMENSION_BUFFER, D3D12_RESOURCE_DIMENSION_TEXTURE2D,
     D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS, D3D12_RESOURCE_FLAG_NONE,
     D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATES,
     D3D12_RESOURCE_TRANSITION_BARRIER, D3D12_SUBRESOURCE_FOOTPRINT, D3D12_TEXTURE_COPY_LOCATION,
     D3D12_TEXTURE_COPY_LOCATION_0, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
-    D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
-    D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+    D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
     D3D12_TEXTURE_LAYOUT_UNKNOWN, ID3D12PipelineState,
+};
+use windows::Win32::Graphics::Direct3D12::{
+    D3D12_RESOURCE_STATE_GENERIC_READ, D3D12CreateDevice, ID3D12CommandAllocator,
+    ID3D12CommandList, ID3D12CommandQueue, ID3D12Device, ID3D12DeviceChild, ID3D12Fence,
+    ID3D12GraphicsCommandList, ID3D12Resource,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+use windows::core::Interface;
 
 /// Instance counter for pool names: resizing back to a previous size must not
 /// reuse a name whose kernel object is still held (e.g. by the chrome's
@@ -66,7 +64,12 @@ fn share_by_name(device: &ID3D12Device, obj: &ID3D12DeviceChild, name: &str) -> 
     let name_wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
         device
-            .CreateSharedHandle(obj, None, GENERIC_ALL.0, windows::core::PCWSTR(name_wide.as_ptr()))
+            .CreateSharedHandle(
+                obj,
+                None,
+                GENERIC_ALL.0,
+                windows::core::PCWSTR(name_wide.as_ptr()),
+            )
             .map_err(|e| format!("CreateSharedHandle({name}): {e}"))?;
     }
     Ok(())
@@ -75,10 +78,8 @@ fn share_by_name(device: &ID3D12Device, obj: &ID3D12DeviceChild, name: &str) -> 
 /// Bounded CPU wait until `fence` reaches `value`.
 fn wait_fence(fence: &ID3D12Fence, value: u64, event: HANDLE, timeout_ms: u32) {
     unsafe {
-        if fence.GetCompletedValue() < value {
-            if fence.SetEventOnCompletion(value, event).is_ok() {
-                WaitForSingleObject(event, timeout_ms);
-            }
+        if fence.GetCompletedValue() < value && fence.SetEventOnCompletion(value, event).is_ok() {
+            WaitForSingleObject(event, timeout_ms);
         }
     }
 }
@@ -106,7 +107,10 @@ impl Pool {
                 DepthOrArraySize: 1,
                 MipLevels: 1,
                 Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
                 Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
                 Flags: D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS,
             };
@@ -155,7 +159,10 @@ impl Pool {
                 DepthOrArraySize: 1,
                 MipLevels: 1,
                 Format: Default::default(),
-                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
                 Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR, // buffers require ROW_MAJOR
                 Flags: D3D12_RESOURCE_FLAG_NONE,
             };
@@ -192,17 +199,15 @@ impl Pool {
             let instance = POOL_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let frame_name = format!("browserr-frame-{w}x{h}-{instance}");
             let fence_name = format!("browserr-fence-{w}x{h}-{instance}");
-            let texture_child: ID3D12DeviceChild = resource
-                .cast()
-                .map_err(|e| format!("cast resource: {e}"))?;
+            let texture_child: ID3D12DeviceChild =
+                resource.cast().map_err(|e| format!("cast resource: {e}"))?;
             share_by_name(&device, &texture_child, &frame_name)?;
-            let fence_child: ID3D12DeviceChild = rune_fence
-                .cast()
-                .map_err(|e| format!("cast fence: {e}"))?;
+            let fence_child: ID3D12DeviceChild =
+                rune_fence.cast().map_err(|e| format!("cast fence: {e}"))?;
             share_by_name(&device, &fence_child, &fence_name)?;
 
-            let fence_event = CreateEventW(None, false, false, None)
-                .map_err(|e| format!("CreateEventW: {e}"))?;
+            let fence_event =
+                CreateEventW(None, false, false, None).map_err(|e| format!("CreateEventW: {e}"))?;
 
             Ok(Pool {
                 device,
@@ -237,7 +242,11 @@ impl Pool {
     /// (frame texture name, fence name, fence value to push with this frame).
     /// Call after a successful `write`.
     pub fn info(&self) -> (String, String, u64) {
-        (self.frame_name.clone(), self.fence_name.clone(), self.pushed)
+        (
+            self.frame_name.clone(),
+            self.fence_name.clone(),
+            self.pushed,
+        )
     }
 
     /// Upload `bgra` into the shared texture. Waits (bounded) until the chrome
@@ -267,12 +276,14 @@ impl Pool {
                     Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
                     Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
                     Anonymous: D3D12_RESOURCE_BARRIER_0 {
-                        Transition: std::mem::ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                            pResource: std::mem::ManuallyDrop::new(Some(self.resource.clone())),
-                            Subresource: 0,
-                            StateBefore: before,
-                            StateAfter: after,
-                        }),
+                        Transition: std::mem::ManuallyDrop::new(
+                            D3D12_RESOURCE_TRANSITION_BARRIER {
+                                pResource: std::mem::ManuallyDrop::new(Some(self.resource.clone())),
+                                Subresource: 0,
+                                StateBefore: before,
+                                StateAfter: after,
+                            },
+                        ),
                     },
                 }
             };
@@ -283,7 +294,9 @@ impl Pool {
             let dst = D3D12_TEXTURE_COPY_LOCATION {
                 pResource: std::mem::ManuallyDrop::new(Some(self.resource.clone())),
                 Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
+                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                    SubresourceIndex: 0,
+                },
             };
             let src = D3D12_TEXTURE_COPY_LOCATION {
                 pResource: std::mem::ManuallyDrop::new(Some(self.upload.clone())),
@@ -309,10 +322,8 @@ impl Pool {
             )]);
             self.list.Close().map_err(|e| format!("list close: {e}"))?;
 
-            let command_list: ID3D12CommandList = self
-                .list
-                .cast()
-                .map_err(|e| format!("cast list: {e}"))?;
+            let command_list: ID3D12CommandList =
+                self.list.cast().map_err(|e| format!("cast list: {e}"))?;
             self.queue.ExecuteCommandLists(&[Some(command_list)]);
             self.submitted += 1;
             self.queue
@@ -334,14 +345,7 @@ fn create_committed<T: Interface>(
     unsafe {
         let mut out: Option<T> = None;
         device
-            .CreateCommittedResource(
-                heap,
-                heap_flags,
-                desc,
-                initial_state,
-                None,
-                &mut out,
-            )
+            .CreateCommittedResource(heap, heap_flags, desc, initial_state, None, &mut out)
             .map_err(|e| format!("CreateCommittedResource: {e}"))?;
         out.ok_or_else(|| "CreateCommittedResource returned nothing".to_string())
     }
