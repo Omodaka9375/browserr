@@ -1,0 +1,46 @@
+name: ci
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+            chrome/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build + python test suite
+        shell: pwsh
+        env:
+          # Headless engine tests only on CI (windowed-chrome tests need an
+          # interactive desktop session; run those locally with CI_WINDOWED=1).
+          CI_WINDOWED: "0"
+        run: powershell -File scripts/ci.ps1
+
+      - name: Release build smoke (engine; LTO build)
+        shell: pwsh
+        run: |
+          cargo build --release --manifest-path engine/Cargo.toml 2>&1 | Select-Object -Last 3
+          if ($LASTEXITCODE -ne 0) { exit 1 }
