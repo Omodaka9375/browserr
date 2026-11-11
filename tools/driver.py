@@ -496,6 +496,63 @@ class Driver:
             and (tab is None or e.get("tab") == tab),
             timeout)
 
+    # -- fail-closed interception / auth / file pickers ----------------------
+
+    def intercept(self, on: bool) -> None:
+        """Arm/disarm fail-closed request interception.
+
+        When armed, qualifying requests (main-frame documents, fetch/XHR and
+        JSON loads) are held for a decision; the engine emits
+        {"ev":"request","id","tab","method","url","main"} events and the page
+        load stalls until request_answer() (or the engine's 5s fail-closed
+        timeout denies it).
+        """
+        self.cmd({"cmd": "intercept", "tab": 0, "on": bool(on)})
+
+    def wait_request(self, tab=None, url_contains=None, timeout=10.0):
+        """Wait for the next held-request decision event; returns it."""
+        return self.wait_for(
+            lambda e: e.get("ev") == "request"
+            and (tab is None or e.get("tab") == tab)
+            and (url_contains is None or url_contains in e.get("url", "")),
+            timeout)
+
+    def request_answer(self, req_id, action: str, status=200, body="",
+                       content_type="text/plain"):
+        """Answer a held request: "allow" passes it through, "deny" fulfills
+        it with a synthetic 403, "respond" fulfills it with status/body."""
+        self.cmd({"cmd": "request", "tab": 0, "id": req_id, "action": action,
+                  "status": status, "body": body, "content_type": content_type})
+
+    def wait_auth(self, tab=None, timeout=15.0):
+        """Wait for the next auth challenge event
+        {"ev":"auth","id","tab","url","proxy"}; returns it."""
+        return self.wait_for(
+            lambda e: e.get("ev") == "auth"
+            and (tab is None or e.get("tab") == tab),
+            timeout)
+
+    def auth_answer(self, req_id, user=None, password=None):
+        """Answer an auth challenge. Without credentials the challenge is
+        failed closed (no credentials sent)."""
+        args = {"cmd": "auth", "tab": 0, "id": req_id}
+        if user is not None and password is not None:
+            args.update({"user": user, "pass": password})
+        self.cmd(args)
+
+    def wait_filepicker(self, tab=None, timeout=15.0):
+        """Wait for the next file-picker event
+        {"ev":"filepicker","id","tab","multiple"}; returns it."""
+        return self.wait_for(
+            lambda e: e.get("ev") == "filepicker"
+            and (tab is None or e.get("tab") == tab),
+            timeout)
+
+    def files_answer(self, req_id, paths):
+        """Answer a file picker with a list of paths (empty/None = cancel)."""
+        self.cmd({"cmd": "files", "tab": 0, "id": req_id,
+                 "paths": list(paths) if paths else []})
+
     def download(self, url, path, max_bytes=None, timeout=120.0):
         """Fetch a URL straight to a local path (agents fetch files; servo
         0.8 has no in-page download hook). No page cookies are sent, so only

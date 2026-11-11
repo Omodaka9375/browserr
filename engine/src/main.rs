@@ -24,7 +24,19 @@
 //! Automation: eval with an "id" reports {"ev":"evalresult","tab","id","value"};
 //! {"cmd":"screenshot","tab":N} answers with a SHT1 frame (magic, id, w, h, w*h*4 BGRA).
 //! {"cmd":"ping","id":N} answers {"ev":"pong","id":N,"tabs":K,"active":A} (health check).
+//! Interception (fail-closed): {"cmd":"intercept","on":bool} toggles it; when on,
+//! each qualifying HTTP request emits {"ev":"request","id","tab","method","url",
+//! "main":bool,"destination":...} and holds. The driver answers with
+//! {"cmd":"request","id","action":"allow"|"deny"|"respond","status":N,"body":...,
+//! "content_type":...}; "deny" fulfills with a synthetic 403 (never cancel():
+//! a cancelled response wedges the tab pipeline). Unanswered requests deny
+//! after 5s. Auth challenges (main-frame navigations, incl. proxy 407) emit
+//! {"ev":"auth","id","tab","url","proxy":bool}; {"cmd":"auth","id","user","pass"}
+//! answers, anything else fails closed. File pickers emit {"ev":"filepicker",
+//! "id","tab","multiple":bool}; {"cmd":"files","id","paths":[...]} answers
+//! (empty = cancel).
 use servo::RenderingContext;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 
@@ -52,7 +64,7 @@ fn hard_exit() -> ! {
 }
 
 /// Commands an attached driver may send; validated before queueing.
-const DRIVER_CMDS: [&str; 14] = [
+const DRIVER_CMDS: [&str; 18] = [
     "navigate",
     "back",
     "forward",
@@ -67,6 +79,10 @@ const DRIVER_CMDS: [&str; 14] = [
     "zoom",
     "ping",
     "download",
+    "intercept",
+    "request",
+    "auth",
+    "files",
 ];
 
 /// Attached-driver hub (computer-use mode: `--driver-port=N`). Driver
@@ -85,6 +101,9 @@ struct DriverHub {
 const DRIVER_PREFIX: &str = "\u{1}drv:";
 
 static HUB: std::sync::OnceLock<DriverHub> = std::sync::OnceLock::new();
+
+/// Monotonic id for held interception requests.
+static INTERCEPT_ID: AtomicU64 = AtomicU64::new(1);
 
 impl DriverHub {
     fn global() -> &'static DriverHub {
@@ -258,6 +277,12 @@ struct Update {
     /// Page console message: (level, message). Servo also routes network
     /// and TLS load errors here, so agents see why a page failed.
     console: Option<(String, String)>,
+    /// Held request awaiting a driver decision: (id, method, url, is_main).
+    intercept: Option<(u64, String, String, bool)>,
+    /// Auth challenge awaiting credentials: (id, url, for_proxy).
+    auth: Option<(u64, String, bool)>,
+    /// File picker awaiting a file list: (id, allow_multiple).
+    filepicker: Option<(u64, bool)>,
 }
 
 /// Runs on load complete: if the page has a password field, capture its
@@ -306,6 +331,59 @@ struct Shared {
     started: Mutex<std::collections::HashSet<u64>>,
     /// Decoded favicons keyed by icon URL (16x16 RGBA), filled by fetch threads.
     icons: Mutex<std::collections::HashMap<String, Vec<u8>>>,
+    /// Fail-closed interception armed by the driver ({"cmd":"intercept","on":true}).
+    intercept_on: AtomicBool,
+}
+
+/// An auth challenge held for a driver answer. Keeping the
+/// AuthenticationRequest alive holds the challenge; dropping it answers
+/// "no credentials" (fail-closed).
+struct AuthHold {
+    since: std::time::Instant,
+    request: servo::AuthenticationRequest,
+}
+
+/// A file picker held for a driver answer. Dropping it dismisses the picker
+/// (no selection).
+struct FileHold {
+    since: std::time::Instant,
+    picker: servo::FilePicker,
+}
+
+/// A load held for a driver decision. The WebResourceLoad must stay alive
+/// while held: dropping it sends DoNotIntercept (pass-through). Deny or
+/// respond = intercept() + finish(); servo's request_interceptor blocks a
+/// net-pool worker per pending decision, so we cap waiting time.
+struct PendingLoad {
+    since: std::time::Instant,
+    load: servo::WebResourceLoad,
+}
+
+// Held requests and their driver answers. The servo responder types above
+// are !Send (Rc-based), so these live in thread-locals: every producer and
+// consumer runs on the main thread that owns servo (delegate callbacks fire
+// during spin_event_loop; the command dispatch and the timeout sweep run in
+// the same loop). Answers, holds and pickers never cross threads.
+thread_local! {
+    /// Held loads awaiting a driver decision (see Shared::intercept_on).
+    static PENDING_LOADS: RefCell<HashMap<u64, PendingLoad>> =
+        RefCell::new(HashMap::new());
+    /// Driver decisions queued by request-id.
+    static ANSWERS: RefCell<HashMap<u64, serde_json::Value>> =
+        RefCell::new(HashMap::new());
+    /// Auth credentials queued per auth request-id.
+    static AUTH_ANSWERS: RefCell<HashMap<u64, Option<(String, String)>>> =
+        RefCell::new(HashMap::new());
+    /// File paths queued per filepicker request-id (None = cancel).
+    static FILE_ANSWERS:
+        RefCell<HashMap<u64, Option<Vec<std::path::PathBuf>>>> =
+        RefCell::new(HashMap::new());
+    /// Held auth requests awaiting driver credentials. Drop = no creds.
+    static AUTH_HOLDS: RefCell<HashMap<u64, AuthHold>> =
+        RefCell::new(HashMap::new());
+    /// Held file pickers awaiting driver file lists. Drop = cancel.
+    static FILE_HOLDS: RefCell<HashMap<u64, FileHold>> =
+        RefCell::new(HashMap::new());
 }
 
 struct ServoAdblockDelegate {
@@ -316,31 +394,32 @@ impl servo::ServoDelegate for ServoAdblockDelegate {
     fn load_web_resource(&self, load: servo::WebResourceLoad) {
         // Requests with a target webview go to the WebViewDelegate; this
         // catches the rest (no target webview known at the net layer).
-        if let Some(engine) = &self.adblock {
-            block_if_matching(engine, load);
+        if let Some(engine) = &self.adblock
+            && adblock_matches(engine, &load)
+        {
+            eprintln!("engine: adblock blocked {}", load.request().url);
+            let response_url = load.request().url.clone().into_url();
+            load.intercept(servo::WebResourceResponse::new(response_url))
+                .cancel();
         }
     }
 }
 
-/// Block the request if the filter list matches; default is pass-through.
-/// Main-frame documents are never blocked: a cancelled document response
-/// wedges the pipeline for later navigations on that tab.
-fn block_if_matching(engine: &adblock::engine::Engine, load: servo::WebResourceLoad) {
+/// Whether the filter list matches this request (metadata only; the load
+/// is not consumed here).
+fn adblock_matches(engine: &adblock::engine::Engine, load: &servo::WebResourceLoad) -> bool {
+    // Main-frame documents are never blocked: a cancelled document response
+    // wedges the pipeline for later navigations on that tab.
     if load.request().is_for_main_frame {
-        return;
+        return false;
     }
     let url = load.request().url.to_string();
     let req_type = format!("{:?}", load.request().destination).to_lowercase();
     let method = load.request().method.as_str();
     let Ok(req) = adblock::request::Request::new(&url, "", &req_type, method) else {
-        return;
+        return false;
     };
-    if engine.check_network_request(&req).should_block() {
-        eprintln!("engine: adblock blocked {url}");
-        let response_url = load.request().url.clone().into_url();
-        load.intercept(servo::WebResourceResponse::new(response_url))
-            .cancel();
-    }
+    engine.check_network_request(&req).should_block()
 }
 
 struct FrameDelegate {
@@ -350,13 +429,6 @@ struct FrameDelegate {
 }
 
 impl FrameDelegate {
-    /// Block the request if the filter list matches; default is pass-through.
-    fn maybe_block(&self, load: servo::WebResourceLoad) {
-        if let Some(engine) = &self.adblock {
-            block_if_matching(engine, load);
-        }
-    }
-
     /// Eval a password-capture script; a string result is reported to the chrome.
     fn eval_pw(&self, webview: servo::WebView, script: &'static str) {
         let shared = self.shared.clone();
@@ -375,6 +447,9 @@ impl FrameDelegate {
                     cursor: None,
                     eval: None,
                     console: None,
+                    intercept: None,
+                    auth: None,
+                    filepicker: None,
                 });
                 shared.pump.kick();
             }
@@ -410,6 +485,9 @@ impl FrameDelegate {
                     cursor: None,
                     eval: None,
                     console: None,
+                    intercept: None,
+                    auth: None,
+                    filepicker: None,
                 });
                 shared.pump.kick();
                 return;
@@ -429,6 +507,9 @@ impl FrameDelegate {
                         cursor: None,
                         eval: None,
                         console: None,
+                        intercept: None,
+                        auth: None,
+                        filepicker: None,
                     });
                     shared.pump.kick();
                 }
@@ -471,6 +552,9 @@ impl servo::WebViewDelegate for FrameDelegate {
             cursor: None,
             eval: None,
             console: None,
+            intercept: None,
+            auth: None,
+            filepicker: None,
         });
         // Pick up a capture that a submitted form left behind.
         self.eval_pw(webview, PW_READ_JS);
@@ -513,6 +597,9 @@ impl servo::WebViewDelegate for FrameDelegate {
             cursor: None,
             eval: None,
             console: Some((name, message)),
+            intercept: None,
+            auth: None,
+            filepicker: None,
         });
         self.shared.pump.kick();
     }
@@ -529,6 +616,9 @@ impl servo::WebViewDelegate for FrameDelegate {
             cursor: Some(name),
             eval: None,
             console: None,
+            intercept: None,
+            auth: None,
+            filepicker: None,
         });
         self.shared.pump.kick();
     }
@@ -544,6 +634,9 @@ impl servo::WebViewDelegate for FrameDelegate {
             cursor: None,
             eval: None,
             console: None,
+            intercept: None,
+            auth: None,
+            filepicker: None,
         });
         self.shared.pump.kick();
     }
@@ -566,12 +659,66 @@ impl servo::WebViewDelegate for FrameDelegate {
             cursor: None,
             eval: None,
             console: None,
+            intercept: None,
+            auth: None,
+            filepicker: None,
         });
         self.shared.pump.kick();
     }
 
     fn load_web_resource(&self, _webview: servo::WebView, load: servo::WebResourceLoad) {
-        self.maybe_block(load);
+        // Adblock first; a blocked load is consumed (no hold).
+        if let Some(engine) = &self.adblock
+            && adblock_matches(engine, &load)
+        {
+            eprintln!("engine: adblock blocked {}", load.request().url);
+            let response_url = load.request().url.clone().into_url();
+            load.intercept(servo::WebResourceResponse::new(response_url))
+                .cancel();
+            return;
+        }
+        // Fail-closed interception: hold qualifying loads for a driver
+        // decision (auto-allow everything else so the net pool never starves).
+        if !self.shared.intercept_on.load(Ordering::SeqCst) {
+            return;
+        }
+        let main = load.request().is_for_main_frame;
+        // Only documents and data requests are surfaced for decisions;
+        // images/styles/fonts and other subresources pass through unheld.
+        // fetch()/XHR loads carry Destination::None in servo's request
+        // pipeline, so those ride the None arm below.
+        let dest = format!("{:?}", load.request().destination).to_lowercase();
+        if !main && !matches!(dest.as_str(), "none" | "json" | "document") {
+            return;
+        }
+        let url = load.request().url.to_string();
+        let method = load.request().method.as_str().to_string();
+        // Hold the load itself: alive = held (drop would pass through).
+        let id = INTERCEPT_ID.fetch_add(1, Ordering::SeqCst);
+        PENDING_LOADS.with(|m| {
+            m.borrow_mut().insert(
+                id,
+                PendingLoad {
+                    since: std::time::Instant::now(),
+                    load,
+                },
+            )
+        });
+        self.shared.updates.lock().unwrap().push(Update {
+            tab: self.tab,
+            url: None,
+            title: None,
+            history: None,
+            pw: None,
+            icon: None,
+            cursor: None,
+            eval: None,
+            console: None,
+            intercept: Some((id, method, url, main)),
+            auth: None,
+            filepicker: None,
+        });
+        self.shared.pump.kick();
     }
 
     fn notify_input_event_handled(
@@ -586,6 +733,76 @@ impl servo::WebViewDelegate for FrameDelegate {
             result.contains(servo::InputEventResult::Consumed),
             result.contains(servo::InputEventResult::DispatchFailed),
         );
+    }
+
+    /// Auth challenge (main-frame navigations, incl. proxy 407): hold for a
+    /// driver answer; drop = no credentials (fail closed).
+    fn request_authentication(
+        &self,
+        _webview: servo::WebView,
+        request: servo::AuthenticationRequest,
+    ) {
+        let id = INTERCEPT_ID.fetch_add(1, Ordering::SeqCst);
+        let url = request.url().to_string();
+        let proxy = request.for_proxy();
+        AUTH_HOLDS.with(|m| {
+            m.borrow_mut().insert(
+                id,
+                AuthHold {
+                    since: std::time::Instant::now(),
+                    request,
+                },
+            )
+        });
+        self.shared.updates.lock().unwrap().push(Update {
+            tab: self.tab,
+            url: None,
+            title: None,
+            history: None,
+            pw: None,
+            icon: None,
+            cursor: None,
+            eval: None,
+            console: None,
+            intercept: None,
+            auth: Some((id, url, proxy)),
+            filepicker: None,
+        });
+        self.shared.pump.kick();
+    }
+
+    /// File picker (input type=file): hold for a driver file list; drop =
+    /// dismissed with no selection. Other controls are ignored.
+    fn show_embedder_control(&self, _webview: servo::WebView, control: servo::EmbedderControl) {
+        let servo::EmbedderControl::FilePicker(picker) = control else {
+            return;
+        };
+        let id = INTERCEPT_ID.fetch_add(1, Ordering::SeqCst);
+        let multiple = picker.allow_select_multiple();
+        FILE_HOLDS.with(|m| {
+            m.borrow_mut().insert(
+                id,
+                FileHold {
+                    since: std::time::Instant::now(),
+                    picker,
+                },
+            )
+        });
+        self.shared.updates.lock().unwrap().push(Update {
+            tab: self.tab,
+            url: None,
+            title: None,
+            history: None,
+            pw: None,
+            icon: None,
+            cursor: None,
+            eval: None,
+            console: None,
+            intercept: None,
+            auth: None,
+            filepicker: Some((id, multiple)),
+        });
+        self.shared.pump.kick();
     }
 }
 
@@ -1100,6 +1317,7 @@ fn main() {
         updates: Mutex::new(Vec::new()),
         started: Mutex::new(std::collections::HashSet::new()),
         icons: Mutex::new(std::collections::HashMap::new()),
+        intercept_on: AtomicBool::new(false),
     });
 
     let mut opts = servo::Opts::default();
@@ -1408,6 +1626,9 @@ fn main() {
                                                     cursor: None,
                                                     eval: Some((req, value)),
                                                     console: None,
+                                                    intercept: None,
+                                                    auth: None,
+                                                    filepicker: None,
                                                 });
                                                 shared.pump.kick();
                                             },
@@ -1619,6 +1840,52 @@ fn main() {
                                     shared.pump.kick();
                                 }
                             }
+                            Some("intercept") => {
+                                // Arm/disarm fail-closed interception. Arming
+                                // affects future loads only; already-held
+                                // requests still need answers (or time out).
+                                let on = v["on"].as_bool().unwrap_or(false);
+                                eprintln!("engine: intercept {on} (tab {tab_id})");
+                                shared.intercept_on.store(on, Ordering::SeqCst);
+                            }
+                            Some("request") => {
+                                // Driver decision for a held request.
+                                let Some(req) = v["id"].as_u64() else {
+                                    continue;
+                                };
+                                eprintln!("engine: request decision (id {req})");
+                                ANSWERS.with(|a| a.borrow_mut().insert(req, v.clone()));
+                                shared.pump.kick();
+                            }
+                            Some("auth") => {
+                                // Driver credentials for an auth challenge.
+                                let Some(req) = v["id"].as_u64() else {
+                                    continue;
+                                };
+                                eprintln!("engine: auth answer (id {req})");
+                                let creds = match (v["user"].as_str(), v["pass"].as_str()) {
+                                    (Some(u), Some(p)) => Some((u.to_string(), p.to_string())),
+                                    // Missing credentials = fail closed.
+                                    _ => None,
+                                };
+                                AUTH_ANSWERS.with(|a| a.borrow_mut().insert(req, creds));
+                                shared.pump.kick();
+                            }
+                            Some("files") => {
+                                // Driver answer for a file picker.
+                                let Some(req) = v["id"].as_u64() else {
+                                    continue;
+                                };
+                                eprintln!("engine: files answer (id {req})");
+                                let paths = v["paths"].as_array().map(|a| {
+                                    a.iter()
+                                        .filter_map(|p| p.as_str())
+                                        .map(std::path::PathBuf::from)
+                                        .collect::<Vec<_>>()
+                                });
+                                FILE_ANSWERS.with(|a| a.borrow_mut().insert(req, paths));
+                                shared.pump.kick();
+                            }
                             Some("resize") => {
                                 let (w, h) = (
                                     v["w"].as_u64().unwrap_or(1200) as u32,
@@ -1687,6 +1954,143 @@ fn main() {
                 }
             }
         }
+
+        // Held interception requests: apply driver answers; deny on timeout.
+        // Servo's request_interceptor blocks a net-pool worker per pending
+        // decision, so this sweep runs every tick and held requests always
+        // resolve within the timeout below (deny = fail closed).
+        // All maps are thread-locals: the responder types are !Send and both
+        // this sweep and the delegate callbacks run on the servo main thread.
+        PENDING_LOADS.with(|pending| {
+            let mut pending = pending.borrow_mut();
+            let answers: Vec<(u64, serde_json::Value)> = ANSWERS
+                .with(|a| std::mem::take(&mut *a.borrow_mut()))
+                .into_iter()
+                .collect();
+            for (id, answer) in answers {
+                let Some(p) = pending.remove(&id) else {
+                    continue;
+                };
+                let action = answer["action"].as_str().unwrap_or("deny");
+                match action {
+                    "allow" => {
+                        // Drop the load: its Drop sends DoNotIntercept and
+                        // servo proceeds with the original network load.
+                        eprintln!("engine: intercept allow (id {id})");
+                        drop(p.load);
+                    }
+                    "respond" => {
+                        eprintln!("engine: intercept respond (id {id})");
+                        let status = answer["status"].as_u64().unwrap_or(200) as u16;
+                        let body = answer["body"].as_str().unwrap_or("").as_bytes().to_vec();
+                        let ct = answer["content_type"].as_str().unwrap_or("text/plain");
+                        let response_url = p.load.request().url.clone().into_url();
+                        let mut response = servo::WebResourceResponse::new(response_url);
+                        let mut headers = http::HeaderMap::new();
+                        if let Ok(v) = http::HeaderValue::from_str(ct) {
+                            headers.insert(http::header::CONTENT_TYPE, v);
+                        }
+                        response.headers = headers;
+                        response.status_code = http::StatusCode::from_u16(status)
+                            .unwrap_or(http::StatusCode::FORBIDDEN);
+                        let mut held = p.load.intercept(response);
+                        held.send_body_data(body);
+                        held.finish();
+                    }
+                    // "deny" and anything unrecognized: fail closed with a
+                    // synthetic 403 (cancel() on a document wedges the tab).
+                    _ => {
+                        eprintln!("engine: intercept deny (id {id})");
+                        let response_url = p.load.request().url.clone().into_url();
+                        let mut response = servo::WebResourceResponse::new(response_url);
+                        response.status_code = http::StatusCode::FORBIDDEN;
+                        let mut held = p.load.intercept(response);
+                        held.send_body_data(b"blocked by driver".to_vec());
+                        held.finish();
+                    }
+                }
+            }
+            // Timeout: unresolved holds deny after 5s (fail closed).
+            let expired: Vec<u64> = pending
+                .iter()
+                .filter(|(_, p)| p.since.elapsed() > std::time::Duration::from_secs(5))
+                .map(|(id, _)| *id)
+                .collect();
+            for id in expired {
+                if let Some(p) = pending.remove(&id) {
+                    eprintln!("engine: intercept timeout, denying (id {id})");
+                    let response_url = p.load.request().url.clone().into_url();
+                    let mut response = servo::WebResourceResponse::new(response_url);
+                    response.status_code = http::StatusCode::FORBIDDEN;
+                    let mut held = p.load.intercept(response);
+                    held.send_body_data(b"blocked (timeout)".to_vec());
+                    held.finish();
+                }
+            }
+        });
+        // Auth challenges: apply queued credentials; drop (no creds)
+        // after 10s. Main-frame navigations only in servo 0.8.
+        AUTH_HOLDS.with(|holds| {
+            let mut holds = holds.borrow_mut();
+            let answers: Vec<(u64, Option<(String, String)>)> = AUTH_ANSWERS
+                .with(|a| std::mem::take(&mut *a.borrow_mut()))
+                .into_iter()
+                .collect();
+            for (id, creds) in answers {
+                if let Some(hold) = holds.remove(&id) {
+                    eprintln!("engine: auth answered (id {id})");
+                    match creds {
+                        Some((user, pass)) => hold.request.authenticate(user, pass),
+                        // No credentials: drop = fail closed.
+                        None => drop(hold),
+                    }
+                }
+            }
+            let expired: Vec<u64> = holds
+                .iter()
+                .filter(|(_, h)| h.since.elapsed() > std::time::Duration::from_secs(10))
+                .map(|(id, _)| *id)
+                .collect();
+            for id in expired {
+                if let Some(hold) = holds.remove(&id) {
+                    eprintln!("engine: auth timeout, no credentials (id {id})");
+                    drop(hold);
+                }
+            }
+        });
+        // File pickers: apply queued paths; dismiss after 60s.
+        FILE_HOLDS.with(|holds| {
+            let mut holds = holds.borrow_mut();
+            let answers: Vec<(u64, Option<Vec<std::path::PathBuf>>)> = FILE_ANSWERS
+                .with(|a| std::mem::take(&mut *a.borrow_mut()))
+                .into_iter()
+                .collect();
+            for (id, paths) in answers {
+                if let Some(mut hold) = holds.remove(&id) {
+                    eprintln!("engine: files answered (id {id})");
+                    match paths {
+                        Some(paths) if !paths.is_empty() => {
+                            hold.picker.select(&paths);
+                            hold.picker.submit();
+                        }
+                        _ => {
+                            hold.picker.dismiss();
+                        }
+                    }
+                }
+            }
+            let expired: Vec<u64> = holds
+                .iter()
+                .filter(|(_, h)| h.since.elapsed() > std::time::Duration::from_secs(60))
+                .map(|(id, _)| *id)
+                .collect();
+            for id in expired {
+                if let Some(hold) = holds.remove(&id) {
+                    eprintln!("engine: file picker timeout, dismissing (id {id})");
+                    hold.picker.dismiss();
+                }
+            }
+        });
 
         servo.spin_event_loop();
 
@@ -1771,6 +2175,44 @@ fn main() {
                         &format!(
                             "{{\"ev\":\"console\",\"tab\":{},\"level\":\"{}\",\"message\":\"{esc}\"}}",
                             u.tab, level
+                        ),
+                    );
+                }
+                if let Some((id, method, url, main)) = &u.intercept {
+                    let esc = url
+                        .replace('\\', "\\\\")
+                        .replace('"', "\\\"")
+                        .replace('\n', "\\n");
+                    send_event(
+                        &mut out,
+                        event_id,
+                        &format!(
+                            "{{\"ev\":\"request\",\"tab\":{},\"id\":{},\"method\":\"{method}\",\"url\":\"{esc}\",\"main\":{}}}",
+                            u.tab, id, main
+                        ),
+                    );
+                }
+                if let Some((id, url, proxy)) = &u.auth {
+                    let esc = url
+                        .replace('\\', "\\\\")
+                        .replace('"', "\\\"")
+                        .replace('\n', "\\n");
+                    send_event(
+                        &mut out,
+                        event_id,
+                        &format!(
+                            "{{\"ev\":\"auth\",\"tab\":{},\"id\":{},\"url\":\"{esc}\",\"proxy\":{}}}",
+                            u.tab, id, proxy
+                        ),
+                    );
+                }
+                if let Some((id, multiple)) = &u.filepicker {
+                    send_event(
+                        &mut out,
+                        event_id,
+                        &format!(
+                            "{{\"ev\":\"filepicker\",\"tab\":{},\"id\":{},\"multiple\":{}}}",
+                            u.tab, id, multiple
                         ),
                     );
                 }
