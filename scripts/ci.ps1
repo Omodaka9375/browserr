@@ -35,7 +35,8 @@ $gpuless = $env:CI_GPULESS -eq "1"
 $sdk_tests = @(
     "test_driver", "test_agent", "test_elements", "test_structure",
     "test_watchdog", "test_features", "test_mcp", "test_scroll",
-    "test_bind", "test_attach", "test_hardening", "test_intercept"
+    "test_bind", "test_attach", "test_hardening", "test_intercept",
+    "test_auth", "test_filepicker"
 )
 # Render-free tests: raw socket protocol, no webview pixels needed.
 $gpuless_tests = @("test_bind")
