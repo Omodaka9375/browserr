@@ -594,7 +594,10 @@ struct Tab {
     context: std::rc::Rc<dyn RenderingContext>,
     pending: Option<url::Url>,
     pending_sent: bool,
-    pending_wait: u32,
+    /// Wall-clock deadline for the current load attempt; retries are
+    /// time-based (not tick-based) because a tick can cost 16ms (GPU) or
+    /// ~1s (software/paravirtualized GL on CI runners).
+    pending_deadline: Option<std::time::Instant>,
     pending_retries: u32,
     last_url: Option<String>,
     last_title: Option<String>,
@@ -1148,7 +1151,7 @@ fn main() {
             context,
             pending: None,
             pending_sent: false,
-            pending_wait: 0,
+            pending_deadline: None,
             pending_retries: 0,
             last_url: None,
             last_title: None,
@@ -1657,7 +1660,8 @@ fn main() {
                     eprintln!("engine: load (tab {id}) {u}");
                     tab.webview.load(u);
                     tab.pending_sent = true;
-                    tab.pending_wait = 0;
+                    tab.pending_deadline =
+                        Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
                 } else if shared.started.lock().unwrap().contains(id)
                     || tab.webview.url().map(|v| v == u).unwrap_or(false)
                 {
@@ -1667,18 +1671,18 @@ fn main() {
                     tab.pending = None;
                     tab.pending_sent = false;
                     tab.pending_retries = 0;
-                } else {
-                    // ~16ms per tick: 120 ticks ~= 2s of patience per attempt.
-                    tab.pending_wait += 1;
-                    if tab.pending_wait > 120 {
-                        if tab.pending_retries < 3 {
-                            tab.pending_sent = false;
-                            tab.pending_retries += 1;
-                        } else {
-                            eprintln!("engine: load (tab {id}) never started, giving up");
-                            tab.pending = None;
-                            tab.pending_retries = 0;
-                        }
+                } else if tab
+                    .pending_deadline
+                    .is_some_and(|d| std::time::Instant::now() > d)
+                {
+                    if tab.pending_retries < 3 {
+                        eprintln!("engine: load (tab {id}) not started, retrying");
+                        tab.pending_sent = false;
+                        tab.pending_retries += 1;
+                    } else {
+                        eprintln!("engine: load (tab {id}) never started, giving up");
+                        tab.pending = None;
+                        tab.pending_retries = 0;
                     }
                 }
             }
