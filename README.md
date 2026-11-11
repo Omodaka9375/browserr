@@ -45,9 +45,78 @@ like; that is the whole "visual" story.
 - Rust stable (MSVC toolchain on Windows)
 - Python 3.10+ (test suite and MCP server; standard library only)
 
-## Getting started
+## Install
 
-Build:
+Download the archive for your platform from
+[releases](https://github.com/Omodaka9375/browserr/releases) and unpack it
+anywhere (no admin rights, no installer). You get:
+
+```text
+engine(.exe)      the headless browser engine
+driver.py         Python SDK (stdlib only)
+browserr_mcp.py   MCP server (stdlib only)
+mcp_wrap.cmd      Windows MCP launcher (cmd wrapper)
+README.md, LICENSE
+```
+
+Requirements: Python 3.10+ on PATH, and on Windows a GPU with a D3D11
+driver (Linux works headless on llvmpipe; macOS works out of the box).
+`driver.py` finds the engine binary next to itself - no configuration
+needed. To use a custom engine location, set `BROWSERR_ENGINE=/path/to/engine`.
+
+### Connect an MCP client (Kai, Claude Desktop, ...)
+
+Add the Browserr server in your client's MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "browserr": {
+      "command": "python",
+      "args": ["C:/path/to/browserr/browserr_mcp.py"],
+      "cwd": "C:/path/to/browserr"
+    }
+  }
+}
+```
+
+On Windows, some clients (Kai) cannot launch bare `python`; point the
+command at the bundled wrapper instead:
+
+```json
+{
+  "mcpServers": {
+    "browserr": {
+      "command": "C:/path/to/browserr/mcp_wrap.cmd",
+      "cwd": "C:/path/to/browserr"
+    }
+  }
+}
+```
+
+The server spawns its own engine (ephemeral profile) on first tool use;
+`browser_stop` shuts it down. To share one engine across sessions, start
+it yourself with a driver port and attach instead:
+
+```powershell
+engine --ephemeral --driver-port=7412 --driver-token=secret
+```
+
+```json
+{ "mcpServers": { "browserr": {
+    "command": "python",
+    "args": ["C:/path/to/browserr/browserr_mcp.py", "--port", "7412", "--token", "secret"]
+} } }
+```
+
+### Use the Python SDK
+
+```python
+from driver import Driver
+d = Driver(ephemeral=True)          # spawns the engine, throwaway profile
+```
+
+### Build from source
 
 ```powershell
 cargo build --release --manifest-path engine\Cargo.toml

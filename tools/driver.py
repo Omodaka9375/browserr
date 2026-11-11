@@ -33,8 +33,14 @@ ROOT = _os.path.dirname(TOOLS_DIR)
 # Engine binary name is platform-dependent (engine.exe on Windows, engine
 # elsewhere); tests and the default engine path derive from this.
 EXE_SUFFIX = ".exe" if _os.name == "nt" else ""
-ENGINE_DEBUG = ROOT + "/engine/target/debug/engine" + EXE_SUFFIX
-ENGINE_RELEASE = ROOT + "/engine/target/release/engine" + EXE_SUFFIX
+# Release layout: the engine binary ships next to driver.py (flat unpack).
+# Prefer it when present so a downloaded archive works with no configuration;
+# fall back to the source-tree build output for development checkouts.
+_ENGINE_BUNDLED = TOOLS_DIR + "/engine" + EXE_SUFFIX
+ENGINE_DEBUG = (_ENGINE_BUNDLED if _os.path.exists(_ENGINE_BUNDLED)
+                else ROOT + "/engine/target/debug/engine" + EXE_SUFFIX)
+ENGINE_RELEASE = (_ENGINE_BUNDLED if _os.path.exists(_ENGINE_BUNDLED)
+                  else ROOT + "/engine/target/release/engine" + EXE_SUFFIX)
 import json
 import socket
 import struct
