@@ -397,7 +397,7 @@
         <a href="https://github.com/Omodaka9375/browserr" class="btn-secondary">View on GitHub</a>
       </div>
       <dl class="specs">
-        <div><dt>Platform</dt><dd>Windows · Linux x64</dd></div>
+        <div><dt>Platform</dt><dd>Windows · Linux · macOS</dd></div>
         <div><dt>Engine</dt><dd>Servo + SpiderMonkey</dd></div>
         <div><dt>MCP tools</dt><dd>19</dd></div>
         <div><dt>Protocol</dt><dd>15 commands</dd></div>
@@ -524,7 +524,7 @@
           </tbody>
         </table>
         <div class="note">
-          <p><b>Honest limits.</b> No site sandbox on Windows (treat page loads as untrusted; use ephemeral profiles), web compatibility bounded by Servo 0.8. Windows rendering needs a GPU with a D3D11 driver; Linux renders with any GL including llvmpipe. macOS not yet ported. Text, documents, search and forms work well; heavy SPAs and DRM video may not.</p>
+          <p><b>Honest limits.</b> No site sandbox on Windows (treat page loads as untrusted; use ephemeral profiles), web compatibility bounded by Servo 0.8. Windows rendering needs a GPU with a D3D11 driver; Linux renders with any GL including llvmpipe; macOS renders via Metal-backed GL. Text, documents, search and forms work well; heavy SPAs and DRM video may not.</p>
         </div>
       </div>
     </section>
@@ -538,11 +538,12 @@
         </div>
         <h2>Get Browserr in seconds.</h2>
         <p class="lead">
-          One zip: the engine binary, the Python SDK, and the MCP server. No account, no telemetry.
+          One archive per platform: the engine binary, the Python SDK, and the MCP server. No account, no telemetry.
         </p>
         <div class="os-tabs" role="tablist" id="osTabs">
           <button class="os-tab" role="tab" data-os="windows" aria-selected="true">Windows</button>
           <button class="os-tab" role="tab" data-os="linux">Linux</button>
+          <button class="os-tab" role="tab" data-os="macos">macOS</button>
         </div>
         <div class="os-panel active" data-os="windows">
           <div class="os-card">
@@ -565,6 +566,18 @@
               <span>Format <b>.tar.gz</b></span>
               <span>Contents <b>engine · driver.py · browserr_mcp.py</b></span>
               <span>Requires <b>X11 (xvfb ok) · Python 3.10+</b></span>
+            </div>
+          </div>
+        </div>
+        <div class="os-panel" data-os="macos">
+          <div class="os-card">
+            <h4>macOS (Apple Silicon)</h4>
+            <p>Download the tarball, unpack anywhere, and point your agent at the MCP server. Rendering uses the system GL (Metal-backed); works headless.</p>
+            <a href="https://github.com/Omodaka9375/browserr/releases/latest" class="btn-primary">↓ Download for macOS</a>
+            <div class="os-meta">
+              <span>Format <b>.tar.gz</b></span>
+              <span>Contents <b>engine · driver.py · browserr_mcp.py</b></span>
+              <span>Requires <b>macOS 13+ (arm64) · Python 3.10+</b></span>
             </div>
           </div>
         </div>
@@ -649,7 +662,7 @@
       }
       for (const t of osTabs.querySelectorAll('.os-tab')) t.addEventListener('click', () => selectOs(t.dataset.os));
       const ua = navigator.userAgent;
-      const guess = /Win/i.test(ua) ? 'windows' : /Linux|X11/i.test(ua) ? 'linux' : 'windows';
+      const guess = /Win/i.test(ua) ? 'windows' : /Mac/i.test(ua) ? 'macos' : /Linux|X11/i.test(ua) ? 'linux' : 'windows';
       selectOs(guess);
     }
 

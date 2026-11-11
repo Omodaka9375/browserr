@@ -21,7 +21,12 @@ case "$arch" in
     x86_64|amd64) arch="x64" ;;
     aarch64|arm64) arch="arm64" ;;
 esac
-platform="$(uname -s | tr 'A-Z' 'a-z')-$arch"
+os="$(uname -s)"
+case "$os" in
+    Darwin) os="macos" ;;
+    Linux)  os="linux" ;;
+esac
+platform="$os-$arch"
 out="browserr-$version-$platform.tar.gz"
 rm -f "$out"
 tar -czf "$out" \

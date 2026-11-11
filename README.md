@@ -39,7 +39,8 @@ like; that is the whole "visual" story.
 
 ## Requirements
 
-- Windows 10/11 (x64), or Linux x64 (X11; Mesa llvmpipe works headless)
+- Windows 10/11 (x64), Linux x64 (X11; Mesa llvmpipe works headless), or
+  macOS (Apple Silicon; aarch64)
 - Rust stable (MSVC toolchain on Windows)
 - Python 3.10+ (test suite and MCP server; standard library only)
 
@@ -203,9 +204,10 @@ helper finishes the delete after Servo releases its SQLite handles).
 - Do Not Track would require forking servo-net (the interception hook can
   cancel or replace responses but cannot edit request headers).
 - History records urls only, without page titles.
-- Windows x64 and Linux x64; macOS is not yet ported (CGL path).
+- Windows x64, Linux x64, and macOS (Apple Silicon).
 - Windows: rendering needs a GPU with a D3D11 driver (surfman WGL
-  requirement); Linux renders with any GL, including llvmpipe.
+  requirement); Linux renders with any GL, including llvmpipe; macOS
+  renders via CGL (works headless on CI runners).
 
 ## Tests
 

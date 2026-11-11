@@ -11,13 +11,18 @@ jobs:
       matrix:
         include:
           - os: windows-latest
+            platform: windows-x64
             # GitHub windows-latest runners are GPU-less; servo's WGL backend
             # needs WGL_NV_DX_interop + a real D3D11 device, so render tests
             # cannot pass there. GPU-less mode runs fmt + clippy + build +
             # the render-free protocol tests. The full 14-test suite runs on
-            # Linux (llvmpipe) and locally on any GPU machine.
+            # Linux (llvmpipe), macOS (real GPU) and local GPU machines.
             gpuless: "1"
           - os: ubuntu-latest
+            platform: linux-x64
+            gpuless: ""
+          - os: macos-latest
+            platform: macos-arm64
             gpuless: ""
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -26,6 +31,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # macOS needs no system packages: the servo 0.8 thin build compiles
+      # with just the Xcode command line tools (probed before the port).
       - name: Install system deps (linux)
         if: runner.os == 'Linux'
         run: |
@@ -53,57 +60,47 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: fmt + clippy + build + python test suite
+      - name: fmt + clippy + build + python test suite (windows)
         shell: pwsh
         env:
           CI_GPULESS: ${{ matrix.gpuless }}
         run: powershell -File scripts/ci.ps1
         if: runner.os == 'Windows'
 
-      - name: fmt + clippy + build + python test suite (linux)
+      - name: fmt + clippy + build + python test suite (unix)
         shell: bash
         run: bash scripts/ci.sh
-        if: runner.os == 'Linux'
+        if: runner.os != 'Windows'
 
       - name: Upload test logs (always)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-logs-${{ matrix.os }}
+          name: test-logs-${{ matrix.platform }}
           path: |
             *.log
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: Release build smoke (engine; LTO build)
+      - name: Release build smoke (engine; LTO build, windows)
         shell: pwsh
         run: |
           cargo build --release --manifest-path engine/Cargo.toml *> release-build.log
           if ($LASTEXITCODE -ne 0) { Get-Content release-build.log -Tail 8; exit 1 }
         if: runner.os == 'Windows'
 
-      - name: Release build smoke (engine; LTO build, linux)
+      - name: Release build smoke (engine; LTO build, unix)
         shell: bash
         run: |
           cargo build --release --manifest-path engine/Cargo.toml > release-build.log 2>&1 || {
             tail -8 release-build.log; exit 1
           }
-        if: runner.os == 'Linux'
+        if: runner.os != 'Windows'
 
-      - name: Upload engine (release, windows)
+      - name: Upload engine (release)
         uses: actions/upload-artifact@v4
         with:
-          name: engine-windows-x64
-          path: engine/target/release/engine.exe
+          name: engine-${{ matrix.platform }}
+          path: engine/target/release/engine${{ matrix.os == 'Windows' && '.exe' || '' }}
           if-no-files-found: error
           retention-days: 14
-        if: runner.os == 'Windows'
-
-      - name: Upload engine (release, linux)
-        uses: actions/upload-artifact@v4
-        with:
-          name: engine-linux-x64
-          path: engine/target/release/engine
-          if-no-files-found: error
-          retention-days: 14
-        if: runner.os == 'Linux'
