@@ -20,3 +20,4 @@ tools/mcp-shots/
 tools/*.html
 tools/*.bin
 tools/*-shot.png
+tools/filepicker-picked.txt
