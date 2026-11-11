@@ -101,6 +101,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: engine-${{ matrix.platform }}
-          path: engine/target/release/engine${{ matrix.os == 'Windows' && '.exe' || '' }}
+          path: engine/target/release/engine${{ runner.os == 'Windows' && '.exe' || '' }}
           if-no-files-found: error
           retention-days: 14
