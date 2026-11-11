@@ -35,9 +35,23 @@ jobs:
       # with just the Xcode command line tools (probed before the port).
       - name: Install system deps (linux)
         if: runner.os == 'Linux'
+        # ubuntu-latest runners intermittently fail DNS for the ubuntu
+        # mirrors (other hosts resolve fine), so apt update/install must
+        # retry with backoff before we accept the failure.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libdbus-1-dev \
+          apt-get() { sudo apt-get -o Acquire::Retries=5 "$@"; }
+          run_with_retries() {
+            local desc="$1"; shift
+            for i in 1 2 3 4; do
+              if "$@"; then return 0; fi
+              echo "::warning::$desc failed (attempt $i/4); retrying in 20s"
+              sleep 20
+            done
+            echo "::error::$desc failed after 4 attempts"; return 1
+          }
+          run_with_retries "apt-get update" apt-get update
+          run_with_retries "apt-get install" apt-get install -y --fix-missing \
+            libxkbcommon-dev libdbus-1-dev \
             libegl1-mesa-dev libgl1-mesa-dev libgbm-dev \
             libfontconfig1-dev libfreetype-dev \
             libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxinerama-dev \
