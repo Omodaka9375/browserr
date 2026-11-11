@@ -1,0 +1,52 @@
+name: macos-probe
+# Throwaway probe: does the servo 0.8 dependency tree build on macos-latest
+# (Apple Silicon)? Answers the "how hard is a macOS port" question cheaply.
+# Delete after the port lands.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-probe-${{ hashFiles('**/Cargo.lock') }}
+
+      # Same question the linux probe answered: does our locked dependency
+      # graph resolve, and does servo 0.8 with OUR thin feature set
+      # (bundled + js_jit, no gstreamer) compile on macOS - without
+      # touching the engine source (which is platform-neutral now except
+      # for the Windows gates).
+      - name: Fetch deps as cargo would resolve them
+        run: cargo fetch --manifest-path engine/Cargo.toml
+
+      - name: Compile servo with the thin feature set (macOS)
+        run: |
+          mkdir -p /tmp/probe/src
+          cat > /tmp/probe/Cargo.toml <<'EOF'
+          [package]
+          name = "probe"
+          version = "0.0.0"
+          edition = "2024"
+
+          [dependencies]
+          servo = { version = "=0.8.0", default-features = false, features = ["bundled", "js_jit"] }
+          EOF
+          echo 'fn main() { let _ = servo::Servo::new; }' > /tmp/probe/src/main.rs
+          cd /tmp/probe
+          cargo build 2>&1 | tail -40
