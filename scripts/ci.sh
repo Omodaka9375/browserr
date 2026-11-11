@@ -55,11 +55,18 @@ else
     # when its single client disconnects).
     for t in $RAW_TESTS; do
         echo "== $t : spawning engine =="
+        # Kill any survivor from the previous test first: the engine only
+        # exits when its client disconnects, and a straggler holds port 7411
+        # (the next engine then dies on "bind failed"). Under xvfb-run, $! is
+        # the wrapper's pid, so the per-test kill alone is not reliable.
+        pkill -f "$BROWSERR_ENGINE" 2>/dev/null
+        sleep 1
         ${XUVB_PREFIX:-} "$BROWSERR_ENGINE" --ephemeral > "engine-$t.log" 2>&1 &
         eng=$!
         sleep 3
         run_test "$t" || failed="$failed $t"
         kill $eng 2>/dev/null
+        pkill -f "$BROWSERR_ENGINE" 2>/dev/null
         sleep 1
     done
 fi

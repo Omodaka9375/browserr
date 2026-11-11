@@ -38,6 +38,19 @@ const PORT: u16 = 7411;
 const EV_MAGIC: u32 = 0x45_56_54_31; // EVT1
 const SHOT_MAGIC: u32 = 0x53_48_54_31; // SHT1 (screenshot)
 
+/// Terminate the process immediately, skipping libc atexit handlers and
+/// static destructors. std::process::exit runs them; on Linux servo/mozglue
+/// teardown deadlocks there (pthread_mutex_destroy on mutexes owned by
+/// still-running threads), which stalled engine exit for the full client
+/// timeout. Destructors must not run for live tabs anyway (surfman surface
+/// assertion noise).
+fn hard_exit() -> ! {
+    unsafe extern "C" {
+        fn _exit(status: i32) -> !;
+    }
+    unsafe { _exit(0) }
+}
+
 /// Commands an attached driver may send; validated before queueing.
 const DRIVER_CMDS: [&str; 14] = [
     "navigate",
@@ -67,6 +80,10 @@ struct DriverHub {
     queue: std::sync::Mutex<std::collections::VecDeque<String>>,
 }
 
+/// Prefix marking a queued command as coming from an attached driver
+/// (the main loop strips it and answers via the driver broadcast only).
+const DRIVER_PREFIX: &str = "\u{1}drv:";
+
 static HUB: std::sync::OnceLock<DriverHub> = std::sync::OnceLock::new();
 
 impl DriverHub {
@@ -77,9 +94,12 @@ impl DriverHub {
         })
     }
 
-    /// Queue a validated command line for the main loop to drain.
+    /// Queue a validated driver command line for the main loop to drain.
     fn push(&self, line: &str) {
-        self.queue.lock().unwrap().push_back(line.to_string());
+        self.queue
+            .lock()
+            .unwrap()
+            .push_back(format!("{DRIVER_PREFIX}{line}"));
     }
 
     fn add_client(&self, stream: &std::net::TcpStream) {
@@ -1168,8 +1188,14 @@ fn main() {
             // Driver commands (computer-use mode) drain into the same
             // dispatch as socket lines; the socket itself when none.
             let queued = DriverHub::global().queue.lock().unwrap().pop_front();
+            let mut from_driver = false;
             let res = if let Some(q) = queued {
-                line.push_str(&q);
+                from_driver = q.starts_with(DRIVER_PREFIX);
+                if from_driver {
+                    line.push_str(&q[DRIVER_PREFIX.len()..]);
+                } else {
+                    line.push_str(&q);
+                }
                 Ok(1_usize)
             } else {
                 reader.read_line(&mut line)
@@ -1180,7 +1206,7 @@ fn main() {
                     // Exit without running destructors: dropping live tabs would
                     // trip the surfman surface assertion (cosmetic noise).
                     cleanup_ephemeral(&ephemeral_dir);
-                    std::process::exit(0);
+                    hard_exit();
                 }
                 Ok(_) => {
                     let line = line.trim();
@@ -1407,9 +1433,18 @@ fn main() {
                                         frame.extend_from_slice(&current_size.width.to_le_bytes());
                                         frame.extend_from_slice(&current_size.height.to_le_bytes());
                                         frame.extend_from_slice(&bgra);
-                                        out.write_all(&frame).ok();
-                                        let _ = out.flush();
-                                        broadcast_shot(&frame);
+                                        // Answer the REQUESTER only. Writing the
+                                        // multi-MB frame to the main socket
+                                        // when a driver asked wedges the main
+                                        // loop if that socket is not drained
+                                        // (the attach test holds it unread);
+                                        // the mirrored write has a timeout.
+                                        if from_driver {
+                                            broadcast_shot(&frame);
+                                        } else {
+                                            out.write_all(&frame).ok();
+                                            let _ = out.flush();
+                                        }
                                     }
                                 }
                             }
@@ -1599,7 +1634,7 @@ fn main() {
                 }
                 Err(_) => {
                     cleanup_ephemeral(&ephemeral_dir);
-                    std::process::exit(0);
+                    hard_exit();
                 }
             }
         }
