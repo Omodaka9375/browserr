@@ -92,6 +92,19 @@ impl HardwareRenderingContext {
 }
 
 impl servo::RenderingContext for HardwareRenderingContext {
+    fn prepare_for_rendering(&self) {
+        // Bind the bound surface's FBO before servo paints. The trait default
+        // is a no-op: FB0 happens to be the pbuffer on WGL (Windows) and Mesa
+        // tolerates FB0 on surfaceless EGL (Linux), but CGL reports FB0
+        // undefined for offscreen contexts - servo-paint's framebuffer-
+        // complete assert then kills the engine on macOS at the first paint.
+        let framebuffer_id = self
+            .framebuffer()
+            .map_or(0, |framebuffer| framebuffer.0.get());
+        self.gleam_gl
+            .bind_framebuffer(gl::FRAMEBUFFER, framebuffer_id);
+    }
+
     fn read_to_image(&self, source_rectangle: DeviceIntRect) -> Option<servo::RgbaImage> {
         let framebuffer_id = self
             .framebuffer()
