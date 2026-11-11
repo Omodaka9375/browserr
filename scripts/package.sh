@@ -15,7 +15,13 @@ else
     version=$(grep -m1 '^version' engine/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
 fi
 
-platform="$(uname -s | tr 'A-Z' 'a-z')-$(uname -m)"
+# Arch labels follow the release workflow's asset names (x64, not x86_64).
+arch="$(uname -m)"
+case "$arch" in
+    x86_64|amd64) arch="x64" ;;
+    aarch64|arm64) arch="arm64" ;;
+esac
+platform="$(uname -s | tr 'A-Z' 'a-z')-$arch"
 out="browserr-$version-$platform.tar.gz"
 rm -f "$out"
 tar -czf "$out" \
