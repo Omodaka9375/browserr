@@ -222,7 +222,20 @@
       table.blocks td:first-child { padding: 16px 0 4px; white-space: normal; }
     }
 
-    /* ————— terminal mock / animation ————— */
+    /* ————— hero layout: copy left, terminal right ----- */
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(380px, 520px);
+      gap: 48px;
+      align-items: center;
+    }
+    .hero-term .term { margin: 0; max-width: none; }
+    @media (max-width: 1020px) {
+      .hero-grid { grid-template-columns: 1fr; gap: 36px; }
+      .hero-term .term { max-width: 680px; }
+    }
+
+    /* ----- terminal mock / animation ----- */
     .term {
       background: var(--paper-2); border: 1px solid var(--rule-dark);
       overflow: hidden; max-width: 680px; margin: 44px 0 0;
@@ -386,6 +399,8 @@
   <!-- Masthead -->
   <header class="masthead">
     <div class="wrap">
+      <div class="hero-grid">
+      <div class="hero-copy">
       <h1><img src="icon.svg" alt="Browserr icon">browserr<span class="cursor">_</span></h1>
       <p class="dek">
         A <strong>Servo-based, headless browser engine</strong> for AI agents. One binary, one crypto
@@ -403,7 +418,9 @@
         <div><dt>Protocol</dt><dd>15 commands</dd></div>
         <div><dt>Telemetry</dt><dd>0</dd></div>
       </dl>
+      </div>
 
+      <div class="hero-term">
       <!-- Animated agent session -->
       <div class="term" role="img" aria-label="An AI agent driving Browserr through MCP tools">
         <div class="term-bar">
@@ -413,6 +430,8 @@
           <span class="term-title">agent — browserr mcp</span>
         </div>
         <div class="term-body" id="termBody"></div>
+      </div>
+      </div>
       </div>
 
       <!-- Mode switcher -->
