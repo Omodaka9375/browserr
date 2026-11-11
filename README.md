@@ -29,6 +29,21 @@ like; that is the whole "visual" story.
   accepted), `wait_for_selector` (SPA render waiting)
 - Console capture (page messages plus Servo network/TLS load errors), file
   downloads, screenshots
+- Fail-closed request interception: arm it, and qualifying requests
+  (main-frame documents, fetch/XHR, JSON) are held for your decision -
+  allow, deny (synthetic 403), or fulfill with a synthetic response;
+  unanswered requests deny after 5 s
+- Auth challenge handling: HTTP 401/proxy challenges surface as events
+  with per-challenge credential answers; wrong or missing credentials fail
+  closed (drop)
+- File pickers: `input type=file` clicks surface as events answered with
+  file paths (or cancelled); the page reads the picked file normally
+- Net evidence: a document-start user script wraps `fetch`/XHR in every
+  frame (pages cannot evade it by grabbing references first) into a ring
+  buffer, polled via eval
+- Frame control (tier 1): frame tree listing (url, origin, same-origin
+  walking with titles); same-origin frames reachable via
+  `window.frames[i].document` in evals
 - Reliability: `ping` health check, `EngineDeadError` fast failure on
   engine death (0.07 s instead of a timeout), ephemeral throwaway profiles
 - Adblock: EasyList-based subresource blocking, refreshed weekly
@@ -182,6 +197,11 @@ Commands are newline-delimited JSON, tab-addressed, over a loopback socket
 {"cmd":"zoom","tab":N,"zoom":F}              page zoom
 {"cmd":"ping","id":X}                         health check
 {"cmd":"download","url":"...","path":"...","id":X}   fetch straight to disk
+{"cmd":"intercept","on":B}                    arm/disarm fail-closed interception
+{"cmd":"request","id":X,"action":"allow"|"deny"|"respond",...}   decide held req
+{"cmd":"auth","id":X,"user":"...","pass":"..."}       answer an auth challenge
+{"cmd":"files","id":X,"paths":[...]}                  answer a file picker
+{"cmd":"frames","id":X}                       frame tree (evalresult answer)
 ```
 
 Responses use a 20-byte header (magic u32, id u64, two u32 fields):
@@ -194,8 +214,10 @@ SHT1 + id + w + h    -> w*h*4 BGRA pixels (screenshot answer, automation only)
 
 Events: `url`, `title`, `history`, `cursor`, `favicon`, `pwcapture`,
 `evalresult`, `pong`, `console` (page messages; Servo also routes network
-and TLS load errors there), `download` (ok/bytes/error). Only the active
-tab is painted; switching tabs re-sends that tab's url/title/history/cursor.
+and TLS load errors there), `download` (ok/bytes/error), `request` (held
+interception decision), `auth` (challenge), `filepicker` (picker opened).
+Only the active tab is painted; switching tabs re-sends that tab's
+url/title/history/cursor.
 
 ### Computer-use mode
 

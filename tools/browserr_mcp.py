@@ -15,6 +15,8 @@ Tools:
     browser_navigate / browser_read / browser_links / browser_forms
     browser_click / browser_click_text / browser_fill / browser_key
     browser_screenshot / browser_tabs
+    browser_intercept / browser_pending_requests / browser_intercept_answer
+    browser_net / browser_frames
 """
 import json
 import os
@@ -214,6 +216,54 @@ TOOLS = [
             "url": {"type": "string"}, "path": {"type": "string"},
             "max_bytes": {"type": "integer"}}, "required": ["url", "path"]},
     },
+    {
+        "name": "browser_intercept",
+        "description": "Arm or disarm fail-closed request interception. While "
+                       "armed, qualifying requests (main-frame documents, "
+                       "fetch/XHR, JSON) are HELD: the engine emits request "
+                       "events and pages stall until browser_intercept_answer "
+                       "decides them (allow/deny/respond) or the engine's 5s "
+                       "fail-closed timeout denies. Use browser_pending_requests "
+                       "to read held request ids.",
+        "inputSchema": {"type": "object", "properties": {
+            "on": {"type": "boolean"}}, "required": ["on"]},
+    },
+    {
+        "name": "browser_pending_requests",
+        "description": "Held requests awaiting decisions while interception "
+                       "is armed: {id, tab, method, url, main} for each.",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "browser_intercept_answer",
+        "description": "Decide a held request: action allow (pass through), "
+                       "deny (synthetic 403), or respond (status/body/"
+                       "content_type fulfilled by the engine).",
+        "inputSchema": {"type": "object", "properties": {
+            "id": {"type": "integer"},
+            "action": {"type": "string",
+                       "enum": ["allow", "deny", "respond"]},
+            "status": {"type": "integer"},
+            "body": {"type": "string"},
+            "content_type": {"type": "string"}},
+            "required": ["id", "action"]},
+    },
+    {
+        "name": "browser_net",
+        "description": "Recent page network activity (fetch/XHR ring, 200 "
+                       "entries per frame, injected document-start so pages "
+                       "cannot evade it): {kind, url, t, method?, status?} "
+                       "newest last.",
+        "inputSchema": {"type": "object", "properties": {
+            "limit": {"type": "integer"}}, "required": []},
+    },
+    {
+        "name": "browser_frames",
+        "description": "The page's frame tree {url, origin, children:[...]}: "
+                       "same-origin frames are walked (name, url, title); "
+                       "cross-origin frames report their url only.",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
 ]
 
 
@@ -299,6 +349,24 @@ def call_tool(name, args):
         n = d.download(args["url"], args["path"],
                        max_bytes=args.get("max_bytes"))
         return {"path": args["path"], "bytes": n}
+    if name == "browser_intercept":
+        d.intercept(args["on"])
+        return {"intercept": args["on"]}
+    if name == "browser_pending_requests":
+        reqs = [e for e in d.events if e.get("ev") == "request"]
+        return {"pending": [{"id": r["id"], "tab": r["tab"],
+                              "method": r["method"], "url": r["url"],
+                              "main": r["main"]} for r in reqs[-50:]]}
+    if name == "browser_intercept_answer":
+        d.request_answer(args["id"], args["action"],
+                         status=args.get("status", 200),
+                         body=args.get("body", ""),
+                         content_type=args.get("content_type", "text/plain"))
+        return {"answered": args["id"], "action": args["action"]}
+    if name == "browser_net":
+        return {"entries": d.net_evidence(limit=args.get("limit", 200))}
+    if name == "browser_frames":
+        return d.frames()
     raise McpError(f"unknown tool {name}")
 
 
@@ -315,7 +383,7 @@ def handle(msg):
             return {"jsonrpc": "2.0", "id": msg_id, "result": {
                 "protocolVersion": requested or "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "browserr", "version": "0.1.0"},
+                "serverInfo": {"name": "browserr", "version": "0.3.0"}
             }}
         if method == "notifications/initialized":
             return None

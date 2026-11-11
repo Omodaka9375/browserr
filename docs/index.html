@@ -428,8 +428,8 @@
       <dl class="specs">
         <div><dt>Platform</dt><dd>Windows · Linux · macOS</dd></div>
         <div><dt>Engine</dt><dd>Servo + SpiderMonkey</dd></div>
-        <div><dt>MCP tools</dt><dd>19</dd></div>
-        <div><dt>Protocol</dt><dd>15 commands</dd></div>
+        <div><dt>MCP tools</dt><dd>24</dd></div>
+        <div><dt>Protocol</dt><dd>20 commands</dd></div>
         <div><dt>Telemetry</dt><dd>0</dd></div>
       </dl>
 
@@ -468,6 +468,10 @@
             <tr><td>block</td><td><b>Adblock built in.</b> EasyList-based subresource blocking at the engine's request-interception hook, auto-refreshed weekly. Never blocks main-frame documents.</td></tr>
             <tr><td>gpu</td><td><b>Fast rendering.</b> Servo renders on the GPU with a software-GL fallback (Linux runs headless on llvmpipe). Screenshots painted on demand, per tab.</td></tr>
             <tr><td>secure</td><td><b>Token-gated attach.</b> --driver-port accepts multiple concurrent drivers; --driver-token requires an auth line first. Unauthenticated sockets get nothing — not even events.</td></tr>
+            <tr><td>intercept</td><td><b>Fail-closed interception.</b> Arm it and qualifying requests (documents, fetch/XHR, JSON) are held for your decision: allow, deny (synthetic 403), or fulfill with a synthetic response. Unanswered = denied after 5 s.</td></tr>
+            <tr><td>auth</td><td><b>Challenges surfaced, not swallowed.</b> HTTP 401 and proxy challenges arrive as events answered with per-challenge credentials; wrong or missing credentials fail closed. File pickers too: answer with paths or cancel.</td></tr>
+            <tr><td>evidence</td><td><b>Net activity you can trust.</b> A document-start user script wraps fetch/XHR in every frame — pages cannot evade it by grabbing references first — into a ring buffer polled via eval.</td></tr>
+            <tr><td>frames</td><td><b>Frame tree, tier 1.</b> List frames (url, origin, same-origin) and walk same-origin frames via window.frames[i].document; cross-origin frames report their url only.</td></tr>
           </tbody>
         </table>
       </div>
@@ -484,7 +488,7 @@
         <p class="lead">
           Newline-delimited JSON over loopback. One client, no hidden state — the opposite of CDP's
           1000+ endpoints. Events: url, title, history, cursor, favicon, pwcapture, evalresult,
-          pong, console, download.
+          pong, console, download, request, auth, filepicker.
         </p>
       </div>
       <div class="marquee">
@@ -492,8 +496,8 @@
       </div>
       <div class="wrap">
         <dl class="specs stats">
-          <div><dt>Commands</dt><dd>15</dd></div>
-          <div><dt>MCP tools</dt><dd>19</dd></div>
+          <div><dt>Commands</dt><dd>20</dd></div>
+          <div><dt>MCP tools</dt><dd>24</dd></div>
           <div><dt>Binary</dt><dd>~105 MB</dd></div>
           <div><dt>CDP endpoints</dt><dd>0</dd></div>
           <div><dt>Dependencies</dt><dd>0</dd></div>
@@ -513,7 +517,7 @@
         <table class="blocks">
           <thead><tr><th>Surface</th><th>Covers</th></tr></thead>
           <tbody>
-            <tr><td>mcp</td><td><b>Model Context Protocol server</b> with 19 tools, stdlib only. Any MCP-capable agent — Claude, Kai, your own — drives Browserr with zero integration code.</td></tr>
+            <tr><td>mcp</td><td><b>Model Context Protocol server</b> with 24 tools, stdlib only. Any MCP-capable agent — Claude, Kai, your own — drives Browserr with zero integration code.</td></tr>
             <tr><td>python</td><td><b>driver.py wraps the raw protocol:</b> navigation, extraction, element commands, console capture, downloads, screenshots, a PNG helper. No dependencies.</td></tr>
             <tr><td>raw</td><td><b>Anything that can write JSON lines to a socket.</b> The whole protocol fits on one screen; bindings in any language are an afternoon.</td></tr>
           </tbody>
@@ -535,8 +539,8 @@
           <tbody>
             <tr><td>engine</td><td><b>Servo</b></td><td>own (Zig)</td><td>own (Rust)</td><td>Blink</td></tr>
             <tr><td>js engine</td><td><b>SpiderMonkey</b></td><td>own</td><td>own</td><td>V8</td></tr>
-            <tr><td>mcp-native</td><td><b>yes, 19 tools</b></td><td>no</td><td>partial</td><td>via wrappers</td></tr>
-            <tr><td>protocol size</td><td><b>15 commands</b></td><td>CDP-compatible</td><td>own + CDP</td><td>1000+ endpoints</td></tr>
+            <tr><td>mcp-native</td><td><b>yes, 24 tools</b></td><td>no</td><td>partial</td><td>via wrappers</td></tr>
+            <tr><td>protocol size</td><td><b>20 commands</b></td><td>CDP-compatible</td><td>own + CDP</td><td>1000+ endpoints</td></tr>
             <tr><td>footprint</td><td><b>one ~105 MB binary</b></td><td>~16× less than Chromium</td><td>~30 MB</td><td>~200 MB+</td></tr>
             <tr><td>web compat</td><td><b>Servo 0.8 (text, docs, forms)</b></td><td>growing</td><td>growing</td><td>full</td></tr>
           </tbody>
@@ -661,7 +665,8 @@
     const COMMANDS = [
       'navigate', 'back', 'forward', 'new_tab', 'activate', 'close_tab',
       'input', 'wheel', 'key', 'eval', 'screenshot', 'zoom', 'ping',
-      'download', 'resize',
+      'download', 'resize', 'intercept', 'request', 'auth', 'files',
+      'frames',
     ];
     const track = document.getElementById('marqueeTrack');
     if (track) {
