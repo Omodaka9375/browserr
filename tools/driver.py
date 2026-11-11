@@ -553,6 +553,32 @@ class Driver:
         self.cmd({"cmd": "files", "tab": 0, "id": req_id,
                  "paths": list(paths) if paths else []})
 
+    # -- net evidence / frames ------------------------------------------------
+
+    def net_evidence(self, limit=200, tab: int = 0, timeout=10.0):
+        """Recent page network activity (fetch/XHR) from the ring buffer
+        the document-start user script keeps on window.__browserr_net.
+        Runs in every frame; this reads the top frame's ring."""
+        js = ("JSON.stringify((window.__browserr_net||[]).slice(-%d))" % limit)
+        raw = self.eval_js(js, tab, timeout)
+        if isinstance(raw, str):
+            return json.loads(raw)
+        return raw or []
+
+    def frames(self, tab: int = 0, timeout=10.0):
+        """The page's frame tree: {url, origin, children:[...]}.
+        Same-origin frames are walked (title, nested children); cross-origin
+        frames report their url only (servo 0.8 has no cross-frame JS)."""
+        req = self._next_id
+        self._next_id += 1
+        self.cmd({"cmd": "frames", "tab": tab, "id": req})
+        ev = self.wait_for(
+            lambda e: e.get("ev") == "evalresult" and e.get("id") == req, timeout)
+        value = ev.get("value")
+        if isinstance(value, str):
+            return json.loads(value)
+        return value
+
     def download(self, url, path, max_bytes=None, timeout=120.0):
         """Fetch a URL straight to a local path (agents fetch files; servo
         0.8 has no in-page download hook). No page cookies are sent, so only

@@ -21,3 +21,9 @@ tools/*.html
 tools/*.bin
 tools/*-shot.png
 tools/filepicker-picked.txt
+tools/net-test.html
+tools/net-api.json
+tools/net-xhr.txt
+tools/frames-test.html
+tools/frames-child.html
+tools/intercept-test.html

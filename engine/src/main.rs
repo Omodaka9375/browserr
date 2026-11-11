@@ -34,7 +34,11 @@
 //! {"ev":"auth","id","tab","url","proxy":bool}; {"cmd":"auth","id","user","pass"}
 //! answers, anything else fails closed. File pickers emit {"ev":"filepicker",
 //! "id","tab","multiple":bool}; {"cmd":"files","id","paths":[...]} answers
-//! (empty = cancel).
+//! (empty = cancel). {"cmd":"frames","id":N} answers {"ev":"evalresult",
+//! "id":N,"value":<frame tree JSON>} (same-origin walking; cross-origin
+//! frames report url only). Net evidence: a document-start user script in
+//! every frame wraps fetch/XHR into window.__browserr_net (ring, 200
+//! entries); agents poll it via eval.
 use servo::RenderingContext;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -64,7 +68,7 @@ fn hard_exit() -> ! {
 }
 
 /// Commands an attached driver may send; validated before queueing.
-const DRIVER_CMDS: [&str; 18] = [
+const DRIVER_CMDS: [&str; 19] = [
     "navigate",
     "back",
     "forward",
@@ -83,6 +87,7 @@ const DRIVER_CMDS: [&str; 18] = [
     "request",
     "auth",
     "files",
+    "frames",
 ];
 
 /// Attached-driver hub (computer-use mode: `--driver-port=N`). Driver
@@ -318,6 +323,99 @@ const FAVICON_JS: &str = r#"(function(){try{
 var l=document.querySelector('link[rel~="icon"]')||document.querySelector('link[rel="shortcut icon"]');
 return JSON.stringify({icon:l?l.href:'',origin:location.origin});
 }catch(e){return '';}})()"#;
+
+/// Net evidence (document-start user script, injected in EVERY frame via
+/// the UserContentManager): wraps fetch() and XMLHttpRequest into a ring
+/// buffer on window.__browserr_net. Runs before page scripts, so pages
+/// cannot evade it by grabbing references first. Polled via eval:
+/// window.__browserr_net.slice(-N).
+const NET_EVIDENCE_JS: &str = r#"(function(){
+if(window.__browserr_net) return;
+var ring=[];
+function push(kind,url,extra){
+  try{
+    var e={kind:kind,url:String(url),t:Date.now()};
+    if(extra){for(var k in extra){e[k]=extra[k];}}
+    ring.push(e);
+    if(ring.length>200){ring.splice(0,ring.length-200);}
+  }catch(_){}
+}
+window.__browserr_net=ring;
+var of=window.fetch;
+if(of){
+  window.fetch=function(input,init){
+    var url;
+    try{url=(input&&input.url)?input.url:String(input);}catch(_){url='?';}
+    push('fetch',url,{method:(init&&init.method)||'GET'});
+    return of.apply(this,arguments).then(function(resp){
+      push('fetch-done',url,{status:resp.status});
+      return resp;
+    },function(err){
+      push('fetch-error',url,{error:String(err)});
+      throw err;
+    });
+  };
+}
+if(window.XMLHttpRequest){
+  var oo=window.XMLHttpRequest.prototype.open;
+  window.XMLHttpRequest.prototype.open=function(method,url){
+    this.__b_url=url;
+    push('xhr',url,{method:method});
+    var xhr=this;
+    this.addEventListener('load',function(){push('xhr-done',xhr.__b_url,{status:xhr.status});});
+    this.addEventListener('error',function(){push('xhr-error',xhr.__b_url,{});});
+    return oo.apply(this,arguments);
+  };
+}
+})()"#;
+
+/// Returns JSON for the page's frame tree (tier-1 frame control):
+/// same-origin frames are walked via contentDocument (cross-origin frames
+/// only report their url/origin from the parent's perspective; servo 0.8
+/// has no cross-frame JS entry point). Top level:
+///   {url, origin, children:[{name, url, same_origin, children:[...]}]}
+const FRAME_TREE_JS: &str = r#"(function(){
+function frame_info(f){
+  var o={name:f.name||'',url:'',same_origin:false,children:[]};
+  try{
+    o.url=String(f.location.href);
+    o.same_origin=true;
+    try{
+      o.title=String(f.document.title||'');
+    }catch(_){}
+  }catch(_){
+    try{o.url=String(f.location)||'';}catch(__){}
+  }
+  try{
+    var docs=f.document?null:null;
+  }catch(_){}
+  return o;
+}
+function walk(win,out){
+  var frames;
+  try{frames=win.frames;}catch(_){return out;}
+  for(var i=0;i<frames.length;i++){
+    var fo={name:frames[i].name||'',url:'',same_origin:false,children:[]};
+    try{
+      fo.url=String(frames[i].location.href);
+      fo.same_origin=true;
+      try{fo.title=String(frames[i].document.title||'');}catch(_){}
+    }catch(_){
+      try{fo.url=String(frames[i].location)||'';fo.same_origin=false;}catch(__){}
+    }
+    out.children.push(fo);
+    // Only same-origin frames can be walked recursively.
+    if(fo.same_origin){
+      try{walk(frames[i],fo);}catch(_){}
+    }
+  }
+  return out;
+}
+var root={url:'',origin:'',children:[]};
+try{root.url=String(location.href);root.origin=location.origin;}catch(_){}
+walk(window,root);
+return JSON.stringify(root);
+})()"#;
 
 struct Shared {
     pump: Pump,
@@ -1351,6 +1449,16 @@ fn main() {
 
     let initial_size = dpi::PhysicalSize::new(1200u32, 760u32);
 
+    // Net evidence: a document-start user script injected into every frame
+    // of every tab (a page cannot evade it by grabbing references first).
+    // Shared UserContentManager; updates only take effect on reload, but
+    // we add scripts before any load happens.
+    let ucm = std::rc::Rc::new(servo::UserContentManager::new(&servo));
+    ucm.add_script(std::rc::Rc::new(servo::UserScript::new(
+        NET_EVIDENCE_JS.to_string(),
+        None,
+    )));
+
     let make_tab = |id: u64| -> Option<Tab> {
         let context = make_context(initial_size)?;
         let _ = context.make_current();
@@ -1361,6 +1469,7 @@ fn main() {
         });
         let webview = servo::WebViewBuilder::new(&servo, context.clone())
             .delegate(delegate)
+            .user_content_manager(ucm.clone())
             .build();
         // Complete the webview's registration handshake before any LoadUrl.
         servo.spin_event_loop();
@@ -1789,6 +1898,39 @@ fn main() {
                                         "{{\"ev\":\"pong\",\"tab\":{tab_id},\"id\":{req},\"tabs\":{tabs_n},\"active\":{active}}}"
                                     ),
                                 );
+                            }
+                            Some("frames") => {
+                                // Tier-1 frame control: the page's frame tree
+                                // (same-origin walking; cross-origin frames
+                                // report url/origin only - servo 0.8 has no
+                                // cross-frame JS entry point). Answered as
+                                // an evalresult-style event with the tree JSON.
+                                let req = v["id"].as_u64().unwrap_or(0);
+                                if let Some(tab) = tabs.get(&tab_id) {
+                                    eprintln!("engine: frames (tab {tab_id})");
+                                    let shared = shared.clone();
+                                    tab.webview.evaluate_javascript(
+                                        FRAME_TREE_JS.to_string(),
+                                        move |result| {
+                                            let value = jsvalue_to_json(result);
+                                            shared.updates.lock().unwrap().push(Update {
+                                                tab: tab_id,
+                                                url: None,
+                                                title: None,
+                                                history: None,
+                                                pw: None,
+                                                icon: None,
+                                                cursor: None,
+                                                eval: Some((req, value)),
+                                                console: None,
+                                                intercept: None,
+                                                auth: None,
+                                                filepicker: None,
+                                            });
+                                            shared.pump.kick();
+                                        },
+                                    );
+                                }
                             }
                             Some("download") => {
                                 // Fetch a URL straight to disk (agents fetch
