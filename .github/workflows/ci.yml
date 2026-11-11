@@ -82,6 +82,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Get-Content release-build.log -Tail 8; exit 1 }
         if: runner.os == 'Windows'
 
+      - name: Release build smoke (engine; LTO build, linux)
+        shell: bash
+        run: |
+          cargo build --release --manifest-path engine/Cargo.toml > release-build.log 2>&1 || {
+            tail -8 release-build.log; exit 1
+          }
+        if: runner.os == 'Linux'
+
       - name: Upload engine (release, windows)
         uses: actions/upload-artifact@v4
         with:
