@@ -1015,7 +1015,15 @@ fn main() {
     // log clean by not printing that one known message.
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        if !info.to_string().contains("destroyed the surface") {
+        let msg = info.to_string();
+        // Known contained panics from closing a tab: surfman drop assertions
+        // (WGL: "destroyed the surface", EGL: "Contexts must be destroyed
+        // explicitly with `destroy_context`"). Servo tears GL state down
+        // asynchronously, after the context's Drop ran; the process and the
+        // other tabs are fine (close_tab catches it).
+        let known = msg.contains("destroyed the surface")
+            || msg.contains("Contexts must be destroyed explicitly");
+        if !known {
             default_hook(info);
         }
     }));

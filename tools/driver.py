@@ -132,7 +132,7 @@ class Driver:
                                     stderr=self._log or subprocess.DEVNULL)
 
         last = None
-        deadline = time.time() + 10.0
+        deadline = time.time() + 20.0
         while time.time() < deadline:
             try:
                 self.sock = socket.create_connection(("127.0.0.1", self.port), timeout=1)
@@ -140,11 +140,17 @@ class Driver:
                 # a just-spawned engine can connect against a DYING engine's
                 # listen backlog (both hold the port briefly during handover).
                 # Ping/pong resolves it; a stale socket dies on the exchange.
+                # The pong wait must be patient: the engine accepts BEFORE it
+                # finishes initializing servo, and a cold start (llvmpipe GL on
+                # a CI runner, cold caches) can take several seconds to reach
+                # the command loop. A short timeout here closes the socket,
+                # which kills the engine (main-client disconnect) - seen as a
+                # first-test flake on Linux CI.
                 req = self._next_id
                 self._next_id += 1
                 self.sock.sendall((json.dumps(
                     {"cmd": "ping", "tab": 0, "id": req}) + "\n").encode())
-                self.sock.settimeout(2)
+                self.sock.settimeout(8)
                 pong = self._read_frame_raw()
                 if (pong and pong.get("ev") == "pong"
                         and pong.get("id") == req):
