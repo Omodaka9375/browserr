@@ -7,7 +7,8 @@ A Servo-based, headless browser engine built for AI agents.
 Browserr is an alternative to embedding Chromium in an agent stack: a single
 `engine` binary (Rust + Servo) that renders pages on the GPU, blocks ads, and
 exposes a 15-command loopback protocol - one binary, one crypto stack, ~105 MB
-release on Windows, smaller on Linux. Agents drive it through a Python SDK
+release (measured: 105.4 MB on Windows, 103.6 MB on Linux; ~40 MB archived).
+Agents drive it through a Python SDK
 (`tools/driver.py`) or through any MCP-capable client with zero integration
 code (`tools/browserr_mcp.py`).
 The automation surface is deliberately small: the entire protocol is auditable
