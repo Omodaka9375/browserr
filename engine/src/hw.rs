@@ -136,7 +136,12 @@ impl servo::RenderingContext for HardwareRenderingContext {
         let device = self.device.borrow_mut();
         let mut context = self.context.borrow_mut();
         let surfman_size = Size2D::new(size.width as i32, size.height as i32);
-        let _ = self.swap_chain.resize(&device, &mut context, surfman_size);
+        // Resize the bound surface in place (the window path). Rebuilding via
+        // swap_chain.resize destroys and recreates the surface, which on EGL
+        // leaves the default framebuffer GL_FRAMEBUFFER_UNDEFINED until the
+        // new surface binds - servo-paint's framebuffer-complete assertion
+        // then kills the process (seen on Linux).
+        let _ = device.resize_bound_surface(&mut context, surfman_size);
     }
 
     fn present(&self) {

@@ -7,9 +7,12 @@
 //!        {"cmd":"activate","tab":N}               make that tab the rendered one
 //!        {"cmd":"close_tab","tab":N}              drop that tab
 //!        {"cmd":"resize","w":N,"h":N}             resize the active tab (others on activate)
-//!   out: frames:  u32 magic 'FRM1', u64 id, u32 w, u32 h, w*h*4 BGRA bytes
-//!        events:  u32 magic 'EVT1', u64 id, u32 len, u32 0, len bytes JSON
+//!   out: events:  u32 magic 'EVT1', u64 id, u32 len, u32 0, len bytes JSON
 //!                 {"ev":"url","tab":N,"url":"..."} | {"ev":"title","tab":N,"title":"..."}
+//!        Composited frames are announced as {"ev":"frame","tab":N,"w":W,"h":H}
+//!        events; pixels are fetched on demand via the screenshot command
+//!        (SHT1 frame: magic, id, w, h, w*h*4 BGRA). Nothing pushes a
+//!        continuous pixel stream anymore (the chrome UI is gone).
 //! Only the active tab is painted; switching tabs re-sends that tab's url/title.
 //! Page zoom (Ctrl+wheel in the chrome) is per tab, set by the chrome via
 //! {"cmd":"zoom","tab":N,"zoom":F}; the page's requested cursor shape is
@@ -25,8 +28,6 @@ use servo::RenderingContext;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 
-#[cfg(windows)]
-mod d3d;
 mod hw;
 use hw::HardwareRenderingContext;
 use std::net::TcpListener;
@@ -34,7 +35,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 const PORT: u16 = 7411;
-const MAGIC: u32 = 0x46_52_4D_31; // FRM1
 const EV_MAGIC: u32 = 0x45_56_54_31; // EVT1
 const SHOT_MAGIC: u32 = 0x53_48_54_31; // SHT1 (screenshot)
 
@@ -1034,15 +1034,6 @@ fn main() {
         None
     };
 
-    // Startup probe: --probe-shared tests Pool::new before anything else.
-    #[cfg(windows)]
-    if std::env::args().any(|a| a == "--probe-shared") {
-        match d3d::Pool::new(64, 64) {
-            Ok(p) => eprintln!("engine: probe-shared OK luid={}", p.adapter_luid()),
-            Err(e) => eprintln!("engine: probe-shared FAILED: {e}"),
-        }
-    }
-
     // Retry the bind: on an in-place engine restart the previous instance may
     // still be releasing port 7411 for a moment.
     let listener = {
@@ -1165,18 +1156,6 @@ fn main() {
 
     // Shared GPU textures: try first; fall back to socket bytes on any
     // failure or if the chrome reports it cannot import them.
-    // Shared-texture frames are a Windows (D3D12) feature; everywhere else
-    // the byte-frame path is the only one.
-    #[cfg(windows)]
-    #[derive(Clone, Copy, PartialEq)]
-    enum FrameMode {
-        TryShared,
-        Bytes,
-    }
-    #[cfg(windows)]
-    let mut frame_mode = FrameMode::TryShared;
-    #[cfg(windows)]
-    let mut shared_pool: Option<d3d::Pool> = None;
 
     loop {
         reader
@@ -1608,11 +1587,6 @@ fn main() {
                                     }
                                 }
                             }
-                            #[cfg(windows)]
-                            Some("frames") if v["mode"].as_str() == Some("bytes") => {
-                                eprintln!("engine: chrome requested byte frames");
-                                frame_mode = FrameMode::Bytes;
-                            }
                             _ => {}
                         }
                     }
@@ -1832,60 +1806,23 @@ fn main() {
                         );
                         frame_id += 1;
 
-                        // Shared-texture path: no pixel bytes over the socket.
-                        #[cfg_attr(not(windows), allow(unused_mut))]
-                        let mut sent_shared = false;
-                        #[cfg(windows)]
-                        if frame_mode == FrameMode::TryShared {
-                            let need_resize = shared_pool
-                                .as_ref()
-                                .map(|p| p.size() != (current_size.width, current_size.height))
-                                .unwrap_or(true);
-                            if need_resize {
-                                match d3d::Pool::new(current_size.width, current_size.height) {
-                                    Ok(p) => shared_pool = Some(p),
-                                    Err(e) => {
-                                        eprintln!(
-                                            "engine: shared frames unavailable ({e}); using bytes"
-                                        );
-                                        frame_mode = FrameMode::Bytes;
-                                    }
-                                }
-                            }
-                        }
-                        #[cfg(windows)]
-                        if frame_mode == FrameMode::TryShared {
-                            let pool = shared_pool.as_mut().unwrap();
-                            match pool.write(&bgra) {
-                                Ok(()) => {
-                                    let (name, fence, value) = pool.info();
-                                    event_id += 1;
-                                    send_event(
-                                        &mut out,
-                                        event_id,
-                                        &format!(
-                                            "{{\"ev\":\"frame\",\"tab\":{active},\"w\":{},\"h\":{},\"name\":\"{name}\",\"fence\":\"{fence}\",\"value\":{value}}}",
-                                            current_size.width, current_size.height
-                                        ),
-                                    );
-                                    sent_shared = true;
-                                }
-                                Err(e) => {
-                                    eprintln!(
-                                        "engine: shared frame write failed ({e}); using bytes"
-                                    );
-                                    frame_mode = FrameMode::Bytes;
-                                }
-                            }
-                        }
-                        if !sent_shared {
-                            out.write_all(&MAGIC.to_le_bytes()).ok();
-                            out.write_all(&frame_id.to_le_bytes()).ok();
-                            out.write_all(&current_size.width.to_le_bytes()).ok();
-                            out.write_all(&current_size.height.to_le_bytes()).ok();
-                            out.write_all(&bgra).ok();
-                            let _ = out.flush();
-                        }
+                        // Headless SDK consumers read pixels via screenshot
+                        // (SHT1) on demand; nothing drains a continuous
+                        // FRM1 stream anymore (the chrome UI is gone), and
+                        // pushing megabytes to an unread socket wedges the
+                        // main loop once the TCP window fills (seen on
+                        // Linux). Announce the frame as a small event
+                        // instead; the pixels stay in the engine until a
+                        // screenshot asks for them.
+                        event_id += 1;
+                        send_event(
+                            &mut out,
+                            event_id,
+                            &format!(
+                                "{{\"ev\":\"frame\",\"tab\":{active},\"w\":{},\"h\":{}}}",
+                                current_size.width, current_size.height
+                            ),
+                        );
                     }
                 }
             }

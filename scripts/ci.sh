@@ -55,7 +55,7 @@ else
     # when its single client disconnects).
     for t in $RAW_TESTS; do
         echo "== $t : spawning engine =="
-        "$BROWSERR_ENGINE" --ephemeral > "engine-$t.log" 2>&1 &
+        ${XUVB_PREFIX:-} "$BROWSERR_ENGINE" --ephemeral > "engine-$t.log" 2>&1 &
         eng=$!
         sleep 3
         run_test "$t" || failed="$failed $t"
