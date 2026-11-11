@@ -397,7 +397,7 @@
         <a href="https://github.com/Omodaka9375/browserr" class="btn-secondary">View on GitHub</a>
       </div>
       <dl class="specs">
-        <div><dt>Platform</dt><dd>Windows x64</dd></div>
+        <div><dt>Platform</dt><dd>Windows · Linux x64</dd></div>
         <div><dt>Engine</dt><dd>Servo + SpiderMonkey</dd></div>
         <div><dt>MCP tools</dt><dd>19</dd></div>
         <div><dt>Protocol</dt><dd>15 commands</dd></div>
@@ -448,7 +448,7 @@
             <tr><td>files</td><td><b>Downloads.</b> download(url, path) fetches straight to disk with size caps and an ok/bytes/error event. Public URLs only — no page cookies involved.</td></tr>
             <tr><td>survive</td><td><b>Fast failure, not hangs.</b> EngineDeadError surfaces a dead engine in 0.07 s instead of a timeout. ping health-checks. Ephemeral profiles give every run a clean slate.</td></tr>
             <tr><td>block</td><td><b>Adblock built in.</b> EasyList-based subresource blocking at the engine's request-interception hook, auto-refreshed weekly. Never blocks main-frame documents.</td></tr>
-            <tr><td>gpu</td><td><b>Fast rendering.</b> Servo renders on the GPU; frames cross processes as D3D12 shared textures (no pixel copies) with a byte-frame fallback. Screenshots on demand, per tab.</td></tr>
+            <tr><td>gpu</td><td><b>Fast rendering.</b> Servo renders on the GPU with a software-GL fallback (Linux runs headless on llvmpipe). Screenshots painted on demand, per tab.</td></tr>
             <tr><td>secure</td><td><b>Token-gated attach.</b> --driver-port accepts multiple concurrent drivers; --driver-token requires an auth line first. Unauthenticated sockets get nothing — not even events.</td></tr>
           </tbody>
         </table>
@@ -524,7 +524,7 @@
           </tbody>
         </table>
         <div class="note">
-          <p><b>Honest limits.</b> No site sandbox on Windows (treat page loads as untrusted; use ephemeral profiles), web compatibility bounded by Servo 0.8, Windows x64 only, and rendering needs a GPU with a D3D11 driver. Text, documents, search and forms work well; heavy SPAs and DRM video may not.</p>
+          <p><b>Honest limits.</b> No site sandbox on Windows (treat page loads as untrusted; use ephemeral profiles), web compatibility bounded by Servo 0.8. Windows rendering needs a GPU with a D3D11 driver; Linux renders with any GL including llvmpipe. macOS not yet ported. Text, documents, search and forms work well; heavy SPAs and DRM video may not.</p>
         </div>
       </div>
     </section>
@@ -542,16 +542,29 @@
         </p>
         <div class="os-tabs" role="tablist" id="osTabs">
           <button class="os-tab" role="tab" data-os="windows" aria-selected="true">Windows</button>
+          <button class="os-tab" role="tab" data-os="linux">Linux</button>
         </div>
         <div class="os-panel active" data-os="windows">
           <div class="os-card">
             <h4>Windows x64</h4>
-            <p>Download the zip, unpack anywhere, and point your agent at the MCP server — or drive the engine directly from Python. A GPU with a D3D11 driver is required for rendering.</p>
+            <p>Download the zip, unpack anywhere, and point your agent at the MCP server - or drive the engine directly from Python. A GPU with a D3D11 driver is required for rendering.</p>
             <a href="https://github.com/Omodaka9375/browserr/releases/latest" class="btn-primary">↓ Download for Windows</a>
             <div class="os-meta">
               <span>Format <b>.zip</b></span>
               <span>Contents <b>engine.exe · driver.py · browserr_mcp.py</b></span>
               <span>Requires <b>GPU (D3D11) · Python 3.10+</b></span>
+            </div>
+          </div>
+        </div>
+        <div class="os-panel" data-os="linux">
+          <div class="os-card">
+            <h4>Linux x64</h4>
+            <p>Download the tarball, unpack anywhere, and point your agent at the MCP server. Any GL works - including Mesa llvmpipe, so headless servers without a GPU are fine (X11 via xvfb).</p>
+            <a href="https://github.com/Omodaka9375/browserr/releases/latest" class="btn-primary">↓ Download for Linux</a>
+            <div class="os-meta">
+              <span>Format <b>.tar.gz</b></span>
+              <span>Contents <b>engine · driver.py · browserr_mcp.py</b></span>
+              <span>Requires <b>X11 (xvfb ok) · Python 3.10+</b></span>
             </div>
           </div>
         </div>
@@ -624,6 +637,20 @@
       const chips = COMMANDS.map((c) => '<span class="chip">' + c + '</span>').join('');
       // Duplicate for a seamless -50% loop.
       track.innerHTML = chips + chips;
+    }
+
+    /* ───────────────────────────  OS tabs  ────────────────────────────── */
+    const osTabs = document.getElementById('osTabs');
+    if (osTabs) {
+      const panels = document.querySelectorAll('.os-panel');
+      function selectOs(os) {
+        for (const t of osTabs.querySelectorAll('.os-tab')) t.setAttribute('aria-selected', t.dataset.os === os ? 'true' : 'false');
+        for (const p of panels) p.classList.toggle('active', p.dataset.os === os);
+      }
+      for (const t of osTabs.querySelectorAll('.os-tab')) t.addEventListener('click', () => selectOs(t.dataset.os));
+      const ua = navigator.userAgent;
+      const guess = /Win/i.test(ua) ? 'windows' : /Linux|X11/i.test(ua) ? 'linux' : 'windows';
+      selectOs(guess);
     }
 
     /* ─────────────────────────  Live GitHub info  ─────────────────────── */

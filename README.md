@@ -5,10 +5,11 @@
 A Servo-based, headless browser engine built for AI agents.
 
 Browserr is an alternative to embedding Chromium in an agent stack: a single
-`engine.exe` (Rust + Servo) that renders pages on the GPU, blocks ads, and
+`engine` binary (Rust + Servo) that renders pages on the GPU, blocks ads, and
 exposes a 15-command loopback protocol - one binary, one crypto stack, ~105 MB
-release. Agents drive it through a Python SDK (`tools/driver.py`) or through
-any MCP-capable client with zero integration code (`tools/browserr_mcp.py`).
+release on Windows, smaller on Linux. Agents drive it through a Python SDK
+(`tools/driver.py`) or through any MCP-capable client with zero integration
+code (`tools/browserr_mcp.py`).
 The automation surface is deliberately small: the entire protocol is auditable
 in an afternoon, unlike CDP.
 
@@ -33,13 +34,13 @@ like; that is the whole "visual" story.
 - Computer-use mode: `--driver-port=N` accepts multiple concurrent driver
   clients (events and screenshots mirrored to all), optional `--driver-token`
   authentication
-- GPU rendering: D3D12 shared textures between processes where available,
-  byte frames as fallback
+- GPU rendering (hardware GL, software-GL fallback); screenshots are painted
+  on demand
 
 ## Requirements
 
-- Windows 10/11 (x64)
-- Rust stable, MSVC toolchain
+- Windows 10/11 (x64), or Linux x64 (X11; Mesa llvmpipe works headless)
+- Rust stable (MSVC toolchain on Windows)
 - Python 3.10+ (test suite and MCP server; standard library only)
 
 ## Getting started
@@ -86,11 +87,11 @@ powershell -File scripts\package.ps1
 ## Architecture
 
 ```text
-engine/   Servo webviews (one per tab), GPU rendering (D3D12 shared
-          textures, byte frames as fallback), request interception
-          (adblock), automation protocol, driver port.
+engine/   Servo webviews (one per tab), GPU rendering (hardware GL with
+          software-GL fallback), request interception (adblock), automation
+          protocol, driver port.
 tools/    driver.py (Python SDK), browserr_mcp.py (MCP server), tests.
-scripts/  dist.ps1, package.ps1, ci.ps1 (local CI runner).
+scripts/  dist/package/ci for Windows (ps1) and Linux (sh).
 ```
 
 ## Protocol
@@ -202,7 +203,9 @@ helper finishes the delete after Servo releases its SQLite handles).
 - Do Not Track would require forking servo-net (the interception hook can
   cancel or replace responses but cannot edit request headers).
 - History records urls only, without page titles.
-- Windows only.
+- Windows x64 and Linux x64; macOS is not yet ported (CGL path).
+- Windows: rendering needs a GPU with a D3D11 driver (surfman WGL
+  requirement); Linux renders with any GL, including llvmpipe.
 
 ## Tests
 
