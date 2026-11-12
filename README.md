@@ -8,13 +8,12 @@ Browserr is an alternative to embedding Chromium in an agent stack: a single
 `engine` binary (Rust + Servo) that renders pages headlessly, blocks ads, and
 exposes a 20-command loopback protocol.
 
-Rendering is CPU by default. 
-`--gpu` opts into hardware rendering;
+Rendering is CPU by default; `--gpu` opts into hardware rendering. It runs
+on Windows, Linux (x64/ARM64) and macOS.
 
 Agents drive it through a Python SDK or through any MCP-capable client.
-
-The automation surface is deliberately small: the entire protocol is auditable
-in an afternoon, unlike CDP.
+The automation surface is deliberately small: the entire protocol is
+auditable in an afternoon, unlike CDP.
 
 
 ## Features
@@ -33,11 +32,9 @@ in an afternoon, unlike CDP.
 ### Reading pages
 
 - `read_page()`: token-cheap prose extraction
-- `read_structure()`: full inventory of headings, buttons, inputs, selects,
-  links and images, each with a viewport rect, a usable CSS selector and a
-  stable ref (`e7`); fields carry label, constraints, current state and
-  computed validity; forms group their fields and submit controls; the
-  shadow DOM is pierced
+- `read_structure()`: every interactive element with its rect, selector and
+  a stable ref (`e7`); fields carry label, constraints, state and validity;
+  shadow DOM included
 
 ### Acting on pages
 
@@ -52,50 +49,42 @@ in an afternoon, unlike CDP.
 
 ### Network control
 
-- Fail-closed interception: qualifying requests (main-frame documents,
-  fetch/XHR, JSON) are held for an allow / deny / respond decision
-  (deny is a synthetic 403); unanswered requests deny after 5 s
-- Net evidence: a document-start script wraps `fetch`/XHR in every frame
-  into a ring buffer (pages cannot evade it by grabbing references first)
-- Auth challenges: HTTP 401 and proxy challenges surface as events;
-  wrong or missing credentials fail closed
-- Frame tree listing with same-origin walking (cross-origin frames report
-  their url only)
+- Fail-closed interception: requests are held for an allow / deny /
+  respond decision; unanswered requests deny after 5 s
+- Net evidence: every `fetch`/XHR recorded in a ring buffer, in every frame
+- Auth challenges surface as events; wrong or missing credentials fail
+  closed
+- Frame tree listing (cross-origin frames report their url only)
 
 ### Human in the loop and trust
 
-- `detect_handoff()`: finds CAPTCHA iframes, one-time codes, empty
-  passwords, payment fields and consent walls
-- `pause()` / `resume()`: every mutating action fails loudly (PausedError)
-  while a human has control; reads keep working so the agent can watch;
-  `wait_for_user()` long-polls until the handoff clears or the page navigates
-- Annotated screenshots: `screenshot_annotated` boxes and numbers every
-  interactive element by ref, so an agent and a human can point at the
-  same element
-- Persistent profiles: logins survive sessions (`browser_start(profile=...)`)
-- Evidence: timestamped screenshots plus an append-only action log
-  (navigate/fill/submit/click/auth; never credentials) per profile
-- Credential store: HTTP auth challenges are answered automatically for
-  known hosts, denied for unknown ones
-- Confirm gate: submitting a payment or CAPTCHA page requires an explicit
-  human confirm (`submit_form(confirm=True)`; NeedsConfirmError otherwise)
+- `detect_handoff()`: spots CAPTCHAs, one-time codes, empty passwords,
+  payment fields and consent walls
+- `pause()` / `resume()`: mutating actions fail loudly while a human has
+  control; reads keep working; `wait_for_user()` waits for the handoff
+  to clear
+- Annotated screenshots: every element boxed and numbered by ref, so an
+  agent and a human point at the same element
+- Persistent profiles: logins survive sessions
+- Evidence: timestamped screenshots plus an append-only action log;
+  credentials are never logged
+- Credential store: auth challenges answered automatically for known
+  hosts, denied for unknown ones
+- Confirm gate: submitting a payment or CAPTCHA page needs an explicit
+  human confirm
 
 ### Operations
 
-- `ping` health check; `EngineDeadError` fails fast on engine death
-  (0.07 s instead of a timeout)
+- `ping` health check; fast failure when the engine dies
 - Ephemeral throwaway profiles for per-run isolation
-- Computer-use mode: `--driver-port=N` accepts concurrent driver clients
-  (events and screenshots mirrored to all), optional `--driver-token`
-  authentication
+- Computer-use mode: concurrent driver clients over `--driver-port`,
+  optional token authentication
 
 ## Requirements
 
-- Windows 10/11 (x64), Linux x64 or ARM64 (X11; Mesa llvmpipe works headless -
-  Raspberry Pi 4/5 included, use the linux-arm64 archive), or
-  macOS (Apple Silicon; aarch64)
-- Rust stable (MSVC toolchain on Windows)
-- Python 3.10+ (test suite and MCP server; standard library only)
+- Windows 10/11 (x64), Linux x64/ARM64 or macOS (Apple Silicon)
+- Python 3.10+ for the SDK and MCP server (standard library only)
+- Rust stable only to build from source
 
 ## Install
 
@@ -111,11 +100,8 @@ mcp_wrap.cmd      Windows MCP launcher (cmd wrapper)
 README.md, LICENSE
 ```
 
-Requirements: Python 3.10+ on PATH. Rendering is CPU by default on every
-platform; pass `--gpu` to opt into hardware rendering (D3D11 on Windows,
-any GL on Linux including llvmpipe, Metal-backed GL on macOS).
-`driver.py` finds the engine binary next to itself - no configuration
-needed. To use a custom engine location, set `BROWSERR_ENGINE=/path/to/engine`.
+Requirements: Python 3.10+ on PATH. `driver.py` finds the engine binary
+next to itself; override with `BROWSERR_ENGINE=/path/to/engine`.
 
 ### Connect an MCP client (Kai, Claude Desktop, ...)
 
@@ -304,9 +290,8 @@ engine\         Servo storage (cookies, HSTS, localStorage), per profile
 easylist.txt    adblock filter list
 ```
 
-`--profile-dir=PATH` selects a profile; `--ephemeral` substitutes a
-throwaway directory under `%TEMP%`, deleted on engine exit (a detached
-helper finishes the delete after Servo releases its SQLite handles).
+`--profile-dir=PATH` selects a profile; `--ephemeral` uses a throwaway
+directory deleted on engine exit.
 
 ## Build details
 
@@ -320,8 +305,9 @@ helper finishes the delete after Servo releases its SQLite handles).
 
 - The engine socket and the driver port are loopback-only, but any local
   process can connect by default; use `--driver-token` when that matters.
-- No site sandbox onWindows: Servo's multiprocess mode is unavailable on
-  Windows prefer ephemeral profiles for agent work.
+- No site sandbox on Windows: page code runs in-process with the engine,
+  so treat page loads as untrusted; prefer ephemeral profiles for agent
+  work.
 - Automation downloads send no page cookies; use them for public URLs only.
 
 ## Known limitations
