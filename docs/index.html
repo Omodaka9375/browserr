@@ -458,24 +458,24 @@
         <table class="blocks">
           <thead><tr><th>Command</th><th>Covers</th></tr></thead>
           <tbody>
-            <tr><td>read</td><td><b>Structured page reads.</b> Prose via read_page(), or read_structure(): headings, buttons, inputs, selects, links, images — each with a viewport rect and a CSS selector that feeds the element commands.</td></tr>
-            <tr><td>act</td><td><b>Selector-based interaction.</b> click_element() scrolls into view and clicks with a real pointer event; set_value() uses the native setter plus input/change events, so React and Vue controlled inputs accept it.</td></tr>
-            <tr><td>wait</td><td><b>SPA-aware timing.</b> wait_for_selector() polls until an element is visible; wait_ready() gates on document.readyState. No sleeps, no flaky scripts.</td></tr>
-            <tr><td>observe</td><td><b>Console capture.</b> Page console.log/warn/error arrives as events — and Servo routes network and TLS load errors through the same channel, so agents see why a page failed.</td></tr>
-            <tr><td>files</td><td><b>Downloads.</b> download(url, path) fetches straight to disk with size caps and an ok/bytes/error event. Public URLs only — no page cookies involved.</td></tr>
-            <tr><td>survive</td><td><b>Fast failure, not hangs.</b> EngineDeadError surfaces a dead engine in 0.07 s instead of a timeout. ping health-checks. Ephemeral profiles give every run a clean slate.</td></tr>
-            <tr><td>block</td><td><b>Adblock built in.</b> EasyList-based subresource blocking at the engine's request-interception hook, auto-refreshed weekly. Never blocks main-frame documents.</td></tr>
-            <tr><td>gpu</td><td><b>Fast rendering.</b> CPU rendering by default (starts anywhere, never fails on GPU-less machines); --gpu opts into hardware rendering with automatic CPU fallback. Screenshots painted on demand, per tab.</td></tr>
-            <tr><td>secure</td><td><b>Token-gated attach.</b> --driver-port accepts multiple concurrent drivers; --driver-token requires an auth line first. Unauthenticated sockets get nothing — not even events.</td></tr>
-            <tr><td>intercept</td><td><b>Fail-closed interception.</b> Arm it and qualifying requests (documents, fetch/XHR, JSON) are held for your decision: allow, deny (synthetic 403), or fulfill with a synthetic response. Unanswered = denied after 5 s.</td></tr>
-            <tr><td>auth</td><td><b>Challenges surfaced, not swallowed.</b> HTTP 401 and proxy challenges arrive as events answered with per-challenge credentials; wrong or missing credentials fail closed. File pickers too: answer with paths or cancel.</td></tr>
-            <tr><td>evidence</td><td><b>Net activity you can trust.</b> A document-start user script wraps fetch/XHR in every frame — pages cannot evade it by grabbing references first — into a ring buffer polled via eval.</td></tr>
-            <tr><td>frames</td><td><b>Frame tree, tier 1.</b> List frames (url, origin, same-origin) and walk same-origin frames via window.frames[i].document; cross-origin frames report their url only.</td></tr>
-            <tr><td>fill</td><td><b>Form filling that understands forms.</b> Fields carry their label, constraints, state and computed validity; fill_form() writes a whole form in one round trip with type-aware writes (checkbox, radio, select by label, date, contenteditable).</td></tr>
-            <tr><td>submit</td><td><b>Submit and read the outcome.</b> submit_form() runs the page's own validation, honors preventDefault, submits natively, waits for the navigation or network quiet, then reports url, alerts and invalid fields.</td></tr>
-            <tr><td>point</td><td><b>Shared references.</b> Every element has a stable ref and screenshots can be annotated with numbered boxes, so an agent says "I will fill 3, 4, then click 7" and a human can answer "no, 7 is the wrong button".</td></tr>
-            <tr><td>handoff</td><td><b>Humans take over when it matters.</b> detect_handoff() spots CAPTCHAs, one-time codes, password and payment fields; pause() blocks every mutating action while reads keep working, and wait_for_user() watches until the human is done. Fail-closed: unanswered means blocked, not guessed.</td></tr>
-            <tr><td>trust</td><td><b>Fail-closed by design.</b> Persistent profiles keep logins; evidence shots and an append-only action log record what happened (never credentials); stored credentials answer HTTP auth challenges automatically while unknown hosts are denied; a payment or captcha submit needs an explicit human confirm.</td></tr>
+            <tr><td>read</td><td><b>Structured page reads.</b> Prose via read_page(), or read_structure(): every element with its rect and selector; fields carry label, constraints, state and validity.</td></tr>
+            <tr><td>act</td><td><b>Selector interaction.</b> click_element() and set_value() — real pointer events, React/Vue-safe writes.</td></tr>
+            <tr><td>wait</td><td><b>SPA-aware timing.</b> Wait for selectors and readiness — no sleeps, no flaky scripts.</td></tr>
+            <tr><td>observe</td><td><b>Console capture.</b> Page messages and network errors arrive as events.</td></tr>
+            <tr><td>files</td><td><b>Downloads.</b> Fetched straight to disk, without page cookies.</td></tr>
+            <tr><td>survive</td><td><b>Fast failure, not hangs.</b> A dead engine surfaces instantly; ephemeral profiles give every run a clean slate.</td></tr>
+            <tr><td>block</td><td><b>Adblock built in.</b> EasyList-based, refreshed weekly.</td></tr>
+            <tr><td>gpu</td><td><b>Rendering.</b> CPU by default — starts anywhere; --gpu opts into hardware. Screenshots on demand, per tab.</td></tr>
+            <tr><td>secure</td><td><b>Token-gated attach.</b> Unauthenticated sockets get nothing — not even events.</td></tr>
+            <tr><td>intercept</td><td><b>Fail-closed interception.</b> Requests held for an allow / deny / respond decision; unanswered means denied after 5 s.</td></tr>
+            <tr><td>auth</td><td><b>Challenges surfaced, not swallowed.</b> Auth and file-picker events; missing credentials fail closed.</td></tr>
+            <tr><td>evidence</td><td><b>Net evidence.</b> Every fetch/XHR recorded in a ring buffer, in every frame.</td></tr>
+            <tr><td>frames</td><td><b>Frame tree.</b> List frames and walk same-origin ones; cross-origin frames report their url only.</td></tr>
+            <tr><td>fill</td><td><b>Form filling.</b> A whole form in one round trip, with type-aware writes.</td></tr>
+            <tr><td>submit</td><td><b>Submit and read the outcome.</b> Runs the page's validation, then reports url, alerts and invalid fields.</td></tr>
+            <tr><td>point</td><td><b>Shared references.</b> Stable refs and numbered screenshot boxes: the agent says "click 7" and the human knows which one that is.</td></tr>
+            <tr><td>handoff</td><td><b>Humans take over when it matters.</b> detect_handoff() spots CAPTCHAs, codes and payment fields; pause() blocks mutations while they work. Fail-closed: unanswered means blocked, not guessed.</td></tr>
+            <tr><td>trust</td><td><b>Fail-closed by design.</b> Persistent profiles, evidence shots, an append-only action log, a credential store and a confirm gate on payment submits.</td></tr>
           </tbody>
         </table>
       </div>
@@ -522,8 +522,8 @@
           <thead><tr><th>Surface</th><th>Covers</th></tr></thead>
           <tbody>
             <tr><td>mcp</td><td><b>Model Context Protocol server</b> with 36 tools, stdlib only. Any MCP-capable agent — Claude, Kai, your own — drives Browserr with zero integration code.</td></tr>
-            <tr><td>python</td><td><b>driver.py wraps the raw protocol:</b> navigation, extraction, element commands, console capture, downloads, screenshots, a PNG helper. No dependencies.</td></tr>
-            <tr><td>raw</td><td><b>Anything that can write JSON lines to a socket.</b> The whole protocol fits on one screen; bindings in any language are an afternoon.</td></tr>
+            <tr><td>python</td><td><b>driver.py wraps the raw protocol:</b> navigation, extraction, form filling, screenshots. No dependencies.</td></tr>
+            <tr><td>raw</td><td><b>Anything that can write JSON lines to a socket.</b> Bindings in any language are an afternoon.</td></tr>
           </tbody>
         </table>
       </div>
@@ -550,7 +550,7 @@
           </tbody>
         </table>
         <div class="note">
-          <p><b>Honest limits.</b> No site sandbox on Windows (treat page loads as untrusted; use ephemeral profiles), web compatibility bounded by Servo 0.8. Rendering is CPU by default; --gpu needs D3D11 on Windows, any GL on Linux (llvmpipe works headless), Metal-backed GL on macOS. Text, documents, search and forms work well; heavy SPAs and DRM video may not.</p>
+          <p><b>Honest limits.</b> No site sandbox on Windows; web compatibility bounded by Servo 0.8. Text, documents, search and forms work well; heavy SPAs and DRM video may not.</p>
         </div>
       </div>
     </section>
@@ -574,7 +574,7 @@
         <div class="os-panel active" data-os="windows">
           <div class="os-card">
             <h4>Windows x64</h4>
-            <p>Download the zip, unpack anywhere, and point your agent at the MCP server - or drive the engine directly from Python. CPU rendering works out of the box; pass --gpu for hardware rendering (D3D11 driver required).</p>
+            <p>Download the zip, unpack anywhere, and point your agent at the MCP server. CPU rendering works out of the box; pass --gpu for hardware rendering.</p>
             <a href="https://github.com/Omodaka9375/browserr/releases/latest" class="btn-primary">↓ Download for Windows</a>
             <div class="os-meta">
               <span>Format <b>.zip</b></span>
@@ -586,7 +586,7 @@
         <div class="os-panel" data-os="linux">
           <div class="os-card">
             <h4>Linux x64 / ARM64</h4>
-            <p>Download the tarball, unpack anywhere, and point your agent at the MCP server. Any GL works - including Mesa llvmpipe, so headless servers without a GPU are fine (X11 via xvfb). ARM64 covers the Raspberry Pi 4/5 (use the linux-arm64 archive).</p>
+            <p>Download the tarball, unpack anywhere, and point your agent at the MCP server. Works headless without a GPU; ARM64 covers the Raspberry Pi 4/5.</p>
             <a href="https://github.com/Omodaka9375/browserr/releases/latest" class="btn-primary">↓ Download for Linux</a>
             <div class="os-meta">
               <span>Format <b>.tar.gz</b></span>
@@ -598,7 +598,7 @@
         <div class="os-panel" data-os="macos">
           <div class="os-card">
             <h4>macOS (Apple Silicon)</h4>
-            <p>Download the tarball, unpack anywhere, and point your agent at the MCP server. Rendering uses the system GL (Metal-backed); works headless.</p>
+            <p>Download the tarball, unpack anywhere, and point your agent at the MCP server. Works headless out of the box.</p>
             <a href="https://github.com/Omodaka9375/browserr/releases/latest" class="btn-primary">↓ Download for macOS</a>
             <div class="os-meta">
               <span>Format <b>.tar.gz</b></span>
