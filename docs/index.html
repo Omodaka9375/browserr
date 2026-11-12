@@ -428,9 +428,10 @@
       <dl class="specs">
         <div><dt>Platform</dt><dd>Windows · Linux · macOS</dd></div>
         <div><dt>Engine</dt><dd>Servo + SpiderMonkey</dd></div>
-        <div><dt>MCP tools</dt><dd>30</dd></div>
+        <div><dt>MCP tools</dt><dd>34</dd></div>
         <div><dt>Protocol</dt><dd>20 commands</dd></div>
         <div><dt>Telemetry</dt><dd>0</dd></div>
+        <div><dt>Handoff</dt><dd>pause / resume</dd></div>
       </dl>
 
       <!-- Mode switcher -->
@@ -475,6 +476,7 @@
             <tr><td>fill</td><td><b>Form filling that understands forms.</b> Fields carry their label, constraints, state and computed validity; fill_form() writes a whole form in one round trip with type-aware writes (checkbox, radio, select by label, date, contenteditable).</td></tr>
             <tr><td>submit</td><td><b>Submit and read the outcome.</b> submit_form() runs the page's own validation, honors preventDefault, submits natively, waits for the navigation or network quiet, then reports url, alerts and invalid fields.</td></tr>
             <tr><td>point</td><td><b>Shared references.</b> Every element has a stable ref and screenshots can be annotated with numbered boxes, so an agent says "I will fill 3, 4, then click 7" and a human can answer "no, 7 is the wrong button".</td></tr>
+            <tr><td>handoff</td><td><b>Humans take over when it matters.</b> detect_handoff() spots CAPTCHAs, one-time codes, password and payment fields; pause() blocks every mutating action while reads keep working, and wait_for_user() watches until the human is done. Fail-closed: unanswered means blocked, not guessed.</td></tr>
           </tbody>
         </table>
       </div>
@@ -500,7 +502,7 @@
       <div class="wrap">
         <dl class="specs stats">
           <div><dt>Commands</dt><dd>20</dd></div>
-          <div><dt>MCP tools</dt><dd>30</dd></div>
+          <div><dt>MCP tools</dt><dd>34</dd></div>
           <div><dt>Binary</dt><dd>~105 MB</dd></div>
           <div><dt>CDP endpoints</dt><dd>0</dd></div>
           <div><dt>Dependencies</dt><dd>0</dd></div>
@@ -520,7 +522,7 @@
         <table class="blocks">
           <thead><tr><th>Surface</th><th>Covers</th></tr></thead>
           <tbody>
-            <tr><td>mcp</td><td><b>Model Context Protocol server</b> with 30 tools, stdlib only. Any MCP-capable agent — Claude, Kai, your own — drives Browserr with zero integration code.</td></tr>
+            <tr><td>mcp</td><td><b>Model Context Protocol server</b> with 34 tools, stdlib only. Any MCP-capable agent — Claude, Kai, your own — drives Browserr with zero integration code.</td></tr>
             <tr><td>python</td><td><b>driver.py wraps the raw protocol:</b> navigation, extraction, element commands, console capture, downloads, screenshots, a PNG helper. No dependencies.</td></tr>
             <tr><td>raw</td><td><b>Anything that can write JSON lines to a socket.</b> The whole protocol fits on one screen; bindings in any language are an afternoon.</td></tr>
           </tbody>
@@ -542,7 +544,7 @@
           <tbody>
             <tr><td>engine</td><td><b>Servo</b></td><td>own (Zig)</td><td>own (Rust)</td><td>Blink</td></tr>
             <tr><td>js engine</td><td><b>SpiderMonkey</b></td><td>own</td><td>own</td><td>V8</td></tr>
-            <tr><td>mcp-native</td><td><b>yes, 30 tools</b></td><td>no</td><td>partial</td><td>via wrappers</td></tr>
+            <tr><td>mcp-native</td><td><b>yes, 34 tools</b></td><td>no</td><td>partial</td><td>via wrappers</td></tr>
             <tr><td>protocol size</td><td><b>20 commands</b></td><td>CDP-compatible</td><td>own + CDP</td><td>1000+ endpoints</td></tr>
             <tr><td>footprint</td><td><b>one ~105 MB binary</b></td><td>~16× less than Chromium</td><td>~30 MB</td><td>~200 MB+</td></tr>
             <tr><td>web compat</td><td><b>Servo 0.8 (text, docs, forms)</b></td><td>growing</td><td>growing</td><td>full</td></tr>

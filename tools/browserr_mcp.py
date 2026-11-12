@@ -19,6 +19,8 @@ Tools:
     browser_net / browser_frames
     browser_set_field / browser_fill_form / browser_submit_form
     browser_read_outcome / browser_click_ref / browser_screenshot_annotated
+    browser_pause / browser_resume / browser_detect_handoff
+    browser_wait_for_user
 """
 import json
 import os
@@ -327,7 +329,69 @@ TOOLS = [
                        "{path, items: [{ref, num, label, x, y, w, h}]}.",
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
+    {
+        "name": "browser_pause",
+        "description": "Hand control to the user. Every mutating action "
+                       "(navigate, click, type, fill, submit) fails with a "
+                       "clear 'paused' error until browser_resume; reads "
+                       "(read_structure, read_page, screenshots, "
+                       "read_outcome, detect_handoff) keep working so the "
+                       "agent can watch the page and wait.",
+        "inputSchema": {"type": "object", "properties": {
+            "reason": {"type": "string"}}, "required": []},
+    },
+    {
+        "name": "browser_resume",
+        "description": "Take control back after a user handoff.",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "browser_detect_handoff",
+        "description": "Scan the page for things a human must do: CAPTCHA "
+                       "iframes, one-time-code inputs, empty password "
+                       "fields, payment card fields, cookie-consent walls. "
+                       "Returns {handoff, reasons: [{kind, detail}]}. Use "
+                       "before pausing to tell the user WHY they are needed.",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "browser_wait_for_user",
+        "description": "Long-poll the browser while paused: returns as soon "
+                       "as the page changes or the page stops showing a "
+                       "handoff condition (e.g. the user solved the "
+                       "CAPTCHA), or after timeout_seconds with done:false. "
+                       "Call in a loop to watch a user handoff.",
+        "inputSchema": {"type": "object", "properties": {
+            "timeout_seconds": {"type": "number"}}, "required": []},
+    },
 ]
+
+
+def _wait_for_user(timeout_seconds=30):
+    """Watch the page while a human has control. Returns done=True when the
+    handoff condition cleared (CAPTCHA solved, OTP entered...) or the page
+    navigated; done=False on timeout. Reads only: safe while paused."""
+    import time as _time
+    d = STATE.d()
+    start = _time.time()
+    try:
+        before_url = d.eval_js("location.href") or ""
+    except Exception:
+        before_url = ""
+    while _time.time() - start < min(float(timeout_seconds), 120):
+        try:
+            now_url = d.eval_js("location.href", timeout=2.0) or ""
+            if now_url != before_url:
+                return {"done": True, "why": "navigated",
+                        "url": now_url, "handoff": d.detect_handoff()}
+            h = d.detect_handoff()
+            if not h.get("handoff"):
+                return {"done": True, "why": "handoff cleared", "handoff": h}
+        except Exception:
+            pass  # page mid-navigation; keep watching
+        _time.sleep(0.5)
+    return {"done": False, "why": "timeout",
+            "handoff": d.detect_handoff()}
 
 
 def call_tool(name, args):
@@ -450,6 +514,16 @@ def call_tool(name, args):
         path = os.path.join(STATE.shot_dir,
                             f"annotated-{int(__import__('time').time())}.png")
         return d.screenshot_annotated(path)
+    if name == "browser_pause":
+        d.pause(args.get("reason") or "user takeover")
+        return {"paused": True, "reason": d.paused}
+    if name == "browser_resume":
+        d.resume()
+        return {"paused": False}
+    if name == "browser_detect_handoff":
+        return d.detect_handoff()
+    if name == "browser_wait_for_user":
+        return _wait_for_user(args.get("timeout_seconds", 30))
     raise McpError(f"unknown tool {name}")
 
 

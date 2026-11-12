@@ -36,6 +36,13 @@ like; that is the whole "visual" story.
 - Shared references: `screenshot_annotated(path)` boxes and numbers every
   interactive element by ref and returns the item list, so an agent and a
   human can both point at "element 7"
+- User handoff: `detect_handoff()` scans for things a human must do
+  (CAPTCHA iframes, one-time codes, empty passwords, payment fields,
+  consent walls); `pause()`/`resume()` hand control over and back, with
+  every mutating action failing loudly (PausedError) while reads keep
+  working so the agent can watch the page; `wait_for_user()` (MCP
+  `browser_wait_for_user`) long-polls until the handoff clears or the
+  page navigates
 - Form filling: `fill_form({ref: value, ...})` writes a whole form in one
   round trip with type-aware writes (checkbox/radio, select by value or
   label, date, contenteditable), firing input/change/blur so validators run

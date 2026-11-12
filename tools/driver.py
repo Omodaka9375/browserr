@@ -63,6 +63,16 @@ class EngineDeadError(ConnectionError):
     """
 
 
+class PausedError(RuntimeError):
+    """The driver is paused: a human has taken over.
+
+    Raised by every mutating action (navigate, input, key, wheel and the
+    eval-based writers) so an agent loop fails loudly instead of acting
+    while the user is in control. Reads keep working: the agent can still
+    watch the page and wait for browser_resume.
+    """
+
+
 def _png_chunk(kind: bytes, data: bytes) -> bytes:
     return len(data).to_bytes(4, "big") + kind + data + zlib.crc32(kind + data).to_bytes(4, "big")
 
@@ -293,12 +303,41 @@ class Driver:
         self.width = None
         self.height = None
         self.dead = False           # set by the reader thread on socket loss
+        self._paused = None        # reason string while a human has control
 
     # -- protocol ---------------------------------------------------------
+
+    # Engine commands that mutate the page. Everything else (ping, resize,
+    # screenshot, eval reads) stays available while paused so the agent can
+    # keep watching.
+    _MUTATING_CMDS = frozenset(("navigate", "input", "key", "wheel"))
+
+    def _guard_paused(self, what: str) -> None:
+        if self._paused is not None:
+            raise PausedError(
+                f"paused ({self._paused}): {what} blocked until resume()")
+
+    def pause(self, reason="user takeover") -> None:
+        """Hand control to the user. Every mutating action raises PausedError
+        until resume(); reads (read_structure, read_page, screenshots,
+        read_outcome) keep working. Driver-local: in attach mode other
+        clients of the same engine are not affected."""
+        self._paused = reason
+
+    def resume(self) -> None:
+        """Take control back after a user handoff."""
+        self._paused = None
+
+    @property
+    def paused(self):
+        """The pause reason, or None when the agent has control."""
+        return self._paused
 
     def cmd(self, obj: dict) -> None:
         if self.dead:
             raise EngineDeadError("engine socket gone (cmd dropped)")
+        if obj.get("cmd") in self._MUTATING_CMDS:
+            self._guard_paused(obj["cmd"])
         try:
             self.sock.sendall((json.dumps(obj) + "\n").encode())
         except OSError as e:
@@ -525,7 +564,9 @@ class Driver:
     def set_value(self, selector, value, tab: int = 0, timeout=10.0):
         """Set an input/textarea/select value by CSS selector, firing input
         and change events. Uses the native value setter so React/Vue
-        controlled inputs accept the change. Returns True on success."""
+        controlled inputs accept the change. Blocked while paused.
+        Returns True on success."""
+        self._guard_paused("set_value")
         js = ("(function(){var s=" + self._js_selector(selector) + ";"
               "var v=" + json.dumps(value) + ";"
               "var e=document.querySelector(s);if(!e){return {ok:false};}"
@@ -1128,7 +1169,8 @@ class Driver:
 
     def fill(self, name_or_id, value, tab: int = 0, timeout=10.0):
         """Set a form field by name/id and fire input+change (framework-safe).
-        Returns True if a field was found and filled."""
+        Blocked while paused. Returns True if a field was found and filled."""
+        self._guard_paused("fill")
         js = ("((()=>{const el=document.getElementsByName(%s)[0]"
               "||document.getElementById(%s);"
               "if(!el)return false;el.focus();el.value=%s;"
@@ -1144,7 +1186,7 @@ class Driver:
         pt = self.eval_js(self.REF_RECT_JS % json.dumps(ref), tab, timeout)
         if not pt or not isinstance(pt, dict):
             return None
-        # Hover first: servo resolves the click target from the pointer
+        # hover first: servo resolves the click target from the pointer
         # position, so a move before down/up is what makes hover/focus behave.
         self.move(pt["x"], pt["y"], tab=tab)
         self.click(pt["x"], pt["y"], tab=tab)
@@ -1153,11 +1195,13 @@ class Driver:
     def set_field(self, ref_or_selector, value, tab: int = 0, timeout=10.0):
         """Type-aware field write: a stable ref ('e7') or a CSS selector.
 
-        Checkbox/radio take a boolean (true/'checked'/1...), <select> takes
-        an option value or its label, contenteditable takes text, everything
-        else takes a plain value. Fires input, change and blur so framework
-        bindings and validators run. Returns {ok, how, value} or
-        {ok: False, error}."""
+        Writes are blocked while paused (a human has control).
+        Checkbox/radio take a boolean ('checked'/'1'/true...), <select>
+        takes an option value or its label, contenteditable takes text,
+        everything else takes a plain value. Fires input, change and blur
+        so framework bindings and validators run. Returns {ok, how, value}
+        or {ok: False, error}."""
+        self._guard_paused("set_field")
         js = self.SET_FIELD_JS % (json.dumps(ref_or_selector), json.dumps(value))
         return self.eval_js(js, tab, timeout)
 
@@ -1309,14 +1353,17 @@ class Driver:
     def fill_form(self, fields, tab: int = 0, timeout=15.0):
         """Write many fields in ONE round trip. `fields` maps a stable ref
         ('e7') or a CSS selector to a value; writes are type-aware (see
-        set_field). Returns {ok, fields: {key: {ok, how, value}}}."""
+        set_field). Blocked while paused. Returns
+        {ok, fields: {key: {ok, how, value}}}."""
+        self._guard_paused("fill_form")
         js = self.FILL_FORM_JS % json.dumps(fields)
         return self.eval_js(js, tab, timeout)
 
     def submit_form(self, ref_or_selector=None, tab: int = 0, timeout=10.0):
         """Submit a form: by ref/selector (a form, a field or a submit
-        button), else the first form on the page. Returns
-        {ok, how, action, method, invalid_hint}."""
+        button), else the first form on the page. Blocked while paused.
+        Returns {ok, how, action, method, prevented, invalid_hint}."""
+        self._guard_paused("submit_form")
         js = self.SUBMIT_FORM_JS % json.dumps(ref_or_selector)
         res = self.eval_js(js, tab, timeout)
         if not res or not res.get("ok"):
@@ -1385,6 +1432,62 @@ class Driver:
         self.wait_network_idle(quiet_ms=quiet_ms, timeout=3.0, tab=tab)
         outcome = self.read_outcome(tab)
         return {"submit": res, "navigated": navigated, "outcome": outcome}
+
+    HANDOFF_JS = r"""(() => {
+        // Things a human must do: CAPTCHAs, one-time codes, passwords with
+        // no stored credential, payment fields, and cookie/consent walls.
+        // Returns {handoff: bool, reasons: [{kind, detail}], paused_hint}.
+        const reasons = [];
+        const host = location.hostname;
+        const iframe = (sel) => {
+            for (const f of document.querySelectorAll('iframe')) {
+                if (f.src && f.src.includes(sel)) return f.src;
+            }
+            for (const s of document.scripts) {
+                if (s.src && s.src.includes(sel)) return s.src;
+            }
+            return null;
+        };
+        const captcha = iframe('recaptcha') || iframe('hcaptcha')
+            || iframe('turnstile') || iframe('grecaptcha');
+        if (captcha) reasons.push({kind: 'captcha', detail: captcha.slice(0, 150)});
+        for (const i of document.querySelectorAll('input')) {
+            const t = (i.type || '').toLowerCase();
+            const ac = (i.getAttribute('autocomplete') || '').toLowerCase();
+            if (!i.value && (ac.includes('one-time-code') || ac.includes('otp')
+                    || (t === 'text' && /^\d{4,8}$/.test(i.getAttribute('pattern') || '')
+                        && (i.name || i.id || '').toLowerCase().match(/otp|code|token/)))) {
+                reasons.push({kind: 'otp',
+                              detail: (i.name || i.id || 'input').slice(0, 80)});
+            }
+            if (!i.value && t === 'password'
+                    && (ac.includes('current-password') || !ac)) {
+                reasons.push({kind: 'password',
+                              detail: (i.name || i.id || 'input').slice(0, 80)});
+            }
+            if (!i.value && (ac.includes('cc-number') || ac.includes('card-number')
+                    || ac.includes('cc-csc') || ac.includes('card-cvc'))) {
+                reasons.push({kind: 'payment',
+                              detail: (i.name || i.id || 'input').slice(0, 80)});
+            }
+        }
+        const consent = document.querySelector(
+            '[role=dialog] button, [class*=consent] button, [id*=consent] button');
+        if (consent && document.querySelector('[class*=cookie], [id*=cookie]')) {
+            reasons.push({kind: 'consent',
+                          detail: (consent.textContent || '').trim().slice(0, 80)});
+        }
+        return {handoff: reasons.length > 0, reasons: reasons,
+                paused_hint: reasons.length
+                    ? 'human needed for: ' + reasons.map(r => r.kind).join(', ')
+                    : ''};
+    })()"""
+
+    def detect_handoff(self, tab: int = 0, timeout=10.0):
+        """Scan the page for things a human must do (CAPTCHA, OTP, password
+        without a stored credential, payment fields, cookie consent).
+        Returns {handoff, reasons, paused_hint}."""
+        return self.eval_js(self.HANDOFF_JS, tab, timeout)
 
 
 if __name__ == "__main__":
