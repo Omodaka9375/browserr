@@ -608,7 +608,7 @@ def handle(msg):
             return {"jsonrpc": "2.0", "id": msg_id, "result": {
                 "protocolVersion": requested or "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "browserr", "version": "0.3.0"}
+                "serverInfo": {"name": "browserr", "version": "0.3.1"}
             }}
         if method == "notifications/initialized":
             return None
