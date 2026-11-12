@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Browserr — headless browser engine for AI agents</title>
-  <meta name="description" content="A Servo-based headless browser engine for AI agents. One binary, one crypto stack, a 15-command protocol you can audit in an afternoon. No UI, no CDP, no Chromium." />
+  <meta name="description" content="A Servo-based headless browser engine for AI agents. One binary, one crypto stack, a 20-command protocol you can audit in an afternoon. No UI, no CDP, no Chromium." />
   <meta name="theme-color" content="#ffffff" />
 
   <!-- Open Graph / Twitter -->
@@ -15,7 +15,7 @@
   <meta property="og:url" content="https://browserr.dev/" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Browserr — headless browser engine for AI agents" />
-  <meta name="twitter:description" content="A Servo-based headless browser engine for AI agents. MCP-native, 15-command protocol." />
+  <meta name="twitter:description" content="A Servo-based headless browser engine for AI agents. MCP-native, 36 tools, 20-command protocol." />
 
   <link rel="icon" type="image/svg+xml" href="icon.svg" />
   <link rel="apple-touch-icon" href="icon.svg" />
@@ -428,7 +428,7 @@
       <dl class="specs">
         <div><dt>Platform</dt><dd>Windows · Linux · macOS</dd></div>
         <div><dt>Engine</dt><dd>Servo + SpiderMonkey</dd></div>
-        <div><dt>MCP tools</dt><dd>34</dd></div>
+        <div><dt>MCP tools</dt><dd>36</dd></div>
         <div><dt>Protocol</dt><dd>20 commands</dd></div>
       </dl>
 
@@ -501,7 +501,7 @@
       <div class="wrap">
         <dl class="specs stats">
           <div><dt>Commands</dt><dd>20</dd></div>
-          <div><dt>MCP tools</dt><dd>34</dd></div>
+          <div><dt>MCP tools</dt><dd>36</dd></div>
           <div><dt>Binary</dt><dd>~105 MB</dd></div>
           <div><dt>CDP endpoints</dt><dd>0</dd></div>
           <div><dt>Dependencies</dt><dd>0</dd></div>
@@ -521,7 +521,7 @@
         <table class="blocks">
           <thead><tr><th>Surface</th><th>Covers</th></tr></thead>
           <tbody>
-            <tr><td>mcp</td><td><b>Model Context Protocol server</b> with 34 tools, stdlib only. Any MCP-capable agent — Claude, Kai, your own — drives Browserr with zero integration code.</td></tr>
+            <tr><td>mcp</td><td><b>Model Context Protocol server</b> with 36 tools, stdlib only. Any MCP-capable agent — Claude, Kai, your own — drives Browserr with zero integration code.</td></tr>
             <tr><td>python</td><td><b>driver.py wraps the raw protocol:</b> navigation, extraction, element commands, console capture, downloads, screenshots, a PNG helper. No dependencies.</td></tr>
             <tr><td>raw</td><td><b>Anything that can write JSON lines to a socket.</b> The whole protocol fits on one screen; bindings in any language are an afternoon.</td></tr>
           </tbody>
@@ -543,7 +543,7 @@
           <tbody>
             <tr><td>engine</td><td><b>Servo</b></td><td>own (Zig)</td><td>own (Rust)</td><td>Blink</td></tr>
             <tr><td>js engine</td><td><b>SpiderMonkey</b></td><td>own</td><td>own</td><td>V8</td></tr>
-            <tr><td>mcp-native</td><td><b>yes, 34 tools</b></td><td>no</td><td>partial</td><td>via wrappers</td></tr>
+            <tr><td>mcp-native</td><td><b>yes, 36 tools</b></td><td>no</td><td>partial</td><td>via wrappers</td></tr>
             <tr><td>protocol size</td><td><b>20 commands</b></td><td>CDP-compatible</td><td>own + CDP</td><td>1000+ endpoints</td></tr>
             <tr><td>footprint</td><td><b>one ~105 MB binary</b></td><td>~16× less than Chromium</td><td>~30 MB</td><td>~200 MB+</td></tr>
             <tr><td>web compat</td><td><b>Servo 0.8 (text, docs, forms)</b></td><td>growing</td><td>growing</td><td>full</td></tr>

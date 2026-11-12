@@ -6,7 +6,7 @@ A Servo-based, headless browser engine built for AI agents.
 
 Browserr is an alternative to embedding Chromium in an agent stack: a single
 `engine` binary (Rust + Servo) that renders pages on the GPU, blocks ads, and
-exposes a 15-command loopback protocol - one binary, one crypto stack, ~105 MB
+exposes a 20-command loopback protocol - one binary, one crypto stack, ~105 MB
 release (measured: 105.4 MB on Windows, 103.6 MB on Linux; ~40 MB archived).
 Agents drive it through a Python SDK
 (`tools/driver.py`) or through any MCP-capable client with zero integration
@@ -274,11 +274,22 @@ Timing rules worth knowing:
 ## MCP server
 
 `tools/browserr_mcp.py` is a Model Context Protocol server (standard
-library only, newline JSON-RPC on stdio) exposing 19 tools: start, stop,
-ping, navigate, read, read_structure, links, forms, click, click_text,
-click_element, set_value, wait_for, fill, key, screenshot, tabs, console,
-download. It runs headless with an ephemeral profile by default;
-`--port N` attaches to a running engine's driver port.
+library only, newline JSON-RPC on stdio) exposing 36 tools:
+
+- session: start (with optional persistent `profile`), stop, ping
+- page: navigate, read, read_structure, links, forms
+- interaction: click, click_text, click_element, click_ref, fill,
+  set_field, fill_form, key, set_value, submit_form, read_outcome
+- capture: screenshot, screenshot_annotated, wait_for, tabs, console,
+  evidence, download
+- network: intercept, pending_requests, intercept_answer, net, frames
+- trust: pause, resume, detect_handoff, wait_for_user, set_credentials
+
+It runs headless with an ephemeral profile by default; `--port N`
+attaches to a running engine's driver port. `browser_start(profile=...)`
+uses a persistent profile (logins survive sessions) with a per-profile
+evidence dir and action log; evidence shots, auto-auth and the submit
+confirm gate are always on for MCP-started engines.
 
 ## Profiles
 
