@@ -33,6 +33,9 @@ like; that is the whole "visual" story.
   accepted), `wait_for_selector` (SPA render waiting)
 - Ref-based interaction: `click_ref('e7')` and `set_field(ref, value)` use
   the stable refs from `read_structure`, so no selector fragility
+- Shared references: `screenshot_annotated(path)` boxes and numbers every
+  interactive element by ref and returns the item list, so an agent and a
+  human can both point at "element 7"
 - Form filling: `fill_form({ref: value, ...})` writes a whole form in one
   round trip with type-aware writes (checkbox/radio, select by value or
   label, date, contenteditable), firing input/change/blur so validators run

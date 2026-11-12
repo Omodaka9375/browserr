@@ -37,7 +37,7 @@ $sdk_tests = @(
     "test_watchdog", "test_features", "test_mcp", "test_scroll",
     "test_bind", "test_attach", "test_hardening", "test_intercept",
     "test_auth", "test_filepicker", "test_net", "test_frames", "test_form",
-    "test_flow"
+    "test_flow", "test_annotate"
 )
 # Render-free tests: raw socket protocol, no webview pixels needed.
 $gpuless_tests = @("test_bind")

@@ -83,6 +83,75 @@ def save_png(path: str, w: int, h: int, bgra: bytes) -> None:
         f.write(body)
 
 
+# 3x5 digit glyphs: screenshot annotation with no font dependency.
+_DIGITS = {
+    "0": ("111", "101", "101", "101", "111"),
+    "1": ("010", "110", "010", "010", "111"),
+    "2": ("111", "001", "111", "100", "111"),
+    "3": ("111", "001", "111", "001", "111"),
+    "4": ("101", "101", "111", "001", "001"),
+    "5": ("111", "100", "111", "001", "111"),
+    "6": ("111", "100", "111", "101", "111"),
+    "7": ("111", "001", "010", "010", "010"),
+    "8": ("111", "101", "111", "101", "111"),
+    "9": ("111", "101", "111", "001", "111"),
+}
+
+
+def _put(buf, w: int, h: int, x: int, y: int, color) -> int:
+    """Write one BGRA pixel if it lands inside the buffer."""
+    if 0 <= x < w and 0 <= y < h:
+        i = (y * w + x) * 4
+        buf[i] = color[0]
+        buf[i + 1] = color[1]
+        buf[i + 2] = color[2]
+        buf[i + 3] = color[3]
+        return 1
+    return 0
+
+
+def draw_rect(buf, w: int, h: int, x, y, rw, rh,
+              color=(0, 80, 255, 255), thick=2) -> int:
+    """Outlined rectangle in BGRA order. Returns pixels written."""
+    n = 0
+    x0, y0 = int(x), int(y)
+    x1, y1 = int(x + rw), int(y + rh)
+    for t in range(thick):
+        for xx in range(x0, x1 + 1):
+            n += _put(buf, w, h, xx, y0 + t, color)
+            n += _put(buf, w, h, xx, y1 - t, color)
+        for yy in range(y0, y1 + 1):
+            n += _put(buf, w, h, x0 + t, yy, color)
+            n += _put(buf, w, h, x1 - t, yy, color)
+    return n
+
+
+def draw_number(buf, w: int, h: int, x, y, num, scale=2,
+                fg=(255, 255, 255, 255), bg=(20, 20, 20, 255)) -> int:
+    """Draw a decimal number with the built-in 3x5 font. Returns pixels."""
+    s = str(int(num))
+    n = 0
+    pad = 1
+    box_w = len(s) * (3 * scale + scale) + pad * 2
+    box_h = 5 * scale + pad * 2
+    for yy in range(int(y), int(y) + box_h):
+        for xx in range(int(x), int(x) + box_w):
+            n += _put(buf, w, h, xx, yy, bg)
+    cx = int(x) + pad
+    for ch in s:
+        glyph = _DIGITS.get(ch)
+        if glyph:
+            for row, bits in enumerate(glyph):
+                for col, bit in enumerate(bits):
+                    if bit == "1":
+                        for dy in range(scale):
+                            for dx in range(scale):
+                                n += _put(buf, w, h, cx + col * scale + dx,
+                                          int(y) + pad + row * scale + dy, fg)
+        cx += 3 * scale + scale
+    return n
+
+
 class Driver:
     """Drives Browserr over its automation protocol.
 
@@ -357,6 +426,37 @@ class Driver:
                     raise TimeoutError("no screenshot arrived")
                 self._cond.wait(min(remaining, 0.25))
         return self.shots[-1]
+
+    def screenshot_annotated(self, path, tab: int = 0, timeout=15.0):
+        """Screenshot with every interactive element boxed and numbered by
+        its stable ref (element 7 is ref e7), plus the item list, so an
+        agent and a human can both point at the same element.
+
+        Returns {path, w, h, items: [{ref, num, label, x, y, w, h}],
+        pixels_drawn}."""
+        r = self.read_structure(tab, timeout)
+        w, h, bgra = self.screenshot(tab)
+        buf = bytearray(bgra)
+        items = []
+        drawn = 0
+        for group in ("buttons", "inputs", "selects"):
+            for el in (r.get(group) or []):
+                ref = str(el.get("ref") or "")
+                if not ref[1:].isdigit():
+                    continue
+                num = int(ref[1:])
+                bw, bh = int(el.get("w") or 0), int(el.get("h") or 0)
+                if bw <= 0 or bh <= 0:
+                    continue
+                x, y = int(el.get("x") or 0), int(el.get("y") or 0)
+                drawn += draw_rect(buf, w, h, x, y, bw, bh)
+                drawn += draw_number(buf, w, h, x + 2, y + 2, num)
+                items.append({"ref": ref, "num": num,
+                              "label": el.get("label") or el.get("text") or "",
+                              "x": x, "y": y, "w": bw, "h": bh})
+        save_png(path, w, h, bytes(buf))
+        return {"path": path, "w": w, "h": h, "items": items,
+                "pixels_drawn": drawn}
 
     def click(self, x, y, tab: int = 0) -> None:
         self.cmd({"cmd": "input", "tab": tab, "kind": "down", "x": x, "y": y, "button": "left"})

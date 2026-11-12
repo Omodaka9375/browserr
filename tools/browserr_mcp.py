@@ -18,7 +18,7 @@ Tools:
     browser_intercept / browser_pending_requests / browser_intercept_answer
     browser_net / browser_frames
     browser_set_field / browser_fill_form / browser_submit_form
-    browser_read_outcome / browser_click_ref
+    browser_read_outcome / browser_click_ref / browser_screenshot_annotated
 """
 import json
 import os
@@ -318,6 +318,15 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {
             "ref": {"type": "string"}}, "required": ["ref"]},
     },
+    {
+        "name": "browser_screenshot_annotated",
+        "description": "Screenshot with every interactive element boxed and "
+                       "numbered by its stable ref (element 7 is ref e7), "
+                       "plus the item list with labels, so an agent and a "
+                       "human can both point at the same element. Returns "
+                       "{path, items: [{ref, num, label, x, y, w, h}]}.",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
 ]
 
 
@@ -436,6 +445,11 @@ def call_tool(name, args):
             raise McpError(f"stale ref {args['ref']!r}; call "
                            "browser_read_structure first")
         return {"clicked": args["ref"], "at": pt}
+    if name == "browser_screenshot_annotated":
+        os.makedirs(STATE.shot_dir, exist_ok=True)
+        path = os.path.join(STATE.shot_dir,
+                            f"annotated-{int(__import__('time').time())}.png")
+        return d.screenshot_annotated(path)
     raise McpError(f"unknown tool {name}")
 
 
