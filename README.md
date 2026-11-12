@@ -6,20 +6,16 @@ A Servo-based, headless browser engine built for AI agents.
 
 Browserr is an alternative to embedding Chromium in an agent stack: a single
 `engine` binary (Rust + Servo) that renders pages headlessly, blocks ads, and
-exposes a 20-command loopback protocol - one binary, one crypto stack, ~105 MB
-release (measured: 105.4 MB on Windows, 103.6 MB on Linux; ~40 MB archived).
-Rendering is CPU by default: the engine starts instantly and never fails on
-GPU-less machines (CI runners, containers, boards like the Raspberry Pi).
-`--gpu` opts into hardware rendering (falling back to CPU if no GL context
-can be created); `--software` is accepted as the explicit default.
-Agents drive it through a Python SDK
-(`tools/driver.py`) or through any MCP-capable client with zero integration
-code (`tools/browserr_mcp.py`).
+exposes a 20-command loopback protocol.
+
+Rendering is CPU by default. 
+`--gpu` opts into hardware rendering;
+
+Agents drive it through a Python SDK or through any MCP-capable client.
+
 The automation surface is deliberately small: the entire protocol is auditable
 in an afternoon, unlike CDP.
 
-There is no UI and none is planned. `screenshot` returns what the page looks
-like; that is the whole "visual" story.
 
 ## Features
 
@@ -45,18 +41,14 @@ like; that is the whole "visual" story.
 
 ### Acting on pages
 
-- Selector interaction: `click_element` (scrolls into view, real pointer),
-  `set_value` (native setter, React/Vue-safe), `wait_for_selector`
-- Ref interaction: `click_ref('e7')`, `set_field(ref, value)` and
-  `fill_form({ref: value})` - one round trip for a whole form, with
-  type-aware writes (checkbox/radio, select by value or label,
-  contenteditable) that fire input/change/blur so page validators run
-- Submit cycle: `submit_form()` dispatches the page's own submit event (its
-  validation runs, preventDefault is honored), waits for the navigation or
-  network quiet; `read_outcome()` reports url, alert/aria-live texts and
-  fields violating required/pattern
-- File pickers: `input type=file` clicks surface as events answered with
-  local file paths (or cancelled); the page reads the picked file normally
+- Selector interaction: `click_element`, `set_value` (React/Vue-safe),
+  `wait_for_selector`
+- Ref interaction: `click_ref`, `set_field`, `fill_form` - stable refs,
+  no selector fragility; a whole form in one round trip, with type-aware
+  writes that fire input/change/blur so page validators run
+- Submit cycle: `submit_form` runs the page's own validation, then
+  `read_outcome` reports the url, alert texts and invalid fields
+- File uploads: picker events answered with local file paths
 
 ### Network control
 
@@ -318,38 +310,26 @@ helper finishes the delete after Servo releases its SQLite handles).
 
 ## Build details
 
-- Servo is built with `default-features = false, features = ["bundled",
-  "js_jit"]`, dropping devtools, clipboard and multiprocess (media is
-  already the dummy backend on Windows). Release profile: thin LTO, one
-  codegen unit, stripped symbols. `panic` remains unwind: tab close needs
-  catch_unwind.
+- Servo is built with `default-features = false`, dropping devtools,
+  clipboard and multiprocess. 
 - Single crypto stack: servo-net pins rustls with aws-lc-rs; the engine's
   own downloads (EasyList, favicons) use a minimal rustls client with the
-  platform verifier rather than pulling in a second TLS stack.
+  platform verifier.
 
 ## Security notes
 
 - The engine socket and the driver port are loopback-only, but any local
   process can connect by default; use `--driver-token` when that matters.
-- No site sandbox: Servo's multiprocess mode is unavailable on Windows, so
-  page code runs in-process with the engine. The engine self-exits on main
-  disconnect, but treat page loads as untrusted code execution; prefer
-  ephemeral profiles for agent work.
+- No site sandbox onWindows: Servo's multiprocess mode is unavailable on
+  Windows prefer ephemeral profiles for agent work.
 - Automation downloads send no page cookies; use them for public URLs only.
 
 ## Known limitations
 
 - Web compatibility is bounded by Servo 0.8: text, documents, search and
   forms work well; heavy SPAs, DRM video and some modern APIs may not.
-- No CDP; the automation protocol is Browserr's own (by design).
 - No devtools, no find-in-page.
-- Do Not Track would require forking servo-net (the interception hook can
-  cancel or replace responses but cannot edit request headers).
 - History records urls only, without page titles.
-- Windows x64, Linux x64/ARM64, and macOS (Apple Silicon).
-- Rendering is CPU by default; `--gpu` needs D3D11 on Windows (surfman WGL
-  requirement), any GL on Linux (llvmpipe works), CGL on macOS (works
-  headless on CI runners).
 
 ## Tests
 
