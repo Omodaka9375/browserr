@@ -118,14 +118,14 @@
     .masthead .wrap { padding-top: clamp(56px, 10vh, 110px); padding-bottom: clamp(36px, 6vh, 64px); }
     .masthead h1 {
       font-family: var(--mono);
-      font-size: clamp(2.6rem, 8vw, 5.2rem);
+      font-size: clamp(2.4rem, 5.6vw, 4.4rem);
       line-height: 1;
       font-weight: 700;
       letter-spacing: -0.04em;
       margin: 0 0 20px;
-      display: flex; align-items: center; gap: 0.22em; flex-wrap: wrap;
+      white-space: nowrap;
     }
-    .masthead h1 img { width: 0.82em; height: 0.82em; }
+    .masthead h1 img { display: inline-block; width: 0.82em; height: 0.82em; vertical-align: middle; margin-right: 0.22em; }
     .masthead h1 .cursor { color: var(--ink-4); font-weight: 400; }
     .masthead .dek {
       font-family: var(--serif);
@@ -223,10 +223,11 @@
     /* ————— hero layout: copy left, terminal right ----- */
     .hero-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(380px, 520px);
-      gap: 48px;
+      grid-template-columns: minmax(0, 1fr) minmax(340px, 440px);
+      gap: 72px;
       align-items: center;
     }
+    .hero-copy { min-width: 0; }
     .hero-term .term { margin: 0; max-width: none; }
     @media (max-width: 1020px) {
       .hero-grid { grid-template-columns: 1fr; gap: 36px; }
