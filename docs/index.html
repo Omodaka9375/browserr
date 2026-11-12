@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-mode="light">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -114,7 +114,7 @@
     .topbar-links { display: flex; gap: 14px; }
 
     /* ————— masthead ————— */
-    .masthead { border-bottom: 3px solid var(--rule-dark); }
+    .masthead {  }
     .masthead .wrap { padding-top: clamp(56px, 10vh, 110px); padding-bottom: clamp(36px, 6vh, 64px); }
     .masthead h1 {
       font-family: var(--mono);
@@ -357,7 +357,7 @@
     footer .fn img { display: inline-block; width: 22px; height: 22px; vertical-align: -4px; margin-right: 10px; }
     footer p { margin: 0; font-family: var(--mono); font-size: 0.72rem; line-height: 1.8; color: #a0a09e; max-width: 46ch; }
     footer a { color: var(--paper); }
-    @media (prefers-color-scheme: dark) { footer p { color: #909090; } }
+    html[data-mode="dark"] footer p { color: #909090; }
 
     /* ————— responsive ————— */
     @media (max-width: 720px) {
@@ -648,8 +648,8 @@
     /* ─────────────────────────────  Mode (paper / ink)  ───────────────── */
     const metaTheme = document.querySelector('meta[name="theme-color"]');
     const modeButtons = document.querySelectorAll('.modebtn');
-    const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    const initialMode = darkQuery.matches ? 'dark' : 'light';
+    /* Paper is the default regardless of the OS colour scheme; Ink is opt-in. */
+    const initialMode = 'light';
 
     function syncModeButtons(mode) {
       for (const b of modeButtons) {
