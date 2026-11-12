@@ -206,7 +206,8 @@ class Driver:
         return self
 
     def __init__(self, engine_path=None, profile_dir=None, port=7411,
-                 width=1200, height=760, log=None, ephemeral=False):
+                 width=1200, height=760, log=None, ephemeral=False,
+                 engine_args=None):
         self._init_common(port, log=log)
         self.width = width
         self.height = height
@@ -214,6 +215,10 @@ class Driver:
 
         engine_path = engine_path or os.environ.get("BROWSERR_ENGINE", ENGINE_DEBUG)
         args = [engine_path]
+        if engine_args:
+            # Extra engine CLI flags (e.g. --software) BEFORE the standard
+            # profile flags; kept verbatim, no validation.
+            args.extend(engine_args)
         if ephemeral:
             # Throwaway profile under %TEMP%; the engine deletes it on exit.
             args.append("--ephemeral")

@@ -21,6 +21,8 @@
 //!           --profile-dir=PATH gives Servo a per-profile config/storage dir.
 //!           --adblock-list=PATH enables request blocking against an EasyList-format file.
 //!           --ephemeral uses a throwaway profile dir under %TEMP% (deleted on exit).
+//!           --software forces CPU rendering (GPU is the default; without the
+//!           flag a GPU-less machine falls back to software automatically).
 //! Automation: eval with an "id" reports {"ev":"evalresult","tab","id","value"};
 //! {"cmd":"screenshot","tab":N} answers with a SHT1 frame (magic, id, w, h, w*h*4 BGRA).
 //! {"cmd":"ping","id":N} answers {"ev":"pong","id":N,"tabs":K,"active":A} (health check).
@@ -1160,7 +1162,25 @@ fn load_adblock(path: &std::path::Path) -> Option<std::rc::Rc<adblock::engine::E
     ))
 }
 
-fn make_context(size: dpi::PhysicalSize<u32>) -> Option<std::rc::Rc<dyn RenderingContext>> {
+fn make_context(
+    size: dpi::PhysicalSize<u32>,
+    force_software: bool,
+) -> Option<std::rc::Rc<dyn RenderingContext>> {
+    // --software: CPU rendering on request (RPis without GL, containers,
+    // machines with a broken driver). Default is still GPU-first with a
+    // software fallback for GPU-less CI runners.
+    if force_software {
+        return match servo::SoftwareRenderingContext::new(size) {
+            Ok(c) => {
+                eprintln!("engine: software rendering context (--software)");
+                Some(std::rc::Rc::new(c))
+            }
+            Err(e) => {
+                eprintln!("engine: no rendering context: {e:?}");
+                None
+            }
+        };
+    }
     // GPU-less / driver-less machines (CI runners) can flake on context
     // creation: retry briefly, then fall back to software.
     for attempt in 0..3 {
@@ -1350,6 +1370,7 @@ fn main() {
     let mut profile_dir = None;
     let mut adblock_list = None;
     let mut ephemeral = false;
+    let mut software = false;
     let mut driver_port = None;
     let mut driver_token = None;
     for a in std::env::args().skip(1) {
@@ -1361,6 +1382,8 @@ fn main() {
             adblock_list = Some(std::path::PathBuf::from(v));
         } else if a == "--ephemeral" {
             ephemeral = true;
+        } else if a == "--software" {
+            software = true;
         } else if let Some(v) = a.strip_prefix("--driver-port=") {
             driver_port = v.parse::<u16>().ok();
         } else if let Some(v) = a.strip_prefix("--driver-token=") {
@@ -1460,7 +1483,7 @@ fn main() {
     )));
 
     let make_tab = |id: u64| -> Option<Tab> {
-        let context = make_context(initial_size)?;
+        let context = make_context(initial_size, software)?;
         let _ = context.make_current();
         let delegate = std::rc::Rc::new(FrameDelegate {
             tab: id,
