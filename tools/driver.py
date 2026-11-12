@@ -1061,6 +1061,231 @@ class Driver:
         js = self.SET_FIELD_JS % (json.dumps(ref_or_selector), json.dumps(value))
         return self.eval_js(js, tab, timeout)
 
+    FILL_FORM_JS = r"""(() => {
+        // Batch field write: ONE round trip for a whole form. `plan` maps a
+        // stable ref ('e7') or a CSS selector to the value to write; the
+        // write is type-aware, same rules as set_field.
+        const plan = %s;
+        const refs = window.__browserr_refs || {};
+        const resolve = (key) => /^e\d+$/.test(key)
+            ? refs[key] : document.querySelector(key);
+        const apply = (el, value) => {
+            if (el.focus) { try { el.focus(); } catch (_) {} }
+            const tag = el.tagName.toLowerCase();
+            const type = (el.type || '').toLowerCase();
+            let how = 'value';
+            if (type === 'checkbox' || type === 'radio') {
+                const want = value === true || value === 1
+                    || ['true', '1', 'checked', 'yes', 'on'].includes(String(value).toLowerCase());
+                if (!!el.checked !== want) el.click();
+                how = 'checked';
+            } else if (tag === 'select') {
+                const opts = [...el.options];
+                const v = String(value).trim();
+                const hit = opts.find(o => o.value === v)
+                    || opts.find(o => (o.text || '').trim().toLowerCase() === v.toLowerCase());
+                if (!hit) return {ok: false, error: 'no option: ' + v};
+                el.value = hit.value;
+                how = 'option';
+            } else if (el.isContentEditable) {
+                el.textContent = String(value);
+                how = 'richtext';
+            } else {
+                el.value = String(value);
+            }
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+            el.dispatchEvent(new Event('change', {bubbles: true}));
+            el.dispatchEvent(new Event('blur', {bubbles: true}));
+            return {ok: true, how: how,
+                    value: (type === 'checkbox' || type === 'radio') ? !!el.checked : el.value};
+        };
+        const out = {ok: true, fields: {}};
+        for (const key of Object.keys(plan)) {
+            const el = resolve(key);
+            if (!el || !el.isConnected) {
+                out.ok = false;
+                out.fields[key] = {ok: false, error: 'not found: ' + key};
+                continue;
+            }
+            const r = apply(el, plan[key]);
+            if (!r.ok) out.ok = false;
+            out.fields[key] = r;
+        }
+        return out;
+    })()"""
+
+    SUBMIT_FORM_JS = r"""(() => {
+        // Submit a form by ref/selector (a <form>, a field or a submit
+        // button), else the first form on the page. requestSubmit when
+        // available; otherwise a submit event and, if not prevented,
+        // form.submit(). Never cancels a main-frame navigation.
+        const key = %s;
+        const refs = window.__browserr_refs || {};
+        const pick = (k) => /^e\d+$/.test(k)
+            ? refs[k] : document.querySelector(k);
+        let el = key ? pick(key) : null;
+        if (key && (!el || !el.isConnected)) return {ok: false, error: 'not found: ' + key};
+        let form = null;
+        if (el && el.tagName === 'FORM') form = el;
+        else if (el) form = el.form || (el.closest ? el.closest('form') : null);
+        if (!form && document.forms && document.forms.length) form = document.forms[0];
+        if (!form) return {ok: false, error: 'no form on the page'};
+        const invalid_hint = [];
+        for (const f of form.querySelectorAll('input,textarea,select')) {
+            if (f.disabled) continue;
+            const type = (f.type || '').toLowerCase();
+            const val = String(f.value == null ? '' : f.value).trim();
+            if (f.hasAttribute('required')
+                && ((type === 'checkbox' || type === 'radio') ? !f.checked : val === '')) {
+                invalid_hint.push(f.name || f.id || f.tagName.toLowerCase());
+            }
+        }
+        const submitter = (el && (el.tagName === 'BUTTON' || el.tagName === 'INPUT')) ? el : null;
+        // Mark that the submit event was seen, so the caller can wait for
+        // the dispatch to drain (the click path is asynchronous).
+        window.__browserr_submit_seen = 0;
+        form.addEventListener('submit', function () {
+            window.__browserr_submit_seen = 1;
+        }, true);
+        // Dispatch the submit event ourselves, then submit natively if the
+        // page did not prevent it. servo 0.8's requestSubmit (and a click on
+        // a submit button) does NOT reach the page's submit listeners, which
+        // silently skips client-side validation; this path is deterministic.
+        const ev = new Event('submit', {bubbles: true, cancelable: true});
+        const notPrevented = form.dispatchEvent(ev);
+        let how = 'submit-event';
+        if (notPrevented) {
+            if (typeof form.submit === 'function') {
+                form.submit();
+                how = 'submit-event+native';
+            } else if (typeof form.requestSubmit === 'function') {
+                form.requestSubmit(submitter || undefined);
+                how = 'submit-event+requestSubmit';
+            }
+        }
+        return {ok: true, how: how, action: form.action || '',
+                method: (form.method || 'get').toLowerCase(),
+                prevented: !notPrevented, invalid_hint: invalid_hint};
+    })()"""
+
+    OUTCOME_JS = r"""(() => {
+        // What the page says after an action: url/title, alert and
+        // aria-live texts (validation errors, toasts) and fields that
+        // violate their required/pattern constraints.
+        const out = {url: location.href, title: document.title,
+                     alerts: [], invalid_fields: []};
+        const seen = new Set();
+        for (const el of document.querySelectorAll(
+                '[role=alert],[aria-live],[role=status],.error,.errors,.alert,[data-error]')) {
+            const t = ((el.textContent || '') + ' ' + (el.getAttribute('data-error') || ''))
+                .replace(/\s+/g, ' ').trim();
+            if (!t || seen.has(t)) continue;
+            seen.add(t);
+            out.alerts.push(t.slice(0, 200));
+            if (out.alerts.length >= 12) break;
+        }
+        for (const el of document.querySelectorAll('input,textarea,select')) {
+            if (el.disabled || el.readOnly) continue;
+            const reasons = [];
+            const type = (el.type || '').toLowerCase();
+            const val = String(el.value == null ? '' : el.value);
+            if (el.hasAttribute('required')
+                && ((type === 'checkbox' || type === 'radio') ? !el.checked : val.trim() === '')) {
+                reasons.push('required');
+            }
+            const pat = el.getAttribute('pattern');
+            if (pat && val) {
+                try {
+                    if (!new RegExp('^(?:' + pat + ')$').test(val)) reasons.push('pattern');
+                } catch (_) {}
+            }
+            if (reasons.length) {
+                out.invalid_fields.push({name: el.name || el.id || '', reasons: reasons});
+            }
+        }
+        return out;
+    })()"""
+
+    def fill_form(self, fields, tab: int = 0, timeout=15.0):
+        """Write many fields in ONE round trip. `fields` maps a stable ref
+        ('e7') or a CSS selector to a value; writes are type-aware (see
+        set_field). Returns {ok, fields: {key: {ok, how, value}}}."""
+        js = self.FILL_FORM_JS % json.dumps(fields)
+        return self.eval_js(js, tab, timeout)
+
+    def submit_form(self, ref_or_selector=None, tab: int = 0, timeout=10.0):
+        """Submit a form: by ref/selector (a form, a field or a submit
+        button), else the first form on the page. Returns
+        {ok, how, action, method, invalid_hint}."""
+        js = self.SUBMIT_FORM_JS % json.dumps(ref_or_selector)
+        res = self.eval_js(js, tab, timeout)
+        if not res or not res.get("ok"):
+            return res
+        # requestSubmit dispatches synchronously; the click fallback is
+        # asynchronous, so wait until the page has seen the submit event
+        # (or the document went away because a navigation started).
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            try:
+                seen = self.eval_js("window.__browserr_submit_seen", tab, timeout=1.0)
+            except TimeoutError:
+                break
+            if seen:
+                break
+            time.sleep(0.05)
+        return res
+
+    def read_outcome(self, tab: int = 0, timeout=10.0):
+        """What the page says after an action: url, title, alert/aria-live
+        texts and fields violating required/pattern."""
+        return self.eval_js(self.OUTCOME_JS, tab, timeout)
+
+    def wait_network_idle(self, quiet_ms=500, timeout=10.0, tab: int = 0):
+        """Block until no fetch/XHR has started for `quiet_ms`. The net
+        evidence ring is the clock (no clock skew with the page). Returns
+        True when idle, False on timeout."""
+        js = ("(() => { const r = window.__browserr_net || []; "
+              "const last = r.length ? r[r.length - 1].t : 0; "
+              "return Date.now() - last; })()")
+        deadline = time.time() + timeout
+        while True:
+            try:
+                quiet = self.eval_js(js, tab, timeout=2.0) or 0
+            except TimeoutError:
+                quiet = 0
+            if quiet >= quiet_ms:
+                return True
+            if time.time() >= deadline:
+                return False
+            time.sleep(0.1)
+
+    def submit_and_wait(self, ref_or_selector=None, quiet_ms=500,
+                        timeout=15.0, tab: int = 0):
+        """Submit, settle, then read the outcome. Waits for a navigation to
+        land (form POST/GET) or for the network to go quiet (XHR submit).
+        Returns {submit, navigated, outcome}."""
+        try:
+            before = self.eval_js("location.href", tab)
+        except TimeoutError:
+            before = ""
+        res = self.submit_form(ref_or_selector, tab)
+        deadline = time.time() + timeout
+        navigated = False
+        while time.time() < deadline:
+            time.sleep(0.2)
+            try:
+                now = self.eval_js("location.href", tab, timeout=2.0)
+            except TimeoutError:
+                continue
+            if now and now != before:
+                navigated = True
+                break
+            if self.wait_network_idle(quiet_ms=quiet_ms, timeout=0.5, tab=tab):
+                break
+        self.wait_network_idle(quiet_ms=quiet_ms, timeout=3.0, tab=tab)
+        outcome = self.read_outcome(tab)
+        return {"submit": res, "navigated": navigated, "outcome": outcome}
+
 
 if __name__ == "__main__":
     import sys

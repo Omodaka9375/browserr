@@ -31,6 +31,15 @@ like; that is the whole "visual" story.
 - Selector-based interaction: `click_element` (scrolls into view, real
   pointer event), `set_value` (native setter, React/Vue controlled inputs
   accepted), `wait_for_selector` (SPA render waiting)
+- Ref-based interaction: `click_ref('e7')` and `set_field(ref, value)` use
+  the stable refs from `read_structure`, so no selector fragility
+- Form filling: `fill_form({ref: value, ...})` writes a whole form in one
+  round trip with type-aware writes (checkbox/radio, select by value or
+  label, date, contenteditable), firing input/change/blur so validators run
+- Submit cycle: `submit_form()` dispatches the page's submit event (its
+  validation runs, preventDefault is honored), submits natively, waits for
+  the navigation or network quiet, and `read_outcome()` reports url,
+  alert/aria-live texts and fields that violate required/pattern
 - Console capture (page messages plus Servo network/TLS load errors), file
   downloads, screenshots
 - Fail-closed request interception: arm it, and qualifying requests

@@ -17,6 +17,8 @@ Tools:
     browser_screenshot / browser_tabs
     browser_intercept / browser_pending_requests / browser_intercept_answer
     browser_net / browser_frames
+    browser_set_field / browser_fill_form / browser_submit_form
+    browser_read_outcome / browser_click_ref
 """
 import json
 import os
@@ -264,6 +266,58 @@ TOOLS = [
                        "cross-origin frames report their url only.",
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
+    {
+        "name": "browser_set_field",
+        "description": "Type-aware form field write. target is a stable ref "
+                       "('e7') from browser_read_structure or a CSS selector. "
+                       "Checkbox/radio take a boolean, <select> takes an "
+                       "option value or its label, contenteditable takes "
+                       "text. Fires input, change and blur so framework "
+                       "bindings and validators run. Returns {ok, how, value}.",
+        "inputSchema": {"type": "object", "properties": {
+            "target": {"type": "string"},
+            "value": {}}, "required": ["target", "value"]},
+    },
+    {
+        "name": "browser_fill_form",
+        "description": "Fill many fields in ONE round trip: fields maps a "
+                       "stable ref or CSS selector to its value. Same "
+                       "type-aware writes as browser_set_field. Returns "
+                       "{ok, fields: {target: {ok, how, value}}}.",
+        "inputSchema": {"type": "object", "properties": {
+            "fields": {"type": "object",
+                       "additionalProperties": {},
+                       "description": "target -> value"}},
+            "required": ["fields"]},
+    },
+    {
+        "name": "browser_submit_form",
+        "description": "Submit a form and report what happened. target "
+                       "(optional) is a form, field or submit-button ref/"
+                       "selector; without it the first form is used. "
+                       "Dispatches the submit event (client-side validation "
+                       "runs; preventDefault is honored), then submits "
+                       "natively, waits for the navigation or network "
+                       "quiet, and returns {submit, navigated, outcome}.",
+        "inputSchema": {"type": "object", "properties": {
+            "target": {"type": "string"},
+            "quiet_ms": {"type": "integer"}}, "required": []},
+    },
+    {
+        "name": "browser_read_outcome",
+        "description": "What the page says after an action: url, title, "
+                       "alert/aria-live texts (validation errors, toasts) "
+                       "and fields violating required/pattern.",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "browser_click_ref",
+        "description": "Click the center of a stable ref from the last "
+                       "browser_read_structure (hover first, then a real "
+                       "pointer click). Fails cleanly on a stale ref.",
+        "inputSchema": {"type": "object", "properties": {
+            "ref": {"type": "string"}}, "required": ["ref"]},
+    },
 ]
 
 
@@ -367,6 +421,21 @@ def call_tool(name, args):
         return {"entries": d.net_evidence(limit=args.get("limit", 200))}
     if name == "browser_frames":
         return d.frames()
+    if name == "browser_set_field":
+        return d.set_field(args["target"], args["value"])
+    if name == "browser_fill_form":
+        return d.fill_form(args["fields"])
+    if name == "browser_submit_form":
+        return d.submit_and_wait(args.get("target"),
+                                 quiet_ms=args.get("quiet_ms", 500))
+    if name == "browser_read_outcome":
+        return d.read_outcome()
+    if name == "browser_click_ref":
+        pt = d.click_ref(args["ref"])
+        if pt is None:
+            raise McpError(f"stale ref {args['ref']!r}; call "
+                           "browser_read_structure first")
+        return {"clicked": args["ref"], "at": pt}
     raise McpError(f"unknown tool {name}")
 
 
