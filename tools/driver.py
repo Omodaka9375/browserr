@@ -699,8 +699,10 @@ class Driver:
 
     STRUCTURE_JS = r"""(() => {
         // Structured page inventory: interactive elements + headings, with
-        // rects and a usable CSS selector, so agents can act without
-        // screenshots (feeds click_element/set_value).
+        // rects, a usable CSS selector and a STABLE REF (e1, e2, ...) that
+        // an agent and a human can both point at. Form fields also carry
+        // their label, constraints, current state and computed validity.
+        // Shadow DOM is pierced (querySelector does not cross shadowRoot).
         const sel = (el) => {
             if (el.id) return '#' + CSS.escape(el.id);
             const name = el.getAttribute('name');
@@ -723,34 +725,198 @@ class Driver:
             const r = el.getBoundingClientRect();
             return {x: r.x, y: r.y, w: r.width, h: r.height};
         };
-        const out = {title: document.title, headings: [], buttons: [],
-                     inputs: [], selects: [], links: [], images: []};
+        const txt = (n, max) => ((n && n.textContent) || '')
+            .replace(/\s+/g, ' ').trim().slice(0, max);
         const vis = (el) => {
             const s = getComputedStyle(el);
-            return s.display !== 'none' && s.visibility !== 'hidden';
+            if (s.display === 'none' || s.visibility === 'hidden') return false;
+            if (parseFloat(s.opacity) === 0) return false;
+            return true;
         };
-        for (const h of document.querySelectorAll('h1,h2,h3,h4')) {
-            if (vis(h)) out.headings.push({level: +h.tagName[1], text: h.textContent.trim().slice(0, 200)});
+
+        // Label resolution: aria-labelledby, aria-label, <label for>,
+        // wrapping <label>, then placeholder/title as a last resort.
+        const labelOf = (el) => {
+            const ids = el.getAttribute('aria-labelledby');
+            if (ids) {
+                const t = ids.split(/\s+/).map(id => document.getElementById(id))
+                    .filter(Boolean).map(n => txt(n, 120)).join(' ').trim();
+                if (t) return t;
+            }
+            const al = el.getAttribute('aria-label');
+            if (al && al.trim()) return al.trim().slice(0, 120);
+            if (el.id) {
+                const l = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+                if (l) { const t = txt(l, 120); if (t) return t; }
+            }
+            const wrap = el.closest ? el.closest('label') : null;
+            if (wrap) { const t = txt(wrap, 120); if (t) return t; }
+            if (el.tagName === 'INPUT'
+                && (el.type === 'submit' || el.type === 'button')) return el.value || '';
+            return (el.getAttribute('placeholder') || el.getAttribute('title') || '').slice(0, 120);
+        };
+
+        // Constraints read from attributes: servo 0.8's constraint API is
+        // partial, so validity is computed here instead.
+        const constraintsOf = (el) => {
+            const c = {};
+            if (el.hasAttribute('required')
+                || el.getAttribute('aria-required') === 'true') c.required = true;
+            for (const a of ['pattern', 'minlength', 'maxlength', 'min', 'max',
+                             'step', 'autocomplete', 'inputmode']) {
+                const v = el.getAttribute(a);
+                if (v !== null && v !== '') c[a] = v;
+            }
+            return c;
+        };
+        const validityOf = (el, c) => {
+            const reasons = [];
+            const type = (el.type || '').toLowerCase();
+            const val = String(el.value == null ? '' : el.value);
+            if (!el.disabled && !el.readOnly) {
+                if (c.required) {
+                    const empty = (type === 'checkbox' || type === 'radio')
+                        ? !el.checked : val.trim() === '';
+                    if (empty) reasons.push('required');
+                }
+                if (c.pattern && val) {
+                    try {
+                        if (!new RegExp('^(?:' + c.pattern + ')$').test(val)) reasons.push('pattern');
+                    } catch (_) {}
+                }
+                if (c.maxlength && val.length > +c.maxlength) reasons.push('maxlength');
+                if (c.minlength && val && val.length < +c.minlength) reasons.push('minlength');
+                if (type === 'email' && val
+                    && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(val)) reasons.push('email');
+                if (type === 'url' && val) {
+                    try { new URL(val); } catch (_) { reasons.push('url'); }
+                }
+                if ((type === 'number' || type === 'range') && val) {
+                    const n = parseFloat(val);
+                    if (!isNaN(n)) {
+                        if (c.min !== undefined && n < parseFloat(c.min)) reasons.push('min');
+                        if (c.max !== undefined && n > parseFloat(c.max)) reasons.push('max');
+                    }
+                }
+            }
+            return reasons;
+        };
+
+        // One deep pass: every element, shadow roots included (depth-capped).
+        const all = [];
+        const walk = (root, depth) => {
+            if (depth > 8) return;
+            for (const el of root.querySelectorAll('*')) {
+                all.push(el);
+                if (el.shadowRoot) walk(el.shadowRoot, depth + 1);
+            }
+        };
+        walk(document, 0);
+
+        // Fresh refs each read: a ref from an older page resolves to
+        // nothing, so callers get a clean 'not found'.
+        const refs = {};
+        window.__browserr_refs = refs;
+        let seq = 0;
+        const ref = (el) => {
+            seq += 1;
+            const r = 'e' + seq;
+            refs[r] = el;
+            return r;
+        };
+
+        const out = {title: document.title, url: location.href,
+                     headings: [], buttons: [], inputs: [], selects: [],
+                     links: [], images: [], forms: []};
+        const formIndex = new Map();
+        const formOf = (f) => {
+            if (!formIndex.has(f)) {
+                formIndex.set(f, out.forms.length);
+                out.forms.push({id: f.id || '', name: f.name || '',
+                                action: f.action || '',
+                                method: (f.method || 'get').toLowerCase(),
+                                enctype: f.enctype || '', fields: [], submits: []});
+            }
+            return out.forms[formIndex.get(f)];
+        };
+
+        const field = (el) => {
+            const tag = el.tagName.toLowerCase();
+            let type = (el.type || 'text').toLowerCase();
+            if (tag === 'textarea') type = 'textarea';
+            if (el.isContentEditable && tag !== 'textarea' && tag !== 'input') type = 'richtext';
+            const c = constraintsOf(el);
+            const reasons = validityOf(el, c);
+            const o = {
+                ref: ref(el), tag: tag, type: type,
+                name: el.name || '', id: el.id || '',
+                label: labelOf(el),
+                placeholder: el.placeholder || '',
+                selector: sel(el), ...rect(el),
+                disabled: !!el.disabled, readonly: !!el.readOnly,
+                focused: document.activeElement === el,
+            };
+            if (type === 'checkbox' || type === 'radio') {
+                o.checked = !!el.checked;
+                if (type === 'radio' && el.name) o.group = el.name;
+            } else if (el.isContentEditable) {
+                o.value = txt(el, 200);
+            } else {
+                o.value = String(el.value == null ? '' : el.value).slice(0, 200);
+            }
+            if (Object.keys(c).length) o.constraints = c;
+            o.valid = reasons.length === 0;
+            if (reasons.length) o.invalid = reasons;
+            const f = el.form;
+            if (f) {
+                const meta = formOf(f);
+                meta.fields.push(o.ref);
+                o.form = {id: meta.id, action: meta.action, method: meta.method};
+            }
+            return o;
+        };
+
+        for (const el of all) {
+            if (/^H[1-6]$/.test(el.tagName) && vis(el)) {
+                out.headings.push({level: +el.tagName[1], text: txt(el, 200)});
+            }
         }
-        for (const b of document.querySelectorAll('button, [role=button], input[type=submit], input[type=button]')) {
-            if (!vis(b)) continue;
-            const r = rect(b);
-            if (!r.w || !r.h) continue;
-            out.buttons.push({text: (b.value || b.textContent).trim().slice(0, 80),
-                              selector: sel(b), ...r});
-        }
-        for (const i of document.querySelectorAll('input:not([type=submit]):not([type=button]):not([type=hidden]), textarea')) {
-            if (!vis(i)) continue;
-            const r = rect(i);
+        for (const el of all) {
+            const tag = el.tagName;
+            const isBtn = tag === 'BUTTON'
+                || el.getAttribute('role') === 'button'
+                || (tag === 'INPUT'
+                    && ['submit', 'button', 'reset', 'image'].includes((el.type || '').toLowerCase()));
+            if (!isBtn || !vis(el)) continue;
+            const r = rect(el);
             if (!r.w && !r.h) continue;
-            out.inputs.push({type: i.type || 'text', name: i.name || '', id: i.id || '',
-                             placeholder: i.placeholder || '', selector: sel(i), ...r});
+            const o = {ref: ref(el), text: txt(el, 80) || (el.value || ''),
+                       type: (el.type || 'button').toLowerCase(),
+                       selector: sel(el), ...r, disabled: !!el.disabled};
+            out.buttons.push(o);
+            const f = el.form;
+            if (f) formOf(f).submits.push(o.ref);
         }
-        for (const s of document.querySelectorAll('select')) {
-            if (!vis(s)) continue;
-            const r = rect(s);
-            out.selects.push({name: s.name || '', id: s.id || '', selector: sel(s),
-                              options: [...s.options].map(o2 => o2.value).slice(0, 50), ...r});
+        for (const el of all) {
+            const tag = el.tagName;
+            const type = (el.type || '').toLowerCase();
+            const skip = tag === 'INPUT'
+                && ['submit', 'button', 'reset', 'image', 'hidden'].includes(type);
+            const isField = (tag === 'INPUT' && !skip) || tag === 'TEXTAREA'
+                || (el.isContentEditable && tag !== 'textarea' && tag !== 'input');
+            if (!isField || !vis(el)) continue;
+            const r = rect(el);
+            if (!r.w && !r.h) continue;
+            out.inputs.push(field(el));
+        }
+        for (const el of all) {
+            if (el.tagName !== 'SELECT' || !vis(el)) continue;
+            const o = field(el);
+            o.multiple = !!el.multiple;
+            o.options = [...el.options].slice(0, 80).map(x => ({
+                value: x.value, label: txt(x, 60),
+                disabled: !!x.disabled, selected: !!x.selected}));
+            out.selects.push(o);
         }
         for (const a of document.links) {
             const r = a.getBoundingClientRect();
@@ -768,6 +934,57 @@ class Driver:
         return out;
     })()"""
 
+    REF_RECT_JS = r"""(() => {
+        // Resolve a stable ref from the last read_structure() to a click
+        // point. Stale refs (page navigated since) resolve to null.
+        const el = (window.__browserr_refs || {})[%s];
+        if (!el || !el.isConnected) return null;
+        el.scrollIntoView({block: 'center', inline: 'center'});
+        const r = el.getBoundingClientRect();
+        return {x: r.x + r.width / 2, y: r.y + r.height / 2,
+                w: r.width, h: r.height};
+    })()"""
+
+    SET_FIELD_JS = r"""(() => {
+        // Type-aware field write: checkbox/radio toggle, <select> option by
+        // value or label, contenteditable text, plain value otherwise. All
+        // paths fire input + change + blur so frameworks and validators run.
+        const key = %s, value = %s;
+        const el = /^e\d+$/.test(key)
+            ? (window.__browserr_refs || {})[key]
+            : document.querySelector(key);
+        if (!el || !el.isConnected) return {ok: false, error: 'not found: ' + key};
+        if (el.focus) { try { el.focus(); } catch (_) {} }
+        const tag = el.tagName.toLowerCase();
+        const type = (el.type || '').toLowerCase();
+        let how = 'value';
+        if (type === 'checkbox' || type === 'radio') {
+            const want = value === true || value === 1
+                || ['true', '1', 'checked', 'yes', 'on'].includes(String(value).toLowerCase());
+            if (!!el.checked !== want) el.click();
+            how = 'checked';
+        } else if (tag === 'select') {
+            const opts = [...el.options];
+            const v = String(value).trim();
+            const hit = opts.find(o => o.value === v)
+                || opts.find(o => (o.text || '').trim().toLowerCase() === v.toLowerCase());
+            if (!hit) return {ok: false, error: 'no option: ' + v,
+                              options: opts.map(o => o.value).slice(0, 60)};
+            el.value = hit.value;
+            how = 'option';
+        } else if (el.isContentEditable) {
+            el.textContent = String(value);
+            how = 'richtext';
+        } else {
+            el.value = String(value);
+        }
+        el.dispatchEvent(new Event('input', {bubbles: true}));
+        el.dispatchEvent(new Event('change', {bubbles: true}));
+        el.dispatchEvent(new Event('blur', {bubbles: true}));
+        return {ok: true, how: how,
+                value: (type === 'checkbox' || type === 'radio') ? !!el.checked : el.value};
+    })()"""
+
     def read_page(self, tab: int = 0, timeout=15.0):
         """Extract the page as (title, markdown-ish text): links become
         [label](href), paragraphs get blank-line separation. Token-cheap."""
@@ -776,9 +993,11 @@ class Driver:
 
     def read_structure(self, tab: int = 0, timeout=15.0):
         """Structured page inventory: headings, buttons, inputs, selects,
-        links and images, each with a viewport rect and a usable CSS selector
-        (feeds click_element/set_value). Richer than read_page; use when the
-        agent needs to locate and act on specific UI."""
+        links and images, each with a viewport rect, a usable CSS selector
+        and a stable ref (e1, e2, ...). Form fields carry their label,
+        constraints, current state and computed validity; forms group their
+        fields and submit controls. Shadow DOM is pierced. Richer than
+        read_page; use when the agent needs to locate and act on specific UI."""
         r = self.eval_js(self.STRUCTURE_JS, tab, timeout)
         if not r or not isinstance(r, dict):
             return {"title": "", "headings": [], "buttons": [], "inputs": [],
@@ -817,6 +1036,30 @@ class Driver:
               "el.dispatchEvent(new Event('change',{bubbles:true}));return true;})())"
               % (json.dumps(name_or_id), json.dumps(name_or_id), json.dumps(value)))
         return bool(self.eval_js(js, tab, timeout))
+
+    def click_ref(self, ref, tab: int = 0, timeout=10.0):
+        """Click the center of a stable ref from the last read_structure().
+        Scrolls it into view first. Returns the click point, or None when
+        the ref is stale (the page navigated since the read)."""
+        pt = self.eval_js(self.REF_RECT_JS % json.dumps(ref), tab, timeout)
+        if not pt or not isinstance(pt, dict):
+            return None
+        # Hover first: servo resolves the click target from the pointer
+        # position, so a move before down/up is what makes hover/focus behave.
+        self.move(pt["x"], pt["y"], tab=tab)
+        self.click(pt["x"], pt["y"], tab=tab)
+        return pt
+
+    def set_field(self, ref_or_selector, value, tab: int = 0, timeout=10.0):
+        """Type-aware field write: a stable ref ('e7') or a CSS selector.
+
+        Checkbox/radio take a boolean (true/'checked'/1...), <select> takes
+        an option value or its label, contenteditable takes text, everything
+        else takes a plain value. Fires input, change and blur so framework
+        bindings and validators run. Returns {ok, how, value} or
+        {ok: False, error}."""
+        js = self.SET_FIELD_JS % (json.dumps(ref_or_selector), json.dumps(value))
+        return self.eval_js(js, tab, timeout)
 
 
 if __name__ == "__main__":

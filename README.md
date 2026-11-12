@@ -23,7 +23,11 @@ like; that is the whole "visual" story.
   keyboard); JavaScript evaluation with results returned as JSON
 - Prose extraction (`read_page`) and structured page inventory
   (`read_structure`: headings, buttons, inputs, selects, links, images -
-  each with a viewport rect and a usable CSS selector)
+  each with a viewport rect, a usable CSS selector and a stable ref like
+  `e7`). Form fields carry their label (label for/wrapping/aria), their
+  constraints (required, pattern, min/max, maxlength, autocomplete), their
+  current state (value, checked, focused) and computed validity; forms
+  group their fields and submit controls. Shadow DOM is pierced
 - Selector-based interaction: `click_element` (scrolls into view, real
   pointer event), `set_value` (native setter, React/Vue controlled inputs
   accepted), `wait_for_selector` (SPA render waiting)

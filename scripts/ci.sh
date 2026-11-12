@@ -11,7 +11,7 @@ root="$PWD"
 GPULESS=0
 [ "${1:-}" = "--gpuless" ] && GPULESS=1
 
-SDK_TESTS="test_driver test_agent test_elements test_structure test_watchdog test_features test_mcp test_scroll test_bind test_attach test_hardening test_intercept test_auth test_filepicker test_net test_frames"
+SDK_TESTS="test_driver test_agent test_elements test_structure test_watchdog test_features test_mcp test_scroll test_bind test_attach test_hardening test_intercept test_auth test_filepicker test_net test_frames test_form"
 RAW_TESTS="test_input test_cursor_zoom test_close"
 GPULESS_TESTS="test_bind"
 
