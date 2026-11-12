@@ -43,6 +43,13 @@ like; that is the whole "visual" story.
   working so the agent can watch the page; `wait_for_user()` (MCP
   `browser_wait_for_user`) long-polls until the handoff clears or the
   page navigates
+- Trust layer: persistent profiles (`browser_start(profile="...")`,
+  logins survive sessions); evidence shots and an append-only action log
+  (navigate/fill/submit/click/auth with timestamps, never credentials) in
+  a per-profile evidence dir; stored credentials auto-answer HTTP auth
+  challenges for their host and unknown hosts fail closed; submitting a
+  payment or captcha page refuses without an explicit human confirm
+  (`submit_form(confirm=True)`, NeedsConfirmError otherwise)
 - Form filling: `fill_form({ref: value, ...})` writes a whole form in one
   round trip with type-aware writes (checkbox/radio, select by value or
   label, date, contenteditable), firing input/change/blur so validators run

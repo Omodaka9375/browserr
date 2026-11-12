@@ -432,6 +432,7 @@
         <div><dt>Protocol</dt><dd>20 commands</dd></div>
         <div><dt>Telemetry</dt><dd>0</dd></div>
         <div><dt>Handoff</dt><dd>pause / resume</dd></div>
+        <div><dt>Fail-closed</dt><dd>yes</dd></div>
       </dl>
 
       <!-- Mode switcher -->
@@ -477,6 +478,7 @@
             <tr><td>submit</td><td><b>Submit and read the outcome.</b> submit_form() runs the page's own validation, honors preventDefault, submits natively, waits for the navigation or network quiet, then reports url, alerts and invalid fields.</td></tr>
             <tr><td>point</td><td><b>Shared references.</b> Every element has a stable ref and screenshots can be annotated with numbered boxes, so an agent says "I will fill 3, 4, then click 7" and a human can answer "no, 7 is the wrong button".</td></tr>
             <tr><td>handoff</td><td><b>Humans take over when it matters.</b> detect_handoff() spots CAPTCHAs, one-time codes, password and payment fields; pause() blocks every mutating action while reads keep working, and wait_for_user() watches until the human is done. Fail-closed: unanswered means blocked, not guessed.</td></tr>
+            <tr><td>trust</td><td><b>Fail-closed by design.</b> Persistent profiles keep logins; evidence shots and an append-only action log record what happened (never credentials); stored credentials answer HTTP auth challenges automatically while unknown hosts are denied; a payment or captcha submit needs an explicit human confirm.</td></tr>
           </tbody>
         </table>
       </div>

@@ -42,6 +42,7 @@ ENGINE_DEBUG = (_ENGINE_BUNDLED if _os.path.exists(_ENGINE_BUNDLED)
 ENGINE_RELEASE = (_ENGINE_BUNDLED if _os.path.exists(_ENGINE_BUNDLED)
                   else ROOT + "/engine/target/release/engine" + EXE_SUFFIX)
 import json
+import re
 import socket
 import struct
 import subprocess
@@ -70,6 +71,15 @@ class PausedError(RuntimeError):
     eval-based writers) so an agent loop fails loudly instead of acting
     while the user is in control. Reads keep working: the agent can still
     watch the page and wait for browser_resume.
+    """
+
+
+class NeedsConfirmError(RuntimeError):
+    """The action is destructive and the page shows payment/captcha UI.
+
+    Fail-closed gate for submit_form(): when detect_handoff() sees payment
+    or captcha conditions, the submit refuses to run until the caller
+    passes confirm=True (i.e. a human said yes in the loop). Never guessed.
     """
 
 
@@ -305,6 +315,14 @@ class Driver:
         self.dead = False           # set by the reader thread on socket loss
         self._paused = None        # reason string while a human has control
 
+        # Trust layer state: evidence dir, action log, stored credentials.
+        self.evidence_dir = None
+        self.action_log_path = None
+        self._credentials = {}     # host[:port] -> (user, password)
+        self._auth_seen = set()    # auth event ids already answered
+        self._auth_thread = None
+        self._log_lock = threading.Lock()
+
     # -- protocol ---------------------------------------------------------
 
     # Engine commands that mutate the page. Everything else (ping, resize,
@@ -415,6 +433,8 @@ class Driver:
     # -- high level -------------------------------------------------------
 
     def navigate(self, url: str, tab: int = 0) -> None:
+        self._guard_paused("navigate")
+        self._log_action("navigate", url=url)
         self.cmd({"cmd": "navigate", "url": url, "tab": tab})
 
     def wait_load(self, tab: int = 0, timeout=15.0, contains: str = None):
@@ -1190,6 +1210,7 @@ class Driver:
         # position, so a move before down/up is what makes hover/focus behave.
         self.move(pt["x"], pt["y"], tab=tab)
         self.click(pt["x"], pt["y"], tab=tab)
+        self._log_action("click_ref", ref=ref)
         return pt
 
     def set_field(self, ref_or_selector, value, tab: int = 0, timeout=10.0):
@@ -1357,30 +1378,18 @@ class Driver:
         {ok, fields: {key: {ok, how, value}}}."""
         self._guard_paused("fill_form")
         js = self.FILL_FORM_JS % json.dumps(fields)
-        return self.eval_js(js, tab, timeout)
-
-    def submit_form(self, ref_or_selector=None, tab: int = 0, timeout=10.0):
-        """Submit a form: by ref/selector (a form, a field or a submit
-        button), else the first form on the page. Blocked while paused.
-        Returns {ok, how, action, method, prevented, invalid_hint}."""
-        self._guard_paused("submit_form")
-        js = self.SUBMIT_FORM_JS % json.dumps(ref_or_selector)
         res = self.eval_js(js, tab, timeout)
-        if not res or not res.get("ok"):
-            return res
-        # requestSubmit dispatches synchronously; the click fallback is
-        # asynchronous, so wait until the page has seen the submit event
-        # (or the document went away because a navigation started).
-        deadline = time.time() + 2.0
-        while time.time() < deadline:
-            try:
-                seen = self.eval_js("window.__browserr_submit_seen", tab, timeout=1.0)
-            except TimeoutError:
-                break
-            if seen:
-                break
-            time.sleep(0.05)
+        self._log_action("fill_form",
+                         targets=sorted((res.get("fields") or {}).keys()),
+                         ok=(res or {}).get("ok"))
         return res
+
+    def submit_form(self, ref_or_selector=None, tab: int = 0, timeout=10.0,
+                    confirm=False):
+        """Submit a form (see the full docstring on the trust-layer
+        override; kept for positional compatibility)."""
+        return Driver._submit_form_impl(self, ref_or_selector, tab, timeout,
+                                        confirm)
 
     def read_outcome(self, tab: int = 0, timeout=10.0):
         """What the page says after an action: url, title, alert/aria-live
@@ -1407,15 +1416,18 @@ class Driver:
             time.sleep(0.1)
 
     def submit_and_wait(self, ref_or_selector=None, quiet_ms=500,
-                        timeout=15.0, tab: int = 0):
+                        timeout=15.0, tab: int = 0, confirm=False,
+                        evidence=False):
         """Submit, settle, then read the outcome. Waits for a navigation to
         land (form POST/GET) or for the network to go quiet (XHR submit).
-        Returns {submit, navigated, outcome}."""
+        confirm is the destructive-action gate (see submit_form); evidence
+        additionally saves a screenshot of the landed page to the evidence
+        dir. Returns {submit, navigated, outcome[, evidence]}."""
         try:
             before = self.eval_js("location.href", tab)
         except TimeoutError:
             before = ""
-        res = self.submit_form(ref_or_selector, tab)
+        res = self.submit_form(ref_or_selector, tab, confirm=confirm)
         deadline = time.time() + timeout
         navigated = False
         while time.time() < deadline:
@@ -1431,7 +1443,13 @@ class Driver:
                 break
         self.wait_network_idle(quiet_ms=quiet_ms, timeout=3.0, tab=tab)
         outcome = self.read_outcome(tab)
-        return {"submit": res, "navigated": navigated, "outcome": outcome}
+        out = {"submit": res, "navigated": navigated, "outcome": outcome}
+        if evidence and self.evidence_dir:
+            try:
+                out["evidence"] = self.evidence(mode="plain", tab=tab)
+            except (TimeoutError, EngineDeadError):
+                out["evidence"] = {"error": "screenshot failed"}
+        return out
 
     HANDOFF_JS = r"""(() => {
         // Things a human must do: CAPTCHAs, one-time codes, passwords with
@@ -1488,6 +1506,146 @@ class Driver:
         without a stored credential, payment fields, cookie consent).
         Returns {handoff, reasons, paused_hint}."""
         return self.eval_js(self.HANDOFF_JS, tab, timeout)
+
+    # -- trust layer: evidence, action log, credentials, confirm gate -------
+
+    @staticmethod
+    def _host_of(url: str) -> str:
+        """host[:port] of a URL; empty string when unparseable."""
+        m = re.match(r"^[a-z][a-z0-9+.-]*://([^/?#]+)", (url or "").lower())
+        return m.group(1) if m else ""
+
+    def enable_evidence(self, directory) -> None:
+        """Set the directory annotated/plain evidence shots are written to
+        (created on demand) and where the append-only action log lives."""
+        self.evidence_dir = directory
+        os.makedirs(directory, exist_ok=True)
+        self.action_log_path = os.path.join(directory, "actions.jsonl")
+
+    def _shot_file(self, directory, kind):
+        path = os.path.join(directory, f"{kind}-{int(time.time() * 1000)}.png")
+        w, h, bgra = self.screenshot()
+        save_png(path, w, h, bgra)
+        return path
+
+    def evidence(self, mode="plain", tab: int = 0, timeout=20.0):
+        """Write a screenshot of the current state to the evidence dir.
+        mode 'plain' saves the frame; 'annotated' adds numbered boxes and
+        returns the item list. Returns {path, ...} or an error dict when
+        no evidence dir is configured."""
+        if not self.evidence_dir:
+            return {"error": "no evidence dir; call enable_evidence first"}
+        if mode == "annotated":
+            path = os.path.join(
+                self.evidence_dir, f"ev-{int(time.time() * 1000)}.png")
+            res = self.screenshot_annotated(path, tab, timeout)
+            self._log_action("evidence", mode="annotated",
+                             path=res.get("path"))
+            return res
+        out = {"path": self._shot_file(self.evidence_dir, "ev")}
+        self._log_action("evidence", mode="plain", path=out["path"])
+        return out
+
+    def _log_action(self, kind: str, **fields) -> None:
+        """Append one JSON line to the action log (best effort; never raises)."""
+        if not self.action_log_path:
+            return
+        try:
+            line = {"t": round(time.time(), 3), "kind": kind}
+            line.update(fields)
+            with self._log_lock:
+                with open(self.action_log_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(line, default=str) + "\n")
+        except OSError:
+            pass
+
+    def set_credentials(self, origin_or_host, user, password) -> None:
+        """Store credentials for a host (or URL; only the host[:port] is
+        kept). Used automatically when the engine reports an HTTP auth
+        challenge for that host; never written to the action log."""
+        host = self._host_of(origin_or_host) if "://" in origin_or_host \
+            else origin_or_host
+        self._credentials[host] = (user, password)
+
+    def start_auto_auth(self) -> None:
+        """Answer engine auth challenges from stored credentials, in the
+        background. Unknown hosts fail closed (challenge dropped = no
+        credentials sent). Idempotent."""
+        if self._auth_thread is not None:
+            return
+
+        def loop():
+            while not self.dead:
+                try:
+                    ev = self.wait_for(
+                        lambda e: e.get("ev") == "auth", timeout=1.0)
+                except (TimeoutError, EngineDeadError):
+                    continue
+                rid = ev.get("id")
+                if rid in self._auth_seen:
+                    continue
+                self._auth_seen.add(rid)
+                host = self._host_of(ev.get("url") or "")
+                creds = self._credentials.get(host)
+                # Drop-on-no-creds: answering with nothing fails closed.
+                self.auth_answer(rid, creds[0] if creds else None,
+                                 creds[1] if creds else None)
+                self._log_action("auth", host=host,
+                                  answered=bool(creds))
+
+        self._auth_thread = threading.Thread(target=loop, daemon=True)
+        self._auth_thread.start()
+
+    def _submit_form_impl(self, ref_or_selector=None, tab: int = 0,
+                          timeout=10.0, confirm=False):
+        """Submit a form, with a fail-closed destructive-action gate.
+
+        When the page shows payment or captcha conditions (detect_handoff),
+        submitting needs confirm=True - i.e. a human said yes - otherwise
+        NeedsConfirmError is raised and nothing is submitted. Returns
+        {ok, how, action, method, prevented, invalid_hint}."""
+        self._guard_paused("submit_form")
+        if not confirm:
+            try:
+                h = self.detect_handoff(tab, timeout=5.0)
+            except (TimeoutError, EngineDeadError):
+                h = {}
+            risky = {r.get("kind") for r in (h.get("reasons") or [])}
+            if {"payment", "captcha"} & risky:
+                raise NeedsConfirmError(
+                    "page shows " + "/".join(sorted(risky))
+                    + " conditions; call submit_form(confirm=True) after a "
+                      "human confirms")
+        self._log_action("submit", target=ref_or_selector, confirm=confirm)
+        js = self.SUBMIT_FORM_JS % json.dumps(ref_or_selector)
+        res = self.eval_js(js, tab, timeout)
+        if not res or not res.get("ok"):
+            return res
+        # requestSubmit dispatches synchronously; the click fallback is
+        # asynchronous, so wait until the page has seen the submit event
+        # (or the document went away because a navigation started).
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            try:
+                seen = self.eval_js("window.__browserr_submit_seen", tab, timeout=1.0)
+            except TimeoutError:
+                break
+            if seen:
+                break
+            time.sleep(0.05)
+        return res
+
+    # -- net evidence / frames ------------------------------------------------
+
+    def net_evidence(self, limit=200, tab: int = 0, timeout=10.0):
+        """Recent page network activity (fetch/XHR) from the ring buffer
+        the document-start user script keeps on window.__browserr_net.
+        Runs in every frame; this reads the top frame's ring."""
+        js = ("JSON.stringify((window.__browserr_net||[]).slice(-%d))" % limit)
+        raw = self.eval_js(js, tab, timeout)
+        if isinstance(raw, str):
+            return json.loads(raw)
+        return raw or []
 
 
 if __name__ == "__main__":

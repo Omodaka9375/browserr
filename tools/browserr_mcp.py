@@ -21,11 +21,13 @@ Tools:
     browser_read_outcome / browser_click_ref / browser_screenshot_annotated
     browser_pause / browser_resume / browser_detect_handoff
     browser_wait_for_user
+    browser_evidence / browser_set_credentials (profile on browser_start)
 """
 import json
 import os
 import sys
 import threading
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from driver import Driver, save_png
@@ -52,17 +54,37 @@ class State:
                 raise McpError("browser not started; call browser_start first")
             return self.driver
 
-    def start(self, attach_port=None, token=None):
+    def start(self, attach_port=None, token=None, profile=None):
         with self.lock:
             if self.driver is not None:
                 return {"started": False, "note": "already running"}
             if attach_port:
                 self.driver = Driver.attach(attach_port, token=token)
+            elif profile:
+                # Persistent profile: logins and storage survive sessions.
+                # Name is sanitized to a single path component.
+                safe = "".join(c for c in profile if c.isalnum() or c in "-_")
+                if not safe:
+                    raise McpError("invalid profile name")
+                pdir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "mcp-profiles", safe)
+                os.makedirs(pdir, exist_ok=True)
+                self.driver = Driver(profile_dir=pdir)
             else:
                 self.driver = Driver(ephemeral=True)
+            # Trust layer on by default: evidence + action log per profile
+            # (or per session for ephemeral/attach).
+            label = profile or f"session-{int(time.time())}"
+            evdir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "mcp-evidence", safe_name(label))
+            os.makedirs(evdir, exist_ok=True)
+            self.driver.enable_evidence(evdir)
+            self.driver.start_auto_auth()
             # spawn = a fresh engine this server owns; attach = connected to
             # a running engine's driver port. There is no headed mode.
-            return {"started": True, "mode": "attach" if attach_port else "spawn"}
+            return {"started": True, "mode": "attach" if attach_port else "spawn",
+                    "profile": profile or "ephemeral",
+                    "evidence_dir": evdir}
 
     def stop(self):
         with self.lock:
@@ -71,6 +93,10 @@ class State:
             self.driver.close()
             self.driver = None
             return {"stopped": True}
+
+
+def safe_name(s):
+    return "".join(c for c in s if c.isalnum() or c in "-_") or "default"
 
 
 STATE = State()
@@ -300,10 +326,19 @@ TOOLS = [
                        "Dispatches the submit event (client-side validation "
                        "runs; preventDefault is honored), then submits "
                        "natively, waits for the navigation or network "
-                       "quiet, and returns {submit, navigated, outcome}.",
+                       "quiet, and returns {submit, navigated, outcome}. "
+                       "FAIL-CLOSED: if the page shows payment or captcha "
+                       "conditions, the submit refuses to run unless a "
+                       "human confirmed (confirm: true). evidence: true "
+                       "saves a screenshot of the landed page.",
         "inputSchema": {"type": "object", "properties": {
             "target": {"type": "string"},
-            "quiet_ms": {"type": "integer"}}, "required": []},
+            "quiet_ms": {"type": "integer"},
+            "confirm": {"type": "boolean",
+                        "description": "human confirmation for payment/captcha pages"},
+            "evidence": {"type": "boolean",
+                         "description": "save a screenshot of the landed page"}},
+            "required": []},
     },
     {
         "name": "browser_read_outcome",
@@ -355,6 +390,31 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "browser_evidence",
+        "description": "Save a screenshot to the evidence directory as "
+                       "proof of what the page looked like at this moment. "
+                       "mode 'plain' saves the frame; 'annotated' adds "
+                       "numbered boxes per element ref and returns the item "
+                       "list. Returns {path, ...}.",
+        "inputSchema": {"type": "object", "properties": {
+            "mode": {"type": "string", "enum": ["plain", "annotated"]}},
+            "required": []},
+    },
+    {
+        "name": "browser_set_credentials",
+        "description": "Store credentials for a host so HTTP auth "
+                       "challenges for it are answered automatically; hosts "
+                       "without stored credentials fail closed (challenge "
+                       "denied, nothing sent). Credentials never appear in "
+                       "the action log.",
+        "inputSchema": {"type": "object", "properties": {
+            "host": {"type": "string",
+                     "description": "hostname or full URL (host[:port] kept)"},
+            "user": {"type": "string"},
+            "password": {"type": "string"}},
+            "required": ["host", "user", "password"]},
+    },
+    {
         "name": "browser_wait_for_user",
         "description": "Long-poll the browser while paused: returns as soon "
                        "as the page changes or the page stops showing a "
@@ -396,7 +456,8 @@ def _wait_for_user(timeout_seconds=30):
 
 def call_tool(name, args):
     if name == "browser_start":
-        return STATE.start(args.get("attach_port"), token=args.get("token"))
+        return STATE.start(args.get("attach_port"), token=args.get("token"),
+                           profile=args.get("profile"))
     if name == "browser_stop":
         return STATE.stop()
 
@@ -500,7 +561,14 @@ def call_tool(name, args):
         return d.fill_form(args["fields"])
     if name == "browser_submit_form":
         return d.submit_and_wait(args.get("target"),
-                                 quiet_ms=args.get("quiet_ms", 500))
+                                 quiet_ms=args.get("quiet_ms", 500),
+                                 confirm=args.get("confirm", False),
+                                 evidence=args.get("evidence", False))
+    if name == "browser_evidence":
+        return d.evidence(mode=args.get("mode", "plain"))
+    if name == "browser_set_credentials":
+        d.set_credentials(args["host"], args["user"], args["password"])
+        return {"stored": True, "host": d._host_of(args["host"]) or args["host"]}
     if name == "browser_read_outcome":
         return d.read_outcome()
     if name == "browser_click_ref":
