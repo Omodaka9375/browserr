@@ -117,7 +117,7 @@ Add the Browserr server in your client's MCP settings:
 }
 ```
 
-On Windows, you can also command at the bundled wrapper:
+On Windows, you can also point the command at the bundled wrapper:
 
 ```json
 {
