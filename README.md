@@ -77,14 +77,12 @@ auditable in an afternoon, unlike CDP.
 
 - `ping` health check; fast failure when the engine dies
 - Ephemeral throwaway profiles for per-run isolation
-- Computer-use mode: concurrent driver clients over `--driver-port`,
+- Concurrent driver clients over `--driver-port`,
   optional token authentication
 
 ## Requirements
-
-- Windows 10/11 (x64), Linux x64/ARM64 or macOS (Apple Silicon)
 - Python 3.10+ for the SDK and MCP server (standard library only)
-- Rust stable only to build from source
+- Rust stable only if you build from source
 
 ## Install
 
@@ -119,8 +117,7 @@ Add the Browserr server in your client's MCP settings:
 }
 ```
 
-On Windows, some clients (Kai) cannot launch bare `python`; point the
-command at the bundled wrapper instead:
+On Windows, you can also command at the bundled wrapper:
 
 ```json
 {
