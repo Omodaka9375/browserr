@@ -89,7 +89,8 @@ like; that is the whole "visual" story.
 
 ## Requirements
 
-- Windows 10/11 (x64), Linux x64 (X11; Mesa llvmpipe works headless), or
+- Windows 10/11 (x64), Linux x64 or ARM64 (X11; Mesa llvmpipe works headless -
+  Raspberry Pi 4/5 included, use the linux-arm64 archive), or
   macOS (Apple Silicon; aarch64)
 - Rust stable (MSVC toolchain on Windows)
 - Python 3.10+ (test suite and MCP server; standard library only)

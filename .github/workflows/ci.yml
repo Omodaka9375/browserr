@@ -15,17 +15,23 @@ jobs:
             # GitHub windows-latest runners are GPU-less; servo's WGL backend
             # needs WGL_NV_DX_interop + a real D3D11 device, so render tests
             # cannot pass there. GPU-less mode runs fmt + clippy + build +
-            # the render-free protocol tests. The full 14-test suite runs on
-            # Linux (llvmpipe), macOS (real GPU) and local GPU machines.
+            # the render-free protocol tests. The full 25-test suite runs on
+            # Linux x64/ARM64 (llvmpipe), macOS (real GPU) and local GPU machines.
             gpuless: "1"
           - os: ubuntu-latest
             platform: linux-x64
+            gpuless: ""
+          # Native ARM64 runner: same full gate, keeps the Raspberry Pi
+          # build green and produces the linux-arm64 release binary.
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
             gpuless: ""
           - os: macos-latest
             platform: macos-arm64
             gpuless: ""
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # ARM64 runners are ~2-3x slower; fast legs finish far under the cap.
+    timeout-minutes: 90
     env:
       CARGO_TERM_COLOR: always
     steps:
@@ -67,7 +73,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             engine/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Setup python
         uses: actions/setup-python@v5
