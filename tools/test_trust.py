@@ -78,6 +78,10 @@ import time
 
 d = Driver(log=f"{ROOT}/engine-trust-test.log")
 try:
+    # Fresh evidence dir: the log is append-only, so leftover entries from
+    # an earlier run would corrupt the assertions below.
+    import shutil
+    shutil.rmtree(EV, ignore_errors=True)
     d.enable_evidence(EV)
 
     # 1. Plain evidence shot lands in the dir as a PNG.
@@ -116,11 +120,13 @@ try:
     with open(os.path.join(EV, "actions.jsonl"), encoding="utf-8") as f:
         lines = [json.loads(l) for l in f if l.strip()]
     kinds = {l["kind"] for l in lines}
-    assert {"navigate", "submit"} <= kinds, kinds
-    # fill_form was never called in this flow; submit was, twice (gate + confirmed).
+    assert {"navigate", "submit", "evidence"} <= kinds, kinds
+    # Exactly two submits: one REFUSED by the confirm gate, one confirmed.
+    # On a fresh dir this is deterministic; >= 2 was masking leftover state.
     submits = [l for l in lines if l["kind"] == "submit"]
-    assert len(submits) >= 2, submits
-    assert submits[-1]["confirm"] is True, submits[-1]
+    assert len(submits) == 2, submits
+    assert submits[0].get("refused") is True and submits[0]["confirm"] is False
+    assert submits[1]["confirm"] is True and "refused" not in submits[1]
     print("action log OK:", len(lines), "entries:", sorted(kinds))
 
     # 6. Stored credentials auto-answer an auth challenge.

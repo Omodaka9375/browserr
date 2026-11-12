@@ -43,8 +43,11 @@ try:
     d.wait_load(contains="features-test.html")
     d.wait_ready()
 
-    # 1. console events
-    d.wait_console(contains="hello from the page", timeout=10)
+    # 1. console events. Wait for the LAST message: the page emits log/
+    # warn/error in order, so once "an error" is here the earlier two are
+    # too. Waiting on the first one raced on slow CI (messages 2 and 3
+    # had not arrived yet when console() was read).
+    d.wait_console(contains="an error", timeout=10)
     msgs = d.console()
     texts = [m["message"] for m in msgs]
     assert "hello from the page" in texts, texts

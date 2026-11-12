@@ -1612,6 +1612,11 @@ class Driver:
                 h = {}
             risky = {r.get("kind") for r in (h.get("reasons") or [])}
             if {"payment", "captcha"} & risky:
+                # A refused destructive attempt belongs in the audit log as
+                # much as a performed one.
+                self._log_action("submit", target=ref_or_selector,
+                                 confirm=confirm, refused=True,
+                                 reasons=sorted(risky))
                 raise NeedsConfirmError(
                     "page shows " + "/".join(sorted(risky))
                     + " conditions; call submit_form(confirm=True) after a "
