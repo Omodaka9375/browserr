@@ -465,7 +465,7 @@
             <tr><td>files</td><td><b>Downloads.</b> download(url, path) fetches straight to disk with size caps and an ok/bytes/error event. Public URLs only — no page cookies involved.</td></tr>
             <tr><td>survive</td><td><b>Fast failure, not hangs.</b> EngineDeadError surfaces a dead engine in 0.07 s instead of a timeout. ping health-checks. Ephemeral profiles give every run a clean slate.</td></tr>
             <tr><td>block</td><td><b>Adblock built in.</b> EasyList-based subresource blocking at the engine's request-interception hook, auto-refreshed weekly. Never blocks main-frame documents.</td></tr>
-            <tr><td>gpu</td><td><b>Fast rendering.</b> Servo renders on the GPU with a software-GL fallback (Linux runs headless on llvmpipe). Screenshots painted on demand, per tab.</td></tr>
+            <tr><td>gpu</td><td><b>Fast rendering.</b> CPU rendering by default (starts anywhere, never fails on GPU-less machines); --gpu opts into hardware rendering with automatic CPU fallback. Screenshots painted on demand, per tab.</td></tr>
             <tr><td>secure</td><td><b>Token-gated attach.</b> --driver-port accepts multiple concurrent drivers; --driver-token requires an auth line first. Unauthenticated sockets get nothing — not even events.</td></tr>
             <tr><td>intercept</td><td><b>Fail-closed interception.</b> Arm it and qualifying requests (documents, fetch/XHR, JSON) are held for your decision: allow, deny (synthetic 403), or fulfill with a synthetic response. Unanswered = denied after 5 s.</td></tr>
             <tr><td>auth</td><td><b>Challenges surfaced, not swallowed.</b> HTTP 401 and proxy challenges arrive as events answered with per-challenge credentials; wrong or missing credentials fail closed. File pickers too: answer with paths or cancel.</td></tr>
@@ -550,7 +550,7 @@
           </tbody>
         </table>
         <div class="note">
-          <p><b>Honest limits.</b> No site sandbox on Windows (treat page loads as untrusted; use ephemeral profiles), web compatibility bounded by Servo 0.8. Windows rendering needs a GPU with a D3D11 driver; Linux renders with any GL including llvmpipe; macOS renders via Metal-backed GL. Text, documents, search and forms work well; heavy SPAs and DRM video may not.</p>
+          <p><b>Honest limits.</b> No site sandbox on Windows (treat page loads as untrusted; use ephemeral profiles), web compatibility bounded by Servo 0.8. Rendering is CPU by default; --gpu needs D3D11 on Windows, any GL on Linux (llvmpipe works headless), Metal-backed GL on macOS. Text, documents, search and forms work well; heavy SPAs and DRM video may not.</p>
         </div>
       </div>
     </section>
@@ -574,12 +574,12 @@
         <div class="os-panel active" data-os="windows">
           <div class="os-card">
             <h4>Windows x64</h4>
-            <p>Download the zip, unpack anywhere, and point your agent at the MCP server - or drive the engine directly from Python. A GPU with a D3D11 driver is required for rendering.</p>
+            <p>Download the zip, unpack anywhere, and point your agent at the MCP server - or drive the engine directly from Python. CPU rendering works out of the box; pass --gpu for hardware rendering (D3D11 driver required).</p>
             <a href="https://github.com/Omodaka9375/browserr/releases/latest" class="btn-primary">↓ Download for Windows</a>
             <div class="os-meta">
               <span>Format <b>.zip</b></span>
               <span>Contents <b>engine.exe · driver.py · browserr_mcp.py</b></span>
-              <span>Requires <b>GPU (D3D11) · Python 3.10+</b></span>
+              <span>Requires <b>Python 3.10+ (GPU optional)</b></span>
             </div>
           </div>
         </div>

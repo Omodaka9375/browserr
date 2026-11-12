@@ -216,7 +216,7 @@ class Driver:
         engine_path = engine_path or os.environ.get("BROWSERR_ENGINE", ENGINE_DEBUG)
         args = [engine_path]
         if engine_args:
-            # Extra engine CLI flags (e.g. --software) BEFORE the standard
+            # Extra engine CLI flags (e.g. --gpu) BEFORE the standard
             # profile flags; kept verbatim, no validation.
             args.extend(engine_args)
         if ephemeral:

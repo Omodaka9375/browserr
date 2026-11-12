@@ -8,9 +8,10 @@ Browserr is an alternative to embedding Chromium in an agent stack: a single
 `engine` binary (Rust + Servo) that renders pages on the GPU, blocks ads, and
 exposes a 20-command loopback protocol - one binary, one crypto stack, ~105 MB
 release (measured: 105.4 MB on Windows, 103.6 MB on Linux; ~40 MB archived).
-Rendering is GPU by default; `--software` forces CPU rendering (and a GPU-less
-machine falls back to it automatically), so it runs on CI runners,
-containers and boards like the Raspberry Pi.
+Rendering is CPU by default: the engine starts instantly and never fails on
+GPU-less machines (CI runners, containers, boards like the Raspberry Pi).
+`--gpu` opts into hardware rendering (falling back to CPU if no GL context
+can be created); `--software` is accepted as the explicit default.
 Agents drive it through a Python SDK
 (`tools/driver.py`) or through any MCP-capable client with zero integration
 code (`tools/browserr_mcp.py`).
