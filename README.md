@@ -5,7 +5,7 @@
 A Servo-based, headless browser engine built for AI agents.
 
 Browserr is an alternative to embedding Chromium in an agent stack: a single
-`engine` binary (Rust + Servo) that renders pages on the GPU, blocks ads, and
+`engine` binary (Rust + Servo) that renders pages headlessly, blocks ads, and
 exposes a 20-command loopback protocol - one binary, one crypto stack, ~105 MB
 release (measured: 105.4 MB on Windows, 103.6 MB on Linux; ~40 MB archived).
 Rendering is CPU by default: the engine starts instantly and never fails on
@@ -23,69 +23,79 @@ like; that is the whole "visual" story.
 
 ## Features
 
-- Navigation, tabs, back/forward, page zoom, per-tab input (pointer, wheel,
-  keyboard); JavaScript evaluation with results returned as JSON
-- Prose extraction (`read_page`) and structured page inventory
-  (`read_structure`: headings, buttons, inputs, selects, links, images -
-  each with a viewport rect, a usable CSS selector and a stable ref like
-  `e7`). Form fields carry their label (label for/wrapping/aria), their
-  constraints (required, pattern, min/max, maxlength, autocomplete), their
-  current state (value, checked, focused) and computed validity; forms
-  group their fields and submit controls. Shadow DOM is pierced
-- Selector-based interaction: `click_element` (scrolls into view, real
-  pointer event), `set_value` (native setter, React/Vue controlled inputs
-  accepted), `wait_for_selector` (SPA render waiting)
-- Ref-based interaction: `click_ref('e7')` and `set_field(ref, value)` use
-  the stable refs from `read_structure`, so no selector fragility
-- Shared references: `screenshot_annotated(path)` boxes and numbers every
-  interactive element by ref and returns the item list, so an agent and a
-  human can both point at "element 7"
-- User handoff: `detect_handoff()` scans for things a human must do
-  (CAPTCHA iframes, one-time codes, empty passwords, payment fields,
-  consent walls); `pause()`/`resume()` hand control over and back, with
-  every mutating action failing loudly (PausedError) while reads keep
-  working so the agent can watch the page; `wait_for_user()` (MCP
-  `browser_wait_for_user`) long-polls until the handoff clears or the
-  page navigates
-- Trust layer: persistent profiles (`browser_start(profile="...")`,
-  logins survive sessions); evidence shots and an append-only action log
-  (navigate/fill/submit/click/auth with timestamps, never credentials) in
-  a per-profile evidence dir; stored credentials auto-answer HTTP auth
-  challenges for their host and unknown hosts fail closed; submitting a
-  payment or captcha page refuses without an explicit human confirm
-  (`submit_form(confirm=True)`, NeedsConfirmError otherwise)
-- Form filling: `fill_form({ref: value, ...})` writes a whole form in one
-  round trip with type-aware writes (checkbox/radio, select by value or
-  label, date, contenteditable), firing input/change/blur so validators run
-- Submit cycle: `submit_form()` dispatches the page's submit event (its
-  validation runs, preventDefault is honored), submits natively, waits for
-  the navigation or network quiet, and `read_outcome()` reports url,
-  alert/aria-live texts and fields that violate required/pattern
-- Console capture (page messages plus Servo network/TLS load errors), file
-  downloads, screenshots
-- Fail-closed request interception: arm it, and qualifying requests
-  (main-frame documents, fetch/XHR, JSON) are held for your decision -
-  allow, deny (synthetic 403), or fulfill with a synthetic response;
-  unanswered requests deny after 5 s
-- Auth challenge handling: HTTP 401/proxy challenges surface as events
-  with per-challenge credential answers; wrong or missing credentials fail
-  closed (drop)
+### Page engine
+
+- Servo 0.8 rendering, CPU by default (instant start on GPU-less machines,
+  containers, CI); `--gpu` opts into hardware GL with automatic CPU fallback
+- Tabs, navigation, per-tab history, zoom, pointer/wheel/keyboard input
+- JavaScript evaluation with results returned as JSON
+- On-demand screenshots of the active tab; the SDK saves them as PNG
+- Console capture: page messages plus network and TLS load errors
+- Downloads fetched straight to disk, without page cookies
+- EasyList-based adblock, refreshed weekly
+
+### Reading pages
+
+- `read_page()`: token-cheap prose extraction
+- `read_structure()`: full inventory of headings, buttons, inputs, selects,
+  links and images, each with a viewport rect, a usable CSS selector and a
+  stable ref (`e7`); fields carry label, constraints, current state and
+  computed validity; forms group their fields and submit controls; the
+  shadow DOM is pierced
+
+### Acting on pages
+
+- Selector interaction: `click_element` (scrolls into view, real pointer),
+  `set_value` (native setter, React/Vue-safe), `wait_for_selector`
+- Ref interaction: `click_ref('e7')`, `set_field(ref, value)` and
+  `fill_form({ref: value})` - one round trip for a whole form, with
+  type-aware writes (checkbox/radio, select by value or label,
+  contenteditable) that fire input/change/blur so page validators run
+- Submit cycle: `submit_form()` dispatches the page's own submit event (its
+  validation runs, preventDefault is honored), waits for the navigation or
+  network quiet; `read_outcome()` reports url, alert/aria-live texts and
+  fields violating required/pattern
 - File pickers: `input type=file` clicks surface as events answered with
-  file paths (or cancelled); the page reads the picked file normally
-- Net evidence: a document-start user script wraps `fetch`/XHR in every
-  frame (pages cannot evade it by grabbing references first) into a ring
-  buffer, polled via eval
-- Frame control (tier 1): frame tree listing (url, origin, same-origin
-  walking with titles); same-origin frames reachable via
-  `window.frames[i].document` in evals
-- Reliability: `ping` health check, `EngineDeadError` fast failure on
-  engine death (0.07 s instead of a timeout), ephemeral throwaway profiles
-- Adblock: EasyList-based subresource blocking, refreshed weekly
-- Computer-use mode: `--driver-port=N` accepts multiple concurrent driver
-  clients (events and screenshots mirrored to all), optional `--driver-token`
+  local file paths (or cancelled); the page reads the picked file normally
+
+### Network control
+
+- Fail-closed interception: qualifying requests (main-frame documents,
+  fetch/XHR, JSON) are held for an allow / deny / respond decision
+  (deny is a synthetic 403); unanswered requests deny after 5 s
+- Net evidence: a document-start script wraps `fetch`/XHR in every frame
+  into a ring buffer (pages cannot evade it by grabbing references first)
+- Auth challenges: HTTP 401 and proxy challenges surface as events;
+  wrong or missing credentials fail closed
+- Frame tree listing with same-origin walking (cross-origin frames report
+  their url only)
+
+### Human in the loop and trust
+
+- `detect_handoff()`: finds CAPTCHA iframes, one-time codes, empty
+  passwords, payment fields and consent walls
+- `pause()` / `resume()`: every mutating action fails loudly (PausedError)
+  while a human has control; reads keep working so the agent can watch;
+  `wait_for_user()` long-polls until the handoff clears or the page navigates
+- Annotated screenshots: `screenshot_annotated` boxes and numbers every
+  interactive element by ref, so an agent and a human can point at the
+  same element
+- Persistent profiles: logins survive sessions (`browser_start(profile=...)`)
+- Evidence: timestamped screenshots plus an append-only action log
+  (navigate/fill/submit/click/auth; never credentials) per profile
+- Credential store: HTTP auth challenges are answered automatically for
+  known hosts, denied for unknown ones
+- Confirm gate: submitting a payment or CAPTCHA page requires an explicit
+  human confirm (`submit_form(confirm=True)`; NeedsConfirmError otherwise)
+
+### Operations
+
+- `ping` health check; `EngineDeadError` fails fast on engine death
+  (0.07 s instead of a timeout)
+- Ephemeral throwaway profiles for per-run isolation
+- Computer-use mode: `--driver-port=N` accepts concurrent driver clients
+  (events and screenshots mirrored to all), optional `--driver-token`
   authentication
-- GPU rendering (hardware GL, software-GL fallback); screenshots are painted
-  on demand
 
 ## Requirements
 
@@ -109,8 +119,9 @@ mcp_wrap.cmd      Windows MCP launcher (cmd wrapper)
 README.md, LICENSE
 ```
 
-Requirements: Python 3.10+ on PATH, and on Windows a GPU with a D3D11
-driver (Linux works headless on llvmpipe; macOS works out of the box).
+Requirements: Python 3.10+ on PATH. Rendering is CPU by default on every
+platform; pass `--gpu` to opt into hardware rendering (D3D11 on Windows,
+any GL on Linux including llvmpipe, Metal-backed GL on macOS).
 `driver.py` finds the engine binary next to itself - no configuration
 needed. To use a custom engine location, set `BROWSERR_ENGINE=/path/to/engine`.
 
@@ -162,30 +173,10 @@ engine --ephemeral --driver-port=7412 --driver-token=secret
 ### Use the Python SDK
 
 ```python
-from driver import Driver
-d = Driver(ephemeral=True)          # spawns the engine, throwaway profile
-```
-
-### Build from source
-
-```powershell
-cargo build --release --manifest-path engine\Cargo.toml
-```
-
-Drive it as an agent:
-
-```text
-python tools\browserr_mcp.py              # headless, ephemeral profile, MCP on stdio
-python tools\browserr_mcp.py --port 7412  # attach to an engine started with --driver-port
-```
-
-Or with the Python SDK:
-
-```python
 import sys; sys.path.insert(0, "tools")
 from driver import Driver, save_png
 
-d = Driver(ephemeral=True)          # spawns engine.exe, throwaway profile
+d = Driver(ephemeral=True)          # spawns the engine, throwaway profile
 try:
     d.navigate("https://example.com"); d.wait_load(); d.wait_ready()
     print(d.eval_js("document.title"))       # results returned as JSON
@@ -199,6 +190,19 @@ finally:
     d.close()                                 # socket close = engine exit
 ```
 
+### Run the MCP server directly
+
+```text
+python tools\browserr_mcp.py              # headless, ephemeral profile, MCP on stdio
+python tools\browserr_mcp.py --port 7412  # attach to an engine started with --driver-port
+```
+
+### Build from source
+
+```powershell
+cargo build --release --manifest-path engine\Cargo.toml
+```
+
 Package a distributable (builds into `dist\` and zips it):
 
 ```powershell
@@ -208,8 +212,8 @@ powershell -File scripts\package.ps1
 ## Architecture
 
 ```text
-engine/   Servo webviews (one per tab), GPU rendering (hardware GL with
-          software-GL fallback), request interception (adblock), automation
+engine/   Servo webviews (one per tab), CPU-default rendering (--gpu for
+          hardware GL), request interception (adblock), automation
           protocol, driver port.
 tools/    driver.py (Python SDK), browserr_mcp.py (MCP server), tests.
 scripts/  dist/package/ci for Windows (ps1) and Linux (sh).
@@ -342,10 +346,10 @@ helper finishes the delete after Servo releases its SQLite handles).
 - Do Not Track would require forking servo-net (the interception hook can
   cancel or replace responses but cannot edit request headers).
 - History records urls only, without page titles.
-- Windows x64, Linux x64, and macOS (Apple Silicon).
-- Windows: rendering needs a GPU with a D3D11 driver (surfman WGL
-  requirement); Linux renders with any GL, including llvmpipe; macOS
-  renders via CGL (works headless on CI runners).
+- Windows x64, Linux x64/ARM64, and macOS (Apple Silicon).
+- Rendering is CPU by default; `--gpu` needs D3D11 on Windows (surfman WGL
+  requirement), any GL on Linux (llvmpipe works), CGL on macOS (works
+  headless on CI runners).
 
 ## Tests
 
@@ -363,10 +367,21 @@ test_scroll.py           scroll position survives tab switches
 test_bind.py             port handover between dying and booting engines
 test_attach.py           computer use: attach through the driver port
 test_hardening.py        driver-token gate, oversized-line rejection
+test_mcp.py              full MCP session over stdio
+test_intercept.py        fail-closed interception: allow / deny / respond
+test_auth.py             auth challenges, credential answers, fail-closed case
+test_filepicker.py       file picker events answered with local paths
+test_net.py              fetch/XHR evidence ring in every frame
+test_frames.py           frame tree listing and same-origin walking
+test_form.py             form model: labels, constraints, validity, refs
+test_flow.py             fill_form / submit / read_outcome end to end
+test_annotate.py         annotated screenshots (box + glyph pixels exact)
+test_handoff.py           pause/resume, detect_handoff, reads while paused
+test_trust.py            evidence dir, action log, auto-auth, confirm gate
+test_software_render.py  CPU-default and --gpu rendering log markers
 test_input.py            raw-socket input forwarding
 test_cursor_zoom.py      cursor events + zoom via devicePixelRatio
 test_close.py            tab close must not kill the engine
-test_mcp.py              full MCP session over stdio
 test_https.py            engine TLS client against the real EasyList endpoint
 test_thin.py             release build smoke test
 ```
