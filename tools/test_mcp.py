@@ -146,7 +146,8 @@ try:
     names = {t["name"] for t in tools}
     assert "browser_navigate" in names and "browser_read" in names, names
     expected_new = {"browser_wait_auth", "browser_auth_answer",
-                    "browser_wait_filepicker", "browser_files_answer"}
+                    "browser_wait_filepicker", "browser_files_answer",
+                    "browser_action_log"}
     assert expected_new <= names, expected_new - names
     start_schema = next(t for t in tools if t["name"] == "browser_start")
     assert "profile" in start_schema["inputSchema"]["properties"]
@@ -163,6 +164,10 @@ try:
 
     r = call("browser_navigate", {"url": "http://127.0.0.1:8130/mcp-test.html"})
     assert r["url"].endswith("mcp-test.html"), r
+    log = call("browser_action_log", {})
+    assert log["path"].endswith("actions.jsonl"), log
+    assert any(e.get("kind") == "navigate" for e in log["entries"]), log
+    print("action_log OK:", len(log["entries"]), "entries")
     print("navigate OK")
 
     r = call("browser_read")

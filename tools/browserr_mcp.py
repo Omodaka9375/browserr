@@ -22,7 +22,8 @@ Tools:
     browser_pause / browser_resume / browser_detect_handoff
     browser_wait_for_user / browser_wait_auth / browser_auth_answer
     browser_wait_filepicker / browser_files_answer
-    browser_evidence / browser_set_credentials (profile on browser_start)
+    browser_evidence / browser_action_log / browser_set_credentials
+    (profile on browser_start)
 """
 import json
 import os
@@ -437,6 +438,16 @@ TOOLS = [
             "required": []},
     },
     {
+        "name": "browser_action_log",
+        "description": "Read back the append-only action log (what the "
+                       "engine did and when: navigates, fills, submits, "
+                       "clicks, evidence, auth answers). Newest last. "
+                       "Returns {path, entries}.",
+        "inputSchema": {"type": "object", "properties": {
+            "limit": {"type": "integer", "minimum": 1, "maximum": 1000}},
+            "required": []},
+    },
+    {
         "name": "browser_set_credentials",
         "description": "Store credentials for a host so HTTP auth "
                        "challenges for it are answered automatically; hosts "
@@ -682,6 +693,8 @@ def call_tool(name, args):
                                  evidence=args.get("evidence", False))
     if name == "browser_evidence":
         return STATE.status(**d.evidence(mode=args.get("mode", "plain")))
+    if name == "browser_action_log":
+        return STATE.status(**d.action_log(limit=args.get("limit", 100)))
     if name == "browser_wait_auth":
         ev = d.wait_auth(tab=args.get("tab"),
                          timeout=args.get("timeout_seconds", 10.0))
@@ -706,11 +719,7 @@ def call_tool(name, args):
     if name == "browser_read_outcome":
         return d.read_outcome()
     if name == "browser_click_ref":
-        pt = d.click_ref(args["ref"])
-        if pt is None:
-            raise McpError(f"stale ref {args['ref']!r}; call "
-                           "browser_read_structure first")
-        return {"clicked": args["ref"], "at": pt}
+        return {"clicked": args["ref"], "at": d.click_ref(args["ref"])}
     if name == "browser_screenshot_annotated":
         os.makedirs(STATE.shot_dir, exist_ok=True)
         path = os.path.join(STATE.shot_dir,

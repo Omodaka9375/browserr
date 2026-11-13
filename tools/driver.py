@@ -74,6 +74,16 @@ class PausedError(RuntimeError):
     """
 
 
+class StaleRefError(RuntimeError):
+    """A stable ref ('e7') no longer resolves on the page.
+
+    The page navigated (or the element went away) since the last
+    read_structure(); refs reset on every read. Raised by click_ref
+    instead of a silent None, so an agent loop fails loudly and
+    re-reads the structure instead of believing it clicked.
+    """
+
+
 class NeedsConfirmError(RuntimeError):
     """The action is destructive and the page shows payment/captcha UI.
 
@@ -1263,11 +1273,13 @@ class Driver:
 
     def click_ref(self, ref, tab: int = 0, timeout=10.0):
         """Click the center of a stable ref from the last read_structure().
-        Scrolls it into view first. Returns the click point, or None when
-        the ref is stale (the page navigated since the read)."""
+        Scrolls it into view first. Returns the click point; raises
+        StaleRefError when the ref no longer resolves (the page navigated
+        since the read) instead of silently no-oping."""
         pt = self.eval_js(self.REF_RECT_JS % json.dumps(ref), tab, timeout)
         if not pt or not isinstance(pt, dict):
-            return None
+            raise StaleRefError(
+                f"stale ref {ref!r}: run read_structure again for fresh refs")
         # hover first: servo resolves the click target from the pointer
         # position, so a move before down/up is what makes hover/focus behave.
         self.move(pt["x"], pt["y"], tab=tab)
@@ -1612,6 +1624,28 @@ class Driver:
         out = {"path": self._shot_file(self.evidence_dir, "ev")}
         self._log_action("evidence", mode="plain", path=out["path"])
         return out
+
+    def action_log(self, limit: int = 100):
+        """Read back the append-only action log (newest last): a list of
+        {t, kind, ...} JSON lines, plus the path. Best effort; returns
+        {entries: [], path} when no log is configured or the file is
+        unreadable, never raises."""
+        entries = []
+        path = self.action_log_path
+        if path and os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            entries.append(json.loads(line))
+                        except ValueError:
+                            pass  # a torn line from a concurrent append
+            except OSError:
+                pass
+        return {"path": path, "entries": entries[-max(1, min(limit, 1000)):]}
 
     def _log_action(self, kind: str, **fields) -> None:
         """Append one JSON line to the action log (best effort; never raises)."""

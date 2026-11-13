@@ -263,7 +263,7 @@ Timing rules worth knowing:
 ## MCP server
 
 `tools/browserr_mcp.py` is a Model Context Protocol server (standard
-library only, newline JSON-RPC on stdio) exposing 40 tools:
+library only, newline JSON-RPC on stdio) exposing 41 tools:
 
 - session: start (with optional persistent `profile`), stop, ping
 - page: navigate, read, read_structure, links, forms
@@ -297,7 +297,8 @@ Headless mode cannot provide this direct interaction.
 `browser_start` and `browser_evidence` return absolute `evidence_dir` and
 `action_log_path` values. The action log is `actions.jsonl` in that
 evidence directory, under `tools/mcp-evidence/<profile-or-session>` in a
-source checkout.
+source checkout. `browser_action_log` reads it back: what the engine did
+and when, newest last, credentials never included.
 
 ## Profiles
 

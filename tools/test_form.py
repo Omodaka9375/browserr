@@ -14,7 +14,7 @@ import sys
 import threading
 
 sys.path.insert(0, TOOLS_DIR)
-from driver import Driver
+from driver import Driver, StaleRefError
 
 PAGE_URL = "http://127.0.0.1:8134/form-test.html"
 
@@ -207,12 +207,17 @@ try:
     assert d.eval_js("document.getElementById('tos').checked") is True
     print("click_ref dispatches one pointer click OK:", counts)
 
-    # 13. A stale ref (page reloaded since the read) resolves to None.
+    # 13. A stale ref (page reloaded since the read) raises StaleRefError.
     d.navigate(PAGE_URL + "?fresh=1")
     d.wait_load(contains="fresh=1")
     d.wait_ready()
-    assert d.click_ref(ping["ref"]) is None, "stale ref should not resolve"
-    print("stale ref guard OK")
+    try:
+        d.click_ref(ping["ref"])
+    except StaleRefError:
+        pass
+    else:
+        raise AssertionError("stale ref should raise StaleRefError")
+    print("stale ref guard OK (raises, does not silently no-op)")
 
     # 14. Writing by CSS selector still works alongside refs.
     res = d.set_field("#email", "a@b.co")

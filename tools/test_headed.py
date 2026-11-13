@@ -136,6 +136,20 @@ try:
     user32 = ctypes.windll.user32
     user32.SetForegroundWindow(hwnd)
     time.sleep(0.3)
+    # Windows can refuse SetForegroundWindow from a background process, and
+    # another window may overlap the target: OS input would land on it
+    # instead. Force focus by clicking the engine window's own caption (the
+    # title bar never runs page JS), then verify it is foreground.
+    if user32.GetForegroundWindow() != hwnd:
+        cap = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(cap))
+        move_mouse((cap.left + cap.right) // 2, cap.top + 8)
+        user32.mouse_event(0x0002, 0, 0, 0, 0)
+        time.sleep(0.05)
+        user32.mouse_event(0x0004, 0, 0, 0, 0)
+        time.sleep(0.3)
+    assert poll(lambda: user32.GetForegroundWindow() == hwnd), \
+        "engine window never became the foreground window"
     rect = d.element_rect("#go")
     dpr = d.eval_js("devicePixelRatio") or 1
     point = wintypes.POINT(int((rect["x"] + rect["w"] / 2) * dpr),
