@@ -22,6 +22,8 @@ if ($env:RELEASE_VERSION) {
 $version = $version.TrimStart("v")
 
 # Release payload: engine + ANGLE DLLs + SDK + MCP server + docs.
+# Every entry must exist: Compress-Archive fails with a cryptic message on
+# missing paths, so verify and name the missing file instead.
 $payload = @(
     (Join-Path $dist "engine.exe"),
     (Join-Path $dist "libEGL.dll"),
@@ -32,6 +34,12 @@ $payload = @(
     (Join-Path $root "README.md"),
     (Join-Path $root "LICENSE")
 )
+foreach ($p in $payload) {
+    if (-not (Test-Path $p)) {
+        Write-Host "::error::payload missing: $p"
+        exit 1
+    }
+}
 
 $zip = Join-Path $root "browserr-$version-windows-x64.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }

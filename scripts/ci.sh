@@ -19,7 +19,13 @@ echo "== fmt + clippy gate =="
 cargo fmt --manifest-path engine/Cargo.toml -- --check > fmt.log 2>&1 \
     || { tail -10 fmt.log; echo "engine fmt FAILED"; exit 1; }
 cargo clippy --manifest-path engine/Cargo.toml -- -D warnings > clippy.log 2>&1 \
-    || { grep -E "^(warning|error): " clippy.log | head -5; echo "engine clippy FAILED"; exit 1; }
+    || { grep -E "^(warning|error): " clippy.log | head -5;
+         [ -s clippy.log ] || echo "(clippy.log empty - killed?)";
+         # CARGO_TERM_COLOR=always wraps diagnostics in ANSI escapes that
+         # defeat the grep above; show the tail stripped so the real error
+         # is never swallowed.
+         tail -5 clippy.log | sed 's/\x1b\[[0-9;]*m//g';
+         echo "engine clippy FAILED"; exit 1; }
 rm -f fmt.log clippy.log
 
 echo "== build (debug) =="

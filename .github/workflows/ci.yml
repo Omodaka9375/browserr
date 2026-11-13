@@ -28,7 +28,14 @@ jobs:
             # the render-free protocol tests. The full 25-test suite runs on
             # Linux x64/ARM64 (llvmpipe), macOS (real GPU) and local GPU machines.
             gpuless: "1"
-          - os: ubuntu-latest
+          # ubuntu-24.04, NOT ubuntu-latest: the webgl feature pulls mozangle
+          # whose build script runs bindgen against the system libclang. On
+          # ubuntu-latest's LLVM 21 the intrin headers reference builtins the
+          # bindgen libclang does not know and the build script panics
+          # ("Should generate shader bindings: ClangDiagnostic"). 24.04 ships
+          # LLVM 18 which parses clean - the arm64 leg has proven this build
+          # on 24.04 since v0.3.1.
+          - os: ubuntu-24.04
             platform: linux-x64
             gpuless: ""
           # Native ARM64 runner: same full gate, keeps the Raspberry Pi
