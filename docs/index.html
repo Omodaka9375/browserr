@@ -4,12 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Browserr — browser engine for AI agents</title>
-  <meta name="description" content="A Servo-based browser engine for AI agents. One binary, one crypto stack, a small protocol you can audit in an afternoon. Optional native window, no CDP, no Chromium." />
+  <meta name="description" content="A Servo-based browser engine for AI agents. Fail-closed by default, MCP-native, with an optional native window for human handoff. One binary, no CDP, no Chromium." />
   <meta name="theme-color" content="#ffffff" />
 
   <!-- Open Graph / Twitter -->
   <meta property="og:title" content="Browserr — browser engine for AI agents" />
-  <meta property="og:description" content="One binary, one crypto stack, a protocol you can audit in an afternoon. Optional native window, no CDP, no Chromium." />
+  <meta property="og:description" content="Fail-closed by default, with an optional native window for human handoff. One binary, no CDP, no Chromium, a protocol you can audit in an afternoon." />
   <meta property="og:type" content="website" />
   <meta property="og:image" content="icon.svg" />
   <meta property="og:url" content="https://browserr.dev/" />
@@ -402,9 +402,10 @@
       <div class="hero-copy">
       <h1><img src="icon.svg" alt="Browserr icon">browserr<span class="cursor">_</span></h1>
       <p class="dek">
-        A headless <strong>browser</strong> for your agentic workflow. One binary, one crypto
-        stack, and a protocol small enough to <strong>audit in an afternoon</strong> — no UI, CDP,
-        or Chromium.
+        A <strong>browser engine</strong> for your agentic workflow. One binary, no CDP, no
+        Chromium, and a protocol small enough to <strong>audit in an afternoon</strong>.
+        Fail-closed by default, with an optional native window for the moments
+        only a human should handle.
       </p>
       <div class="mast-actions">
         <a href="https://github.com/Omodaka9375/browserr/releases/latest" class="btn-primary">↓ Download Browserr</a>
@@ -453,8 +454,10 @@
         </div>
         <h2>Everything an agent needs.</h2>
         <p class="lead">
-          Built agent-first: extraction over pixels, selectors over coordinates, failures you can
-          catch instead of hangs. The automation surface is deliberately small.
+          Built agent-first: extraction over pixels, stable refs over coordinates, failures you
+          can catch instead of hangs. Three commitments shape the whole engine: it blocks when
+          unsure, it hands the page to a human when a human is needed, and it leaves evidence
+          for everything it did.
         </p>
         <table class="blocks">
           <thead><tr><th>Command</th><th>Covers</th></tr></thead>
@@ -479,6 +482,9 @@
             <tr><td>trust</td><td><b>Fail-closed by design.</b> Persistent profiles, evidence shots, an append-only action log, a credential store and a confirm gate on payment submits.</td></tr>
           </tbody>
         </table>
+        <div class="note">
+          <p><b>The short version.</b> When the engine is unsure, it blocks. When a human is needed, it hands over and keeps watching. Everything it did lands in the action log, so you can prove it.</p>
+        </div>
       </div>
     </section>
 
@@ -538,7 +544,7 @@
           <span class="sec-no">04 / 05</span>
         </div>
         <h2>Where it sits in 2026.</h2>
-        <p class="lead">Chromium wrappers are the default; alternative engines are the bet. This is the honest comparison.</p>
+        <p class="lead">Chromium wrappers are the default; alternative engines are the bet. Browserr's edge is the local, trust-first, human-in-the-loop niche: an agent and a person working the same page, safely. This is the honest comparison.</p>
         <table class="blocks">
           <thead><tr><th></th><th>Browserr</th><th>Lightpanda</th><th>Obscura</th><th>Chromium headless</th></tr></thead>
           <tbody>
@@ -548,6 +554,9 @@
             <tr><td>protocol size</td><td><b>22 commands</b></td><td>CDP-compatible</td><td>own + CDP</td><td>1000+ endpoints</td></tr>
             <tr><td>footprint</td><td><b>one ~105 MB binary</b></td><td>~16× less than Chromium</td><td>~30 MB</td><td>~200 MB+</td></tr>
             <tr><td>web compat</td><td><b>Servo 0.8 (text, docs, forms)</b></td><td>growing</td><td>growing</td><td>full</td></tr>
+            <tr><td>human handoff</td><td><b>native window, pause, wait_for_user</b></td><td>headless only</td><td>headless only</td><td>via wrappers</td></tr>
+            <tr><td>trust layer</td><td><b>evidence, action log, confirm gate</b></td><td>no</td><td>no</td><td>no</td></tr>
+            <tr><td>network policy</td><td><b>fail-closed, held to a decision</b></td><td>CDP opt-in</td><td>CDP opt-in</td><td>CDP opt-in</td></tr>
           </tbody>
         </table>
         <div class="note">
@@ -622,7 +631,7 @@
           <span class="sec-no"></span>
         </div>
         <h2>Start driving the web with your agents.</h2>
-        <p class="lead">Free, open source, no account required.</p>
+        <p class="lead">Free, open source, no account, no telemetry. Runs on the machine in front of you.</p>
         <div class="mast-actions" style="margin-bottom: 0;">
           <a href="https://github.com/Omodaka9375/browserr/releases/latest" class="btn-primary">↓ Download for free</a>
           <a href="https://github.com/Omodaka9375/browserr" class="btn-secondary">Star on GitHub</a>

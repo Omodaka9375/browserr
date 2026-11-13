@@ -6,8 +6,10 @@ A Servo-based browser engine built for AI agents: headless by default,
 with an optional native interactive window for human handoff.
 
 Browserr is an alternative to embedding Chromium in an agent stack: a single
-`engine` binary (Rust + Servo) that renders pages headlessly, blocks ads, and
-exposes a small loopback protocol.
+`engine` binary (Rust + Servo) that renders pages, blocks ads, and exposes a
+small loopback protocol. It is built around three commitments: block when
+unsure, hand the page to a human when a human is needed, and leave evidence
+for everything it did.
 
 Rendering is CPU by default; `--gpu` opts into hardware rendering.
 `--headed` opens a real interactive native window and requires a desktop
@@ -17,6 +19,35 @@ Agents drive it through a Python SDK or through any MCP-capable client.
 The automation surface is deliberately small: the entire protocol is
 auditable in an afternoon, unlike CDP.
 
+## Why Browserr
+
+Most agent browsers embed Chromium and speak CDP behind the scenes. Browserr
+is a purpose-built engine for the job instead, with the product decisions
+that follow from owning the whole stack:
+
+- **Fail-closed by default.** When Browserr is unsure, it blocks instead of
+  guessing. Intercepted requests are held for a decision and denied after
+  5 s. Auth challenges with no stored credentials are refused outright.
+  Submitting a payment or CAPTCHA page needs an explicit human confirm.
+- **Humans are part of the workflow, not a fallback.** `detect_handoff()`
+  spots CAPTCHAs, one-time codes and payment fields. `pause()` hands the
+  page to a person while the agent keeps watching; `wait_for_user` returns
+  the moment control can come back. Annotated screenshots number every
+  element, so a human and an agent can point at the same `e7`.
+- **Every action leaves evidence.** Timestamped screenshots plus an
+  append-only action log, per profile. Credentials are stored per host and
+  never written to logs, so a big claim is backed by a saved screenshot
+  instead of a promise.
+- **Runs where Chromium cannot.** CPU rendering by default: instant start
+  on GPU-less machines, containers, CI runners and a Raspberry Pi 4/5
+  (ARM64 builds included).
+- **MCP-native, not wrapper-native.** All 41 tools surface directly to any
+  MCP-capable agent. No CDP quirks, no driver downloads, no version drift.
+- **Honest about its limits.** Web compatibility is bounded by Servo 0.8:
+  text, documents, search and forms work well; heavy SPAs and DRM video may
+  not. If you need fleet scale or residential proxies, a cloud provider is
+  still the better tool. Browserr wins on local, trust-first,
+  human-in-the-loop work.
 
 ## Features
 
