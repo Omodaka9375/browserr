@@ -5,11 +5,22 @@ edition = "2024"
 
 [dependencies]
 # Thin agent build: servo's default pulls in devtools (Firefox-protocol actor
-# server), clipboard (arboard) and multiprocess (compiled out on Windows
-# anyway). None are needed headless; media already uses the dummy backend on
-# Windows (no gstreamer). js_jit stays on for page JS speed, bundled stays on
-# for the baked-in UA stylesheets.
-servo = { version = "0.8.0", default-features = false, features = ["bundled", "js_jit"] }
+# server) and multiprocess (compiled out on Windows anyway). Media already
+# uses the dummy backend on Windows (no gstreamer). js_jit stays on for page
+# JS speed, bundled stays on for the baked-in UA stylesheets.
+# SPA/JS compatibility additions (v0.5): webgl bindings (three.js, charts,
+# map fallbacks; needs a GL context, software GL works), clipboard (arboard,
+# small) and brotli-compression-stream (DecompressionStream; the brotli
+# decoder is already in the tree for the network stack). subtlecrypto is
+# NOT enableable: its dep chain (servo-script-webcrypto -> rsa 0.10.0-rc.19
+# -> pkcs1 0.8.0-rc.5 -> der ^0.8.2) pins a der release that was never
+# published to crates.io, so resolution fails. crypto.subtle.digest is
+# covered by a JS shim instead (engine/src/main.rs CRYPTO_SHIM_JS).
+# no-wgl is WINDOWS-ONLY (below): it enables mozangle/egl, whose build
+# script panics on non-Windows targets, so it must never enter the
+# Linux/macOS graphs. Resolver v2/v3 (edition 2024) keeps target-specific
+# features isolated instead of unioning them.
+servo = { version = "0.8.0", default-features = false, features = ["bundled", "js_jit", "webgl", "clipboard", "brotli-compression-stream"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
 rustls-platform-verifier = "0.7"
 rustls-pki-types = "1"
@@ -31,6 +42,19 @@ image = { version = "0.25", default-features = false, features = ["png", "ico", 
 # unreferenced code across servo's ~600 crates. Symbols are stripped where the
 # MSVC toolchain allows. panic stays "unwind": close_tab catches the known
 # surfman drop panic, and abort would turn that into a hard crash.
+[target.'cfg(windows)'.dependencies]
+# Windows GL via ANGLE/EGL on D3D11 instead of raw WGL. Without it the
+# webgl feature panics the WebGL thread in software-default mode (surfman
+# wgl backend cannot create a context), and the panic KILLS THE PAGE's
+# script thread on channel disconnect - a page merely probing for webgl
+# would break every other script on the page. ANGLE needs no GPU: it
+# speaks D3D11, which GPU-less Windows CI and containers provide.
+# At runtime servo loads libEGL.dll + libGLESv2.dll BY NAME, so they must
+# sit next to engine.exe: engine/build.rs stages them, the engine also
+# self-stages on first boot (ensure_angle_dlls in main.rs), and the
+# packaging scripts ship them in the archive.
+servo = { version = "0.8.0", default-features = false, features = ["no-wgl"] }
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

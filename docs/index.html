@@ -470,6 +470,7 @@
             <tr><td>survive</td><td><b>Fast failure, not hangs.</b> A dead engine surfaces instantly; ephemeral profiles give every run a clean slate.</td></tr>
             <tr><td>block</td><td><b>Adblock built in.</b> EasyList-based, refreshed weekly.</td></tr>
             <tr><td>gpu</td><td><b>Rendering.</b> CPU by default — starts anywhere; --gpu opts into hardware. Screenshots on demand, per tab.</td></tr>
+            <tr><td>compat</td><td><b>SPA-ready.</b> React 18 and Vue 3 render and react; IntersectionObserver, IndexedDB, Web Animations, WebGL and WebGL2 (via ANGLE, no GPU needed), clipboard, DecompressionStream; requestIdleCallback and crypto.subtle digests via built-in shims where Servo omits them.</td></tr>
             <tr><td>secure</td><td><b>Token-gated attach.</b> Unauthenticated sockets get nothing — not even events.</td></tr>
             <tr><td>intercept</td><td><b>Fail-closed interception.</b> Requests held for an allow / deny / respond decision; unanswered means denied after 5 s.</td></tr>
             <tr><td>auth</td><td><b>Challenges surfaced, not swallowed.</b> Auth and file-picker events; missing credentials fail closed.</td></tr>
@@ -509,7 +510,7 @@
         <dl class="specs stats">
           <div><dt>Commands</dt><dd>22</dd></div>
           <div><dt>MCP tools</dt><dd>41</dd></div>
-          <div><dt>Binary</dt><dd>~105 MB</dd></div>
+          <div><dt>Binary</dt><dd>~120 MB</dd></div>
           <div><dt>CDP endpoints</dt><dd>0</dd></div>
           <div><dt>Dependencies</dt><dd>0</dd></div>
         </dl>
@@ -552,15 +553,15 @@
             <tr><td>js engine</td><td><b>SpiderMonkey</b></td><td>own</td><td>own</td><td>V8</td></tr>
             <tr><td>mcp-native</td><td><b>yes, 41 tools</b></td><td>no</td><td>partial</td><td>via wrappers</td></tr>
             <tr><td>protocol size</td><td><b>22 commands</b></td><td>CDP-compatible</td><td>own + CDP</td><td>1000+ endpoints</td></tr>
-            <tr><td>footprint</td><td><b>one ~105 MB binary</b></td><td>~16× less than Chromium</td><td>~30 MB</td><td>~200 MB+</td></tr>
-            <tr><td>web compat</td><td><b>Servo 0.8 (text, docs, forms)</b></td><td>growing</td><td>growing</td><td>full</td></tr>
+            <tr><td>footprint</td><td><b>one ~120 MB binary</b></td><td>~16× less than Chromium</td><td>~30 MB</td><td>~200 MB+</td></tr>
+            <tr><td>web compat</td><td><b>Servo 0.8 (text, docs, forms, SPAs)</b></td><td>growing</td><td>growing</td><td>full</td></tr>
             <tr><td>human handoff</td><td><b>native window, pause, wait_for_user</b></td><td>headless only</td><td>headless only</td><td>via wrappers</td></tr>
             <tr><td>trust layer</td><td><b>evidence, action log, confirm gate</b></td><td>no</td><td>no</td><td>no</td></tr>
             <tr><td>network policy</td><td><b>fail-closed, held to a decision</b></td><td>CDP opt-in</td><td>CDP opt-in</td><td>CDP opt-in</td></tr>
           </tbody>
         </table>
         <div class="note">
-          <p><b>Honest limits.</b> No site sandbox on Windows; web compatibility bounded by Servo 0.8. Text, documents, search and forms work well; heavy SPAs and DRM video may not.</p>
+          <p><b>Honest limits.</b> No site sandbox on Windows; web compatibility bounded by Servo 0.8. Text, documents, search, forms and common SPA patterns (React, Vue, data grids, canvas/WebGL charts) work well; DRM video, WebRTC and service-worker offline apps do not.</p>
         </div>
       </div>
     </section>
@@ -588,7 +589,7 @@
             <a href="https://github.com/Omodaka9375/browserr/releases/latest" class="btn-primary">↓ Download for Windows</a>
             <div class="os-meta">
               <span>Format <b>.zip</b></span>
-              <span>Contents <b>engine.exe · driver.py · browserr_mcp.py</b></span>
+              <span>Contents <b>engine.exe · libEGL.dll · libGLESv2.dll · driver.py · browserr_mcp.py</b></span>
               <span>Requires <b>Python 3.10+ (GPU optional)</b></span>
             </div>
           </div>

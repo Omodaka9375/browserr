@@ -43,10 +43,16 @@ that follow from owning the whole stack:
   (ARM64 builds included).
 - **MCP-native, not wrapper-native.** All 41 tools surface directly to any
   MCP-capable agent. No CDP quirks, no driver downloads, no version drift.
+- **SPA-ready.** Modern JS syntax, fetch/WebSockets/Workers, custom
+  elements, shadow DOM, React 18 + Vue 3 verified rendering, plus
+  IntersectionObserver, IndexedDB, Web Animations, WebGL2, crypto.subtle
+  digests and requestIdleCallback (the last two via built-in shims where
+  servo omits them).
 - **Honest about its limits.** Web compatibility is bounded by Servo 0.8:
-  text, documents, search and forms work well; heavy SPAs and DRM video may
-  not. If you need fleet scale or residential proxies, a cloud provider is
-  still the better tool. Browserr wins on local, trust-first,
+  text, documents, search, forms and common SPA patterns work well;
+  DRM video, WebRTC and service-worker-dependent offline apps do not. If
+  you need those, or fleet scale or residential proxies, a cloud provider
+  is still the better tool. Browserr wins on local, trust-first,
   human-in-the-loop work.
 
 ## Features
@@ -55,6 +61,12 @@ that follow from owning the whole stack:
 
 - Servo 0.8 rendering, CPU by default (instant start on GPU-less machines,
   containers, CI); `--gpu` opts into hardware GL with automatic CPU fallback
+- SPA compatibility: React 18 and Vue 3 render and react; all modern ES
+  syntax; fetch/WebSockets/Workers/custom elements/shadow DOM;
+  IntersectionObserver, IndexedDB, Web Animations, WebGL and WebGL2
+  (via ANGLE, so it works on GPU-less machines too), clipboard and
+  DecompressionStream; `requestIdleCallback` and `crypto.subtle` digests
+  (SHA-1/256/384/512) via built-in shims where servo omits them
 - Tabs, navigation, per-tab history, zoom, pointer/wheel/keyboard input
 - JavaScript evaluation with results returned as JSON
 - On-demand screenshots of the active tab; the SDK saves them as PNG
@@ -128,6 +140,8 @@ anywhere (no admin rights, no installer). You get:
 
 ```text
 engine(.exe)      the headless browser engine
+libEGL.dll        ANGLE GL for WebGL (Windows archives only)
+libGLESv2.dll     must stay next to engine.exe
 driver.py         Python SDK (stdlib only)
 browserr_mcp.py   MCP server (stdlib only)
 mcp_wrap.cmd      Windows MCP launcher (cmd wrapper)
@@ -365,8 +379,10 @@ directory deleted on engine exit.
 
 ## Known limitations
 
-- Web compatibility is bounded by Servo 0.8: text, documents, search and
-  forms work well; heavy SPAs, DRM video and some modern APIs may not.
+- Web compatibility is bounded by Servo 0.8: text, documents, search,
+  forms and common SPA patterns (React, Vue, data-fetching grids) work
+  well. No EME (DRM video), no WebRTC, no service-worker offline support;
+  crypto.subtle covers digests/randomUUID only (no AES-GCM), via a shim.
 - No devtools, no find-in-page.
 - History records urls only, without page titles.
 
@@ -398,6 +414,7 @@ test_annotate.py         annotated screenshots (box + glyph pixels exact)
 test_handoff.py           pause/resume, detect_handoff, reads while paused
 test_trust.py            evidence dir, action log, auto-auth, confirm gate
 test_software_render.py  CPU-default and --gpu rendering log markers
+test_compat.py           SPA/JS APIs, WebGL via ANGLE, digest vectors, gzip
 test_headed.py           Windows-only: real HWND, OS mouse/keyboard handoff
 test_mcp_logic.py        handoff transition and answered-event regressions
 test_input.py            raw-socket input forwarding

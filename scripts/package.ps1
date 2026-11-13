@@ -21,9 +21,11 @@ if ($env:RELEASE_VERSION) {
 }
 $version = $version.TrimStart("v")
 
-# Release payload: engine + SDK + MCP server + docs.
+# Release payload: engine + ANGLE DLLs + SDK + MCP server + docs.
 $payload = @(
     (Join-Path $dist "engine.exe"),
+    (Join-Path $dist "libEGL.dll"),
+    (Join-Path $dist "libGLESv2.dll"),
     (Join-Path $root "tools\driver.py"),
     (Join-Path $root "tools\browserr_mcp.py"),
     (Join-Path $root "tools\mcp_wrap.cmd"),

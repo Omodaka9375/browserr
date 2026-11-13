@@ -38,6 +38,11 @@ tools/handoff-test.html
 tools/handoff-clean.html
 tools/pay-test.html
 tools/sw-render.html
+tools/compat-probe.html
+tools/compat-probe2.html
+tools/probe_mod.js
+tools/probe_run.py
+tools/probe2_run.py
 
 tools/trust-evidence/
 tools/mcp-profiles/

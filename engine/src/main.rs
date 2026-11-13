@@ -384,6 +384,193 @@ if(window.XMLHttpRequest){
 /// only report their url/origin from the parent's perspective; servo 0.8
 /// has no cross-frame JS entry point). Top level:
 ///   {url, origin, children:[{name, url, same_origin, children:[...]}]}
+/// crypto.subtle shim (document-start user script, every frame).
+/// servo 0.8's subtlecrypto cargo feature cannot resolve from crates.io
+/// (its rsa dep pins an unpublished der release), so crypto.subtle is
+/// absent from the crates.io build. SPAs lean on two calls: digest
+/// (token/hashing) and randomUUID. This shim provides pure-JS SHA-1 and
+/// SHA-2 digests plus randomUUID, and honestly rejects the rest
+/// (encrypt/sign/deriveKey) with NotSupportedError - a page probing
+/// capabilities then falls back, a page that hard-requires AES-GCM fails
+/// the way it would on an old browser, not with a missing object.
+const CRYPTO_SHIM_JS: &str = r#"(function(){
+if(typeof crypto==="undefined") return;
+if(crypto.subtle && typeof crypto.subtle.digest==="function") return;
+function sha1core(msgBytes){
+  var ml=msgBytes.length,blocks=Math.ceil((ml+9)/64),i,j;
+  var words=new Array(blocks*16);for(i=0;i<blocks*16;i++)words[i]=0;
+  for(i=0;i<ml;i++)words[i>>2]|=msgBytes[i]<<(24-8*(i&3));
+  words[ml>>2]|=0x80<<(24-8*(ml&3));
+  words[blocks*16-1]=ml*8;
+  var H0=0x67452301,H1=0xEFCDAB89,H2=0x98BADCFE,H3=0x10325476,H4=0xC3D2E1F0;
+  var w=new Array(80);
+  for(i=0;i<blocks;i++){
+    for(j=0;j<16;j++)w[j]=words[i*16+j];
+    for(j=16;j<80;j++){var n=w[j-3]^w[j-8]^w[j-14]^w[j-16];w[j]=(n<<1)|(n>>>31);}
+    var a=H0,b=H1,c=H2,dd=H3,e=H4;
+    for(j=0;j<80;j++){
+      var f,k;
+      if(j<20){f=(b&c)|((~b)&dd);k=0x5A827999;}
+      else if(j<40){f=b^c^dd;k=0x6ED9EBA1;}
+      else if(j<60){f=(b&c)|(b&dd)|(c&dd);k=0x8F1BBCDC;}
+      else{f=b^c^dd;k=0xCA62C1D6;}
+      var t=(((a<<5)|(a>>>27))+f+e+k+w[j])>>>0;
+      e=dd;dd=c;c=(b<<30)|(b>>>2);b=a;a=t;
+    }
+    H0=(H0+a)>>>0;H1=(H1+b)>>>0;H2=(H2+c)>>>0;H3=(H3+dd)>>>0;H4=(H4+e)>>>0;
+  }
+  return [H0,H1,H2,H3,H4];
+}
+var K256=[0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+function sha256core(msgBytes){
+  var H=[0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+  var ml=msgBytes.length,blocks=Math.ceil((ml+9)/64);
+  var words=new Array(blocks*16);for(var q=0;q<blocks*16;q++)words[q]=0;
+  for(var i=0;i<ml;i++)words[i>>2]|=msgBytes[i]<<(24-8*(i&3));
+  words[ml>>2]|=0x80<<(24-8*(ml&3));
+  words[blocks*16-1]=ml*8;
+  var w=new Array(64);
+  for(var b=0;b<blocks;b++){
+    var t2,t3;
+    for(t2=0;t2<16;t2++)w[t2]=words[b*16+t2];
+    for(t3=16;t3<64;t3++){
+      var s0=(((w[t3-15]>>>7)|(w[t3-15]<<25))^((w[t3-15]>>>18)|(w[t3-15]<<14))^(w[t3-15]>>>3))>>>0;
+      var s1=(((w[t3-2]>>>17)|(w[t3-2]<<15))^((w[t3-2]>>>19)|(w[t3-2]<<13))^(w[t3-2]>>>10))>>>0;
+      w[t3]=(w[t3-16]+s0+w[t3-7]+s1)>>>0;
+    }
+    var a=H[0],b2=H[1],c=H[2],d=H[3],e=H[4],f=H[5],g=H[6],h=H[7];
+    for(var t4=0;t4<64;t4++){
+      var S1=(((e>>>6)|(e<<26))^((e>>>11)|(e<<21))^((e>>>25)|(e<<7)))>>>0;
+      var ch=((e&f)^(~e&g))>>>0;
+      var t1=(h+S1+ch+K256[t4]+w[t4])>>>0;
+      var S0=(((a>>>2)|(a<<30))^((a>>>13)|(a<<19))^((a>>>22)|(a<<10)))>>>0;
+      var mj=((a&b2)^(a&c)^(b2&c))>>>0;
+      var t2b=(t1+S0+mj)>>>0;
+      h=g;g=f;f=e;e=(d+t1)>>>0;d=c;c=b2;b2=a;a=t2b;
+    }
+    H[0]=(H[0]+a)>>>0;H[1]=(H[1]+b2)>>>0;H[2]=(H[2]+c)>>>0;H[3]=(H[3]+d)>>>0;
+    H[4]=(H[4]+e)>>>0;H[5]=(H[5]+f)>>>0;H[6]=(H[6]+g)>>>0;H[7]=(H[7]+h)>>>0;
+  }
+  return H;
+}
+var K512=[[0x428a2f98,0xd728ae22],[0x71374491,0x23ef65cd],[0xb5c0fbcf,0xec4d3b2f],[0xe9b5dba5,0x8189dbbc],[0x3956c25b,0xf348b538],[0x59f111f1,0xb605d019],[0x923f82a4,0xaf194f9b],[0xab1c5ed5,0xda6d8118],[0xd807aa98,0xa3030242],[0x12835b01,0x45706fbe],[0x243185be,0x4ee4b28c],[0x550c7dc3,0xd5ffb4e2],[0x72be5d74,0xf27b896f],[0x80deb1fe,0x3b1696b1],[0x9bdc06a7,0x25c71235],[0xc19bf174,0xcf692694],[0xe49b69c1,0x9ef14ad2],[0xefbe4786,0x384f25e3],[0x0fc19dc6,0x8b8cd5b5],[0x240ca1cc,0x77ac9c65],[0x2de92c6f,0x592b0275],[0x4a7484aa,0x6ea6e483],[0x5cb0a9dc,0xbd41fbd4],[0x76f988da,0x831153b5],[0x983e5152,0xee66dfab],[0xa831c66d,0x2db43210],[0xb00327c8,0x98fb213f],[0xbf597fc7,0xbeef0ee4],[0xc6e00bf3,0x3da88fc2],[0xd5a79147,0x930aa725],[0x06ca6351,0xe003826f],[0x14292967,0x0a0e6e70],[0x27b70a85,0x46d22ffc],[0x2e1b2138,0x5c26c926],[0x4d2c6dfc,0x5ac42aed],[0x53380d13,0x9d95b3df],[0x650a7354,0x8baf63de],[0x766a0abb,0x3c77b2a8],[0x81c2c92e,0x47edaee6],[0x92722c85,0x1482353b],[0xa2bfe8a1,0x4cf10364],[0xa81a664b,0xbc423001],[0xc24b8b70,0xd0f89791],[0xc76c51a3,0x0654be30],[0xd192e819,0xd6ef5218],[0xd6990624,0x5565a910],[0xf40e3585,0x5771202a],[0x106aa070,0x32bbd1b8],[0x19a4c116,0xb8d2d0c8],[0x1e376c08,0x5141ab53],[0x2748774c,0xdf8eeb99],[0x34b0bcb5,0xe19b48a8],[0x391c0cb3,0xc5c95a63],[0x4ed8aa4a,0xe3418acb],[0x5b9cca4f,0x7763e373],[0x682e6ff3,0xd6b2b8a3],[0x748f82ee,0x5defb2fc],[0x78a5636f,0x43172f60],[0x84c87814,0xa1f0ab72],[0x8cc70208,0x1a6439ec],[0x90befffa,0x23631e28],[0xa4506ceb,0xde82bde9],[0xbef9a3f7,0xb2c67915],[0xc67178f2,0xe372532b],[0xca273ece,0xea26619c],[0xd186b8c7,0x21c0c207],[0xeada7dd6,0xcde0eb1e],[0xf57d4f7f,0xee6ed178],[0x06f067aa,0x72176fba],[0x0a637dc5,0xa2c898a6],[0x113f9804,0xbef90dae],[0x1b710b35,0x131c471b],[0x28db77f5,0x23047d84],[0x32caab7b,0x40c72493],[0x3c9ebe0a,0x15c9bebc],[0x431d67c4,0x9c100d4c],[0x4cc5d4be,0xcb3e42b6],[0x597f299c,0xfc657e2a],[0x5fcb6fab,0x3ad6faec],[0x6c44198c,0x4a475817]];
+function sha512core(msgBytes){
+  return sha2core64(msgBytes,[[0x6a09e667,0xf3bcc908],[0xbb67ae85,0x84caa73b],[0x3c6ef372,0xfe94f82b],[0xa54ff53a,0x5f1d36f1],[0x510e527f,0xade682d1],[0x9b05688c,0x2b3e6c1f],[0x1f83d9ab,0xfb41bd6b],[0x5be0cd19,0x137e2179]]);
+}
+function sha384core(msgBytes){
+  return sha2core64(msgBytes,[[0xcbbb9d5d,0xc1059ed8],[0x629a292a,0x367cd507],[0x9159015a,0x3070dd17],[0x152fecd8,0xf70e5939],[0x67332667,0xffc00b31],[0x8eb44a87,0x68581511],[0xdb0c2e0d,0x64f98fa7],[0x47b5481d,0xbefa4fa4]]);
+}
+function sha2core64(msgBytes,H){
+  var ml=msgBytes.length,blocks=Math.ceil((ml+17)/128);
+  function add64(x,y){var l=(x[1]+y[1])>>>0;var c=(l<x[1])?1:0;return [((x[0]+y[0]+c)>>>0),l];}
+  function shr64(x,n){if(n===0)return [x[0],x[1]];if(n<32)return [(x[0]>>>n)>>>0,((x[0]<<(32-n))|(x[1]>>>n))>>>0];return [0,(x[0]>>>(n-32))>>>0];}
+  function rotr64(x,n){if(n<32){return [((x[0]>>>n)|(x[1]<<(32-n)))>>>0,((x[1]>>>n)|(x[0]<<(32-n)))>>>0];}n=n-32;return [((x[1]>>>n)|(x[0]<<(32-n)))>>>0,((x[0]>>>n)|(x[1]<<(32-n)))>>>0];}
+  function xor3(a,b2,c){return [(a[0]^b2[0]^c[0])>>>0,(a[1]^b2[1]^c[1])>>>0];}
+  var words=new Array(blocks*32);for(var q=0;q<blocks*32;q++)words[q]=0;
+  for(var i2=0;i2<ml;i2++){var w64=(i2>>3)*2,off=i2&7;if(off<4){words[w64]|=msgBytes[i2]<<(24-8*off);}else{words[w64+1]|=msgBytes[i2]<<(24-8*(off-4));}}
+  var w64p=(ml>>3)*2,offp=ml&7;if(offp<4){words[w64p]|=0x80<<(24-8*offp);}else{words[w64p+1]|=0x80<<(24-8*(offp-4));}
+  words[blocks*32-2]=Math.floor(ml*8/4294967296);
+  words[blocks*32-1]=(ml*8)>>>0;
+  var W=new Array(80);
+  for(var b=0;b<blocks;b++){
+    var t,t2,t3;
+    for(t=0;t<16;t++)W[t]=[words[b*32+t*2],words[b*32+t*2+1]];
+    for(t2=16;t2<80;t2++){
+      var s0=xor3(rotr64(W[t2-15],1),rotr64(W[t2-15],8),shr64(W[t2-15],7));
+      var s1=xor3(rotr64(W[t2-2],19),rotr64(W[t2-2],61),shr64(W[t2-2],6));
+      W[t2]=add64(add64(W[t2-16],s0),add64(W[t2-7],s1));
+    }
+    var a=H[0],b2=H[1],c=H[2],d=H[3],e=H[4],f=H[5],g=H[6],h=H[7];
+    for(t3=0;t3<80;t3++){
+      var S1=xor3(rotr64(e,14),rotr64(e,18),rotr64(e,41));
+      var ch=[((e[0]&f[0])^(~e[0]&g[0]))>>>0,((e[1]&f[1])^(~e[1]&g[1]))>>>0];
+      var kk=K512[t3];
+      var t1=add64(add64(add64(h,S1),ch),add64(kk,W[t3]));
+      var S0=xor3(rotr64(a,28),rotr64(a,34),rotr64(a,39));
+      var mj=[((a[0]&b2[0])^(a[0]&c[0])^(b2[0]&c[0]))>>>0,((a[1]&b2[1])^(a[1]&c[1])^(b2[1]&c[1]))>>>0];
+      var t2b=add64(add64(t1,S0),mj);
+      h=g;g=f;f=e;e=add64(d,t1);d=c;c=b2;b2=a;a=t2b;
+    }
+    var Hd=[a,b2,c,d,e,f,g,h];
+    for(var z=0;z<8;z++)H[z]=add64(H[z],Hd[z]);
+  }
+  var out=[];
+  for(var z2=0;z2<8;z2++){out.push(H[z2][0]);out.push(H[z2][1]);}
+  return out;
+}
+function toBytes(data){
+  if(typeof data==="string")return new TextEncoder().encode(data);
+  if(data instanceof ArrayBuffer)return new Uint8Array(data);
+  if(data && data.buffer && data.byteLength!==undefined)return new Uint8Array(data.buffer,data.byteOffset,data.byteLength);
+  throw new TypeError("subtle shim: unsupported data type");
+}
+function wordsToBuf(words){
+  var b=new Uint8Array(words.length*4);
+  for(var i=0;i<words.length;i++){b[i*4]=(words[i]>>>24)&255;b[i*4+1]=(words[i]>>>16)&255;b[i*4+2]=(words[i]>>>8)&255;b[i*4+3]=words[i]&255;}
+  return b;
+}
+function reject(alg,op){return Promise.reject(new DOMException("crypto.subtle shim: "+alg+" is not supported for "+op+" (browserr builds servo from crates.io where the subtlecrypto feature cannot resolve)","NotSupportedError"));}
+var subtle={
+  digest:function(alg,data){
+    var name=String((alg&&typeof alg==="object"&&alg.name)||alg).toLowerCase().replace(/-/g,"");
+    var bytes;
+    try{bytes=toBytes(data);}catch(e){return Promise.reject(e);}
+    if(name==="sha1")return Promise.resolve(wordsToBuf(sha1core(bytes)));
+    if(name==="sha256")return Promise.resolve(wordsToBuf(sha256core(bytes)));
+    if(name==="sha512")return Promise.resolve(wordsToBuf(sha512core(bytes)));
+    if(name==="sha384"){
+      var full=wordsToBuf(sha384core(bytes));
+      var o=new Uint8Array(48);for(var i=0;i<48;i++)o[i]=full[i];
+      return Promise.resolve(o);
+    }
+    return reject(name,"digest");
+  },
+  encrypt:function(alg){return reject(String(alg),"encrypt");},
+  decrypt:function(alg){return reject(String(alg),"decrypt");},
+  sign:function(alg){return reject(String(alg),"sign");},
+  verify:function(alg){return reject(String(alg),"verify");},
+  deriveKey:function(alg){return reject(String(alg),"deriveKey");},
+  deriveBits:function(alg){return reject(String(alg),"deriveBits");},
+  importKey:function(alg){return reject(String(alg),"importKey");},
+  exportKey:function(){return reject("key","exportKey");},
+  generateKey:function(alg){return reject(String(alg),"generateKey");},
+  wrapKey:function(){return reject("key","wrapKey");},
+  unwrapKey:function(){return reject("key","unwrapKey");}
+};
+try{Object.defineProperty(crypto,"subtle",{value:subtle,configurable:true});}catch(_){crypto.subtle=subtle;}
+if(typeof crypto.randomUUID!=="function"){
+  crypto.randomUUID=function(){
+    var b=new Uint8Array(16);crypto.getRandomValues(b);
+    b[6]=(b[6]&15)|64;b[8]=(b[8]&63)|128;
+    var h="";for(var i=0;i<16;i++){if(i===4||i===6||i===8||i===10)h+="-";h+=("0"+b[i].toString(16)).slice(-2);}
+    return h;
+  };
+}
+})()"#;
+
+/// requestIdleCallback shim (document-start user script, every frame).
+/// servo 0.8 genuinely lacks this API (zero hits in script/), and SPA
+/// schedulers probe for it. The classic WICG setTimeout(1) approximation:
+/// callbacks fire promptly, timeRemaining reports a plausible 50ms budget.
+/// ES5 only - this must run before any page script regardless of syntax
+/// support downstream.
+const IDLE_CALLBACK_JS: &str = r#"(function(){
+if(typeof window.requestIdleCallback==="function") return;
+window.requestIdleCallback=function(cb,opts){
+  var start=Date.now();
+  var timeout=(opts&&opts.timeout)||0;
+  return setTimeout(function(){
+    try{
+      cb({didTimeout:!!timeout&&(Date.now()-start)>=timeout,
+          timeRemaining:function(){return Math.max(0,50-(Date.now()-start));}});
+    }catch(_){}
+  },1);
+};
+window.cancelIdleCallback=function(id){
+  try{clearTimeout(id);}catch(_){}
+};
+})()"#;
+
 const FRAME_TREE_JS: &str = r#"(function(){
 function frame_info(f){
   var o={name:f.name||'',url:'',same_origin:false,children:[]};
@@ -1358,7 +1545,54 @@ fn broadcast_shot(bytes: &[u8]) {
     }
 }
 
+/// Windows-only, before any GL initialization: servo loads the ANGLE
+/// DLLs (libEGL.dll, libGLESv2.dll) BY NAME at the first EGL call, so
+/// they must sit next to engine.exe. engine/build.rs normally stages
+/// them at build time, but a build whose script ran before mozangle
+/// finished (cold builds: build scripts run early in the graph) ships
+/// without them, and `cargo run` / test_thin use the raw target dir.
+/// Self-stage: find them under <target>/<profile>/build/mozangle-*/out
+/// and copy them next to the exe. Idempotent; missing = no-op.
+#[cfg(windows)]
+fn ensure_angle_dlls() {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let bin_dir = match exe.parent() {
+        Some(d) => d.to_path_buf(),
+        None => return,
+    };
+    let build_dir = bin_dir.join("build");
+    let mut staged = 0;
+    let entries = match std::fs::read_dir(&build_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let out = entry.path().join("out");
+        if !out.is_dir() {
+            continue;
+        }
+        for dll in ["libEGL.dll", "libGLESv2.dll"] {
+            let dst = bin_dir.join(dll);
+            if dst.is_file() {
+                continue; // already staged
+            }
+            let src = out.join(dll);
+            if src.is_file() && std::fs::copy(&src, &dst).is_ok() {
+                staged += 1;
+            }
+        }
+    }
+    if staged > 0 {
+        eprintln!("engine: staged {staged} ANGLE dll(s) next to the binary");
+    }
+}
+
 fn main() {
+    #[cfg(windows)]
+    ensure_angle_dlls();
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     // The tab-drop panic (see close_tab) is expected and contained; keep the
@@ -1418,6 +1652,17 @@ fn main() {
         let dir = std::env::temp_dir().join(format!("browserr-ephemeral-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir); // a crashed predecessor
         Some(dir)
+    } else if profile_dir.is_none() {
+        // Bare start (no --profile-dir, no --ephemeral): default to a
+        // throwaway profile. Without a config dir servo's storage threads
+        // run dir-less, and indexedDB.open() then hangs forever (the sqlite
+        // backend never opens, the request never errors) - pages probing
+        // storage wedge. A temp profile keeps the same nothing-persists
+        // semantics while making every storage API actually work.
+        let dir = std::env::temp_dir().join(format!("browserr-ephemeral-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir); // a crashed predecessor
+        eprintln!("engine: no profile given; using a throwaway profile");
+        Some(dir)
     } else {
         None
     };
@@ -1473,6 +1718,37 @@ fn main() {
         eprintln!("engine: custom user agent set");
         prefs.user_agent = ua;
     }
+    // SPA/JS compatibility: servo 0.8 ships these web APIs implemented but
+    // pref-gated OFF upstream (they flip them for WPT runs only). Pref flips
+    // cost zero binary size - the code is compiled either way; the flag
+    // only exposes the binding to pages. Enabled:
+    //   IntersectionObserver (lazy-load, infinite scroll, hydration gates)
+    //   indexedDB (offline storage, redux-persist, workbox-style caching)
+    //   Web Animations (Element.animate used by UI libs)
+    //   WebGL2 bindings (three.js r163+ requires WebGL2)
+    //   async Clipboard (copy buttons)
+    //   entries API (drag-drop file upload paths)
+    //   execCommand (legacy rich-text editors)
+    //   adopted stylesheets (constructable sheets, lit and friends)
+    //   FontFace (PDF.js, icon fonts)
+    //   Permissions (navigator.permissions.query gates in init scripts)
+    //   container queries + writing-mode (modern layout CSS)
+    // Left OFF on purpose: service workers (a half-working fetch
+    // interceptor wedges pages harder than absence), WebRTC (not
+    // compiled), geolocation (no embedder delegate, privacy),
+    // notifications, bluetooth.
+    prefs.dom_intersection_observer_enabled = true;
+    prefs.dom_indexeddb_enabled = true;
+    prefs.dom_web_animations_enabled = true;
+    prefs.dom_webgl2_enabled = true;
+    prefs.dom_async_clipboard_enabled = true;
+    prefs.dom_entries_api_enabled = true;
+    prefs.dom_exec_command_enabled = true;
+    prefs.dom_adoptedstylesheet_enabled = true;
+    prefs.dom_fontface_enabled = true;
+    prefs.dom_permissions_enabled = true;
+    prefs.layout_css_container_queries_enabled = true;
+    prefs.layout_css_writing_mode_enabled = true;
     let servo = servo::ServoBuilder::default()
         .event_loop_waker(Box::new(ServoWaker(pump.clone())))
         .opts(opts)
@@ -1517,6 +1793,14 @@ fn main() {
     let ucm = std::rc::Rc::new(servo::UserContentManager::new(&servo));
     ucm.add_script(std::rc::Rc::new(servo::UserScript::new(
         NET_EVIDENCE_JS.to_string(),
+        None,
+    )));
+    ucm.add_script(std::rc::Rc::new(servo::UserScript::new(
+        IDLE_CALLBACK_JS.to_string(),
+        None,
+    )));
+    ucm.add_script(std::rc::Rc::new(servo::UserScript::new(
+        CRYPTO_SHIM_JS.to_string(),
         None,
     )));
 
