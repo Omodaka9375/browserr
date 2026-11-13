@@ -391,7 +391,7 @@
         <a href="#install">Install</a>
         <a href="https://github.com/Omodaka9375/browserr">GitHub</a>
       </span>
-      <span><span id="heroVersion">v0.5.0</span> · <b id="heroStars">★ open source</b></span>
+      <span><span id="heroVersion">v0.6.0</span> · <b id="heroStars">★ open source</b></span>
     </div>
   </div>
 
@@ -477,6 +477,7 @@
             <tr><td>fill</td><td><b>Form filling.</b> A whole form in one round trip, with type-aware writes.</td></tr>
             <tr><td>submit</td><td><b>Submit and read the outcome.</b> Runs the page's validation, then reports url, alerts and invalid fields.</td></tr>
             <tr><td>point</td><td><b>Shared references.</b> Stable refs and numbered screenshot boxes: the agent says "click 7" and the human knows which one that is.</td></tr>
+            <tr><td>proxy</td><td><b>Upstream proxy routing.</b> browser_start(proxy=...) routes all http/https traffic through a CONNECT tunnel (basic auth in the URL, per-engine rotation); document_status reports the main document's real HTTP status so a block serving a fake 404 is distinguishable from a dead page.</td></tr>
             <tr><td>handoff</td><td><b>Humans take over in a real native window.</b> Start MCP with headed:true; direct mouse and keyboard input keep working while agent mutations are paused. CAPTCHA support still depends on Servo compatibility.</td></tr>
             <tr><td>trust</td><td><b>Fail-closed by design.</b> Persistent profiles, evidence shots, an append-only action log, a credential store and a confirm gate on payment submits.</td></tr>
           </tbody>
