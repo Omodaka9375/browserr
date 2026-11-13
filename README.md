@@ -2,14 +2,16 @@
 
 [![CI](https://github.com/Omodaka9375/browserr/actions/workflows/ci.yml/badge.svg)](https://github.com/Omodaka9375/browserr/actions/workflows/ci.yml)
 
-A Servo-based, headless browser engine built for AI agents.
+A Servo-based browser engine built for AI agents: headless by default,
+with an optional native interactive window for human handoff.
 
 Browserr is an alternative to embedding Chromium in an agent stack: a single
 `engine` binary (Rust + Servo) that renders pages headlessly, blocks ads, and
-exposes a 20-command loopback protocol.
+exposes a small loopback protocol.
 
-Rendering is CPU by default; `--gpu` opts into hardware rendering. It runs
-on Windows, Linux (x64/ARM64) and macOS.
+Rendering is CPU by default; `--gpu` opts into hardware rendering.
+`--headed` opens a real interactive native window and requires a desktop
+with graphics support. It runs on Windows, Linux (x64/ARM64) and macOS.
 
 Agents drive it through a Python SDK or through any MCP-capable client.
 The automation surface is deliberately small: the entire protocol is
@@ -34,7 +36,8 @@ auditable in an afternoon, unlike CDP.
 - `read_page()`: token-cheap prose extraction
 - `read_structure()`: every interactive element with its rect, selector and
   a stable ref (`e7`); fields carry label, constraints, state and validity;
-  shadow DOM included
+  shadow DOM included. Refs are scoped to each `read_structure()` snapshot;
+  after navigation or a refresh, read again. MCP reports stale refs as errors
 
 ### Acting on pages
 
@@ -42,7 +45,7 @@ auditable in an afternoon, unlike CDP.
   `wait_for_selector`
 - Ref interaction: `click_ref`, `set_field`, `fill_form` - stable refs,
   no selector fragility; a whole form in one round trip, with type-aware
-  writes that fire input/change/blur so page validators run
+  writes that fire input/change/blur once so page validators run
 - Submit cycle: `submit_form` runs the page's own validation, then
   `read_outcome` reports the url, alert texts and invalid fields
 - File uploads: picker events answered with local file paths
@@ -61,8 +64,10 @@ auditable in an afternoon, unlike CDP.
 - `detect_handoff()`: spots CAPTCHAs, one-time codes, empty passwords,
   payment fields and consent walls
 - `pause()` / `resume()`: mutating actions fail loudly while a human has
-  control; reads keep working; `wait_for_user()` waits for the handoff
-  to clear
+  control; reads keep working. MCP `browser_wait_for_user` completes only
+  on navigation or an observed handoff clearing, never on a clean first scan
+- Real human handoff: `browser_start({headed: true})` shows the native
+  window; mouse and keyboard input still work while MCP actions are paused
 - Annotated screenshots: every element boxed and numbered by ref, so an
   agent and a human point at the same element
 - Persistent profiles: logins survive sessions
@@ -258,7 +263,7 @@ Timing rules worth knowing:
 ## MCP server
 
 `tools/browserr_mcp.py` is a Model Context Protocol server (standard
-library only, newline JSON-RPC on stdio) exposing 36 tools:
+library only, newline JSON-RPC on stdio) exposing 40 tools:
 
 - session: start (with optional persistent `profile`), stop, ping
 - page: navigate, read, read_structure, links, forms
@@ -268,12 +273,31 @@ library only, newline JSON-RPC on stdio) exposing 36 tools:
   evidence, download
 - network: intercept, pending_requests, intercept_answer, net, frames
 - trust: pause, resume, detect_handoff, wait_for_user, set_credentials
+- events: wait_auth, auth_answer, wait_filepicker, files_answer
 
 It runs headless with an ephemeral profile by default; `--port N`
 attaches to a running engine's driver port. `browser_start(profile=...)`
 uses a persistent profile (logins survive sessions) with a per-profile
 evidence dir and action log; evidence shots, auto-auth and the submit
-confirm gate are always on for MCP-started engines.
+confirm gate are on by default for MCP-started engines. Set
+`auto_auth: false` to use the manual auth tools. Navigation returns an
+`auth_required` challenge instead of waiting for a blocked page.
+
+For human handoff, start with `{headed: true}`. This is a real browser
+window with no separate tab bar; MCP tab switching controls its contents.
+window, not a screenshot viewer: the user can click and type directly,
+including inside cross-origin CAPTCHA frames when the provider supports
+Servo. `browser_pause` blocks MCP mutations, not native window input.
+Call `browser_wait_for_user`, then `browser_resume`. The user can press
+Enter in the native window to explicitly finish a generic or cross-origin
+challenge; this confirms completion without needing heuristic detection.
+The engine-level pause blocks all automation clients but not native input.
+Headless mode cannot provide this direct interaction.
+
+`browser_start` and `browser_evidence` return absolute `evidence_dir` and
+`action_log_path` values. The action log is `actions.jsonl` in that
+evidence directory, under `tools/mcp-evidence/<profile-or-session>` in a
+source checkout.
 
 ## Profiles
 
@@ -342,6 +366,8 @@ test_annotate.py         annotated screenshots (box + glyph pixels exact)
 test_handoff.py           pause/resume, detect_handoff, reads while paused
 test_trust.py            evidence dir, action log, auto-auth, confirm gate
 test_software_render.py  CPU-default and --gpu rendering log markers
+test_headed.py           Windows-only: real HWND, OS mouse/keyboard handoff
+test_mcp_logic.py        handoff transition and answered-event regressions
 test_input.py            raw-socket input forwarding
 test_cursor_zoom.py      cursor events + zoom via devicePixelRatio
 test_close.py            tab close must not kill the engine

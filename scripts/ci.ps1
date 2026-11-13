@@ -40,6 +40,9 @@ $sdk_tests = @(
     "test_flow", "test_annotate", "test_handoff", "test_trust",
     "test_software_render"
 )
+if (-not $gpuless -and $env:CI -ne "true") { $sdk_tests += "test_headed" }
+# Always run the render-free MCP handoff regression tests.
+$sdk_tests += "test_mcp_logic"
 # Render-free tests: raw socket protocol, no webview pixels needed.
 $gpuless_tests = @("test_bind")
 

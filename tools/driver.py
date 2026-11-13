@@ -266,7 +266,17 @@ class Driver:
         if self.sock is None:
             if self.proc:
                 self.proc.kill()
-            raise ConnectionError(f"engine did not answer on {self.port}: {last}")
+            detail = ""
+            if self._log:
+                self._log.flush()
+                try:
+                    with open(self._log.name, encoding="utf-8", errors="replace") as f:
+                        detail = f.read()[-4000:].strip()
+                except OSError:
+                    pass
+            raise ConnectionError(
+                f"engine did not answer on {self.port}: {last}"
+                + (f"; engine log: {detail}" if detail else ""))
 
         self.cmd({"cmd": "resize", "w": width, "h": height})
         threading.Thread(target=self._read_loop, daemon=True).start()
@@ -310,6 +320,10 @@ class Driver:
         self.events = []            # all EVT1 events, newest last
         self.shots = []             # (w, h, bgra) screenshots, newest last
         self._next_id = 1
+        self._event_seq = 0         # driver-local ordering for event cursors
+        self._answered_requests = set()
+        self._answered_auth = set()
+        self._answered_filepickers = set()
         self._cond = threading.Condition()
         self._stop = False
         self.proc = None
@@ -319,6 +333,7 @@ class Driver:
         self.height = None
         self.dead = False           # set by the reader thread on socket loss
         self._paused = None        # reason string while a human has control
+        self._handoff_seen = False
 
         # Trust layer state: evidence dir, action log, stored credentials.
         self.evidence_dir = None
@@ -333,12 +348,27 @@ class Driver:
     # Engine commands that mutate the page. Everything else (ping, resize,
     # screenshot, eval reads) stays available while paused so the agent can
     # keep watching.
-    _MUTATING_CMDS = frozenset(("navigate", "input", "key", "wheel"))
+    _MUTATING_CMDS = frozenset((
+        "navigate", "input", "key", "wheel", "new_tab", "activate",
+        "close_tab", "back", "forward"))
 
     def _guard_paused(self, what: str) -> None:
         if self._paused is not None:
             raise PausedError(
                 f"paused ({self._paused}): {what} blocked until resume()")
+
+    def set_engine_paused(self, paused: bool) -> None:
+        """Pause all automation clients while preserving native window input."""
+        self.cmd({"cmd": "resume" if not paused else "pause", "tab": 0})
+
+    def handoff_complete(self, timeout=2.0) -> bool:
+        """Whether the human pressed Enter to finish this engine pause."""
+        req = self._next_id
+        self._next_id += 1
+        self.cmd({"cmd": "handoff", "tab": 0, "id": req})
+        ev = self.wait_for(lambda e: e.get("ev") == "handoff_status"
+                           and e.get("id") == req, timeout)
+        return bool(ev.get("complete"))
 
     def pause(self, reason="user takeover") -> None:
         """Hand control to the user. Every mutating action raises PausedError
@@ -400,7 +430,10 @@ class Driver:
                 elif magic == EVT1:
                     payload = self._read_exact(a)
                     with self._cond:
-                        self.events.append(json.loads(payload))
+                        event = json.loads(payload)
+                        self._event_seq += 1
+                        event["_driver_seq"] = self._event_seq
+                        self.events.append(event)
                         self._cond.notify_all()
                 else:
                     self._mark_dead()
@@ -415,15 +448,22 @@ class Driver:
             self.dead = True
             self._cond.notify_all()
 
-    def wait_for(self, pred, timeout=10.0):
+    def event_cursor(self):
+        """A cursor for waiting only on events received after this point."""
+        with self._cond:
+            return self._event_seq
+
+    def wait_for(self, pred, timeout=10.0, after=None):
         """Wait until pred(event) holds for some event, return that event.
+        after is an optional event_cursor(); older events are ignored.
         Raises EngineDeadError as soon as the reader notices the engine
         socket is gone (no hanging until the timeout)."""
         deadline = time.time() + timeout
         with self._cond:
             while True:
                 for e in reversed(self.events):
-                    if pred(e):
+                    if ((after is None or e.get("_driver_seq", 0) > after)
+                            and pred(e)):
                         return e
                 if self.dead:
                     raise EngineDeadError(
@@ -499,6 +539,7 @@ class Driver:
         Returns {path, w, h, items: [{ref, num, label, x, y, w, h}],
         pixels_drawn}."""
         r = self.read_structure(tab, timeout)
+        dpr = self.eval_js("window.devicePixelRatio || 1", tab, timeout) or 1
         w, h, bgra = self.screenshot(tab)
         buf = bytearray(bgra)
         items = []
@@ -512,7 +553,9 @@ class Driver:
                 bw, bh = int(el.get("w") or 0), int(el.get("h") or 0)
                 if bw <= 0 or bh <= 0:
                     continue
-                x, y = int(el.get("x") or 0), int(el.get("y") or 0)
+                x = int((el.get("x") or 0) * dpr)
+                y = int((el.get("y") or 0) * dpr)
+                bw, bh = int(bw * dpr), int(bh * dpr)
                 drawn += draw_rect(buf, w, h, x, y, bw, bh)
                 drawn += draw_number(buf, w, h, x + 2, y + 2, num)
                 items.append({"ref": ref, "num": num,
@@ -676,9 +719,10 @@ class Driver:
         self.cmd({"cmd": "intercept", "tab": 0, "on": bool(on)})
 
     def wait_request(self, tab=None, url_contains=None, timeout=10.0):
-        """Wait for the next held-request decision event; returns it."""
+        """Wait for an unanswered held-request decision event; returns it."""
         return self.wait_for(
             lambda e: e.get("ev") == "request"
+            and e.get("id") not in self._answered_requests
             and (tab is None or e.get("tab") == tab)
             and (url_contains is None or url_contains in e.get("url", "")),
             timeout)
@@ -689,14 +733,17 @@ class Driver:
         it with a synthetic 403, "respond" fulfills it with status/body."""
         self.cmd({"cmd": "request", "tab": 0, "id": req_id, "action": action,
                   "status": status, "body": body, "content_type": content_type})
+        with self._cond:
+            self._answered_requests.add(req_id)
 
-    def wait_auth(self, tab=None, timeout=15.0):
-        """Wait for the next auth challenge event
+    def wait_auth(self, tab=None, timeout=15.0, after=None):
+        """Wait for an unanswered auth challenge event
         {"ev":"auth","id","tab","url","proxy"}; returns it."""
         return self.wait_for(
             lambda e: e.get("ev") == "auth"
+            and e.get("id") not in self._answered_auth
             and (tab is None or e.get("tab") == tab),
-            timeout)
+            timeout, after=after)
 
     def auth_answer(self, req_id, user=None, password=None):
         """Answer an auth challenge. Without credentials the challenge is
@@ -705,19 +752,24 @@ class Driver:
         if user is not None and password is not None:
             args.update({"user": user, "pass": password})
         self.cmd(args)
+        with self._cond:
+            self._answered_auth.add(req_id)
 
     def wait_filepicker(self, tab=None, timeout=15.0):
-        """Wait for the next file-picker event
+        """Wait for an unanswered file-picker event
         {"ev":"filepicker","id","tab","multiple"}; returns it."""
         return self.wait_for(
             lambda e: e.get("ev") == "filepicker"
+            and e.get("id") not in self._answered_filepickers
             and (tab is None or e.get("tab") == tab),
             timeout)
 
-    def files_answer(self, req_id, paths):
+    def files_answer(self, req_id, paths=None):
         """Answer a file picker with a list of paths (empty/None = cancel)."""
         self.cmd({"cmd": "files", "tab": 0, "id": req_id,
                  "paths": list(paths) if paths else []})
+        with self._cond:
+            self._answered_filepickers.add(req_id)
 
     # -- net evidence / frames ------------------------------------------------
 
@@ -1127,7 +1179,12 @@ class Driver:
         if (type === 'checkbox' || type === 'radio') {
             const want = value === true || value === 1
                 || ['true', '1', 'checked', 'yes', 'on'].includes(String(value).toLowerCase());
-            if (!!el.checked !== want) el.click();
+            if (!!el.checked !== want) {
+                // Native click fires input and change already.
+                el.click();
+                el.dispatchEvent(new Event('blur', {bubbles: true}));
+                return {ok: true, how: 'checked', value: !!el.checked};
+            }
             how = 'checked';
         } else if (tag === 'select') {
             const opts = [...el.options];
@@ -1247,7 +1304,12 @@ class Driver:
             if (type === 'checkbox' || type === 'radio') {
                 const want = value === true || value === 1
                     || ['true', '1', 'checked', 'yes', 'on'].includes(String(value).toLowerCase());
-                if (!!el.checked !== want) el.click();
+                if (!!el.checked !== want) {
+                    // Native click fires input and change already.
+                    el.click();
+                    el.dispatchEvent(new Event('blur', {bubbles: true}));
+                    return {ok: true, how: 'checked', value: !!el.checked};
+                }
                 how = 'checked';
             } else if (tag === 'select') {
                 const opts = [...el.options];
@@ -1582,13 +1644,10 @@ class Driver:
         def loop():
             while not self.dead:
                 try:
-                    ev = self.wait_for(
-                        lambda e: e.get("ev") == "auth", timeout=1.0)
+                    ev = self.wait_auth(timeout=1.0)
                 except (TimeoutError, EngineDeadError):
                     continue
                 rid = ev.get("id")
-                if rid in self._auth_seen:
-                    continue
                 self._auth_seen.add(rid)
                 host = self._host_of(ev.get("url") or "")
                 creds = self._credentials.get(host)

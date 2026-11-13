@@ -3,19 +3,19 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Browserr — headless browser engine for AI agents</title>
-  <meta name="description" content="A Servo-based headless browser engine for AI agents. One binary, one crypto stack, a 20-command protocol you can audit in an afternoon. No UI, no CDP, no Chromium." />
+  <title>Browserr — browser engine for AI agents</title>
+  <meta name="description" content="A Servo-based browser engine for AI agents. One binary, one crypto stack, a small protocol you can audit in an afternoon. Optional native window, no CDP, no Chromium." />
   <meta name="theme-color" content="#ffffff" />
 
   <!-- Open Graph / Twitter -->
-  <meta property="og:title" content="Browserr — headless browser engine for AI agents" />
-  <meta property="og:description" content="One binary, one crypto stack, a protocol you can audit in an afternoon. No UI, no CDP, no Chromium." />
+  <meta property="og:title" content="Browserr — browser engine for AI agents" />
+  <meta property="og:description" content="One binary, one crypto stack, a protocol you can audit in an afternoon. Optional native window, no CDP, no Chromium." />
   <meta property="og:type" content="website" />
   <meta property="og:image" content="icon.svg" />
   <meta property="og:url" content="https://browserr.dev/" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Browserr — headless browser engine for AI agents" />
-  <meta name="twitter:description" content="A Servo-based headless browser engine for AI agents. MCP-native, 36 tools, 20-command protocol." />
+  <meta name="twitter:title" content="Browserr — browser engine for AI agents" />
+  <meta name="twitter:description" content="A Servo-based browser engine for AI agents. MCP-native, 40 tools, optional native window, 22-command protocol." />
 
   <link rel="icon" type="image/svg+xml" href="icon.svg" />
   <link rel="apple-touch-icon" href="icon.svg" />
@@ -402,9 +402,9 @@
       <div class="hero-copy">
       <h1><img src="icon.svg" alt="Browserr icon">browserr<span class="cursor">_</span></h1>
       <p class="dek">
-        A <strong>Servo-based, headless browser engine</strong> for AI agents. One binary, one crypto
-        stack, and a protocol small enough to <strong>audit in an afternoon</strong> — no UI, no CDP,
-        no Chromium.
+        A headless <strong>browser</strong> for your agentic workflow. One binary, one crypto
+        stack, and a protocol small enough to <strong>audit in an afternoon</strong> — no UI, CDP,
+        or Chromium.
       </p>
       <div class="mast-actions">
         <a href="https://github.com/Omodaka9375/browserr/releases/latest" class="btn-primary">↓ Download Browserr</a>
@@ -429,8 +429,8 @@
       <dl class="specs">
         <div><dt>Platform</dt><dd>Windows · Linux · macOS</dd></div>
         <div><dt>Engine</dt><dd>Servo + SpiderMonkey</dd></div>
-        <div><dt>MCP tools</dt><dd>36</dd></div>
-        <div><dt>Protocol</dt><dd>20 commands</dd></div>
+        <div><dt>MCP tools</dt><dd>40</dd></div>
+        <div><dt>Protocol</dt><dd>22 commands</dd></div>
       </dl>
 
       <!-- Mode switcher -->
@@ -475,7 +475,7 @@
             <tr><td>fill</td><td><b>Form filling.</b> A whole form in one round trip, with type-aware writes.</td></tr>
             <tr><td>submit</td><td><b>Submit and read the outcome.</b> Runs the page's validation, then reports url, alerts and invalid fields.</td></tr>
             <tr><td>point</td><td><b>Shared references.</b> Stable refs and numbered screenshot boxes: the agent says "click 7" and the human knows which one that is.</td></tr>
-            <tr><td>handoff</td><td><b>Humans take over when it matters.</b> detect_handoff() spots CAPTCHAs, codes and payment fields; pause() blocks mutations while they work. Fail-closed: unanswered means blocked, not guessed.</td></tr>
+            <tr><td>handoff</td><td><b>Humans take over in a real native window.</b> Start MCP with headed:true; direct mouse and keyboard input keep working while agent mutations are paused. CAPTCHA support still depends on Servo compatibility.</td></tr>
             <tr><td>trust</td><td><b>Fail-closed by design.</b> Persistent profiles, evidence shots, an append-only action log, a credential store and a confirm gate on payment submits.</td></tr>
           </tbody>
         </table>
@@ -501,8 +501,8 @@
       </div>
       <div class="wrap">
         <dl class="specs stats">
-          <div><dt>Commands</dt><dd>20</dd></div>
-          <div><dt>MCP tools</dt><dd>36</dd></div>
+          <div><dt>Commands</dt><dd>22</dd></div>
+          <div><dt>MCP tools</dt><dd>40</dd></div>
           <div><dt>Binary</dt><dd>~105 MB</dd></div>
           <div><dt>CDP endpoints</dt><dd>0</dd></div>
           <div><dt>Dependencies</dt><dd>0</dd></div>
@@ -522,7 +522,7 @@
         <table class="blocks">
           <thead><tr><th>Surface</th><th>Covers</th></tr></thead>
           <tbody>
-            <tr><td>mcp</td><td><b>Model Context Protocol server</b> with 36 tools, stdlib only. Any MCP-capable agent — Claude, Kai, your own — drives Browserr with zero integration code.</td></tr>
+            <tr><td>mcp</td><td><b>Model Context Protocol server</b> with 40 tools, stdlib only. Any MCP-capable agent — Claude, Kai, your own — drives Browserr with zero integration code.</td></tr>
             <tr><td>python</td><td><b>driver.py wraps the raw protocol:</b> navigation, extraction, form filling, screenshots. No dependencies.</td></tr>
             <tr><td>raw</td><td><b>Anything that can write JSON lines to a socket.</b> Bindings in any language are an afternoon.</td></tr>
           </tbody>
@@ -544,8 +544,8 @@
           <tbody>
             <tr><td>engine</td><td><b>Servo</b></td><td>own (Zig)</td><td>own (Rust)</td><td>Blink</td></tr>
             <tr><td>js engine</td><td><b>SpiderMonkey</b></td><td>own</td><td>own</td><td>V8</td></tr>
-            <tr><td>mcp-native</td><td><b>yes, 36 tools</b></td><td>no</td><td>partial</td><td>via wrappers</td></tr>
-            <tr><td>protocol size</td><td><b>20 commands</b></td><td>CDP-compatible</td><td>own + CDP</td><td>1000+ endpoints</td></tr>
+            <tr><td>mcp-native</td><td><b>yes, 40 tools</b></td><td>no</td><td>partial</td><td>via wrappers</td></tr>
+            <tr><td>protocol size</td><td><b>22 commands</b></td><td>CDP-compatible</td><td>own + CDP</td><td>1000+ endpoints</td></tr>
             <tr><td>footprint</td><td><b>one ~105 MB binary</b></td><td>~16× less than Chromium</td><td>~30 MB</td><td>~200 MB+</td></tr>
             <tr><td>web compat</td><td><b>Servo 0.8 (text, docs, forms)</b></td><td>growing</td><td>growing</td><td>full</td></tr>
           </tbody>
@@ -674,7 +674,7 @@
       'navigate', 'back', 'forward', 'new_tab', 'activate', 'close_tab',
       'input', 'wheel', 'key', 'eval', 'screenshot', 'zoom', 'ping',
       'download', 'resize', 'intercept', 'request', 'auth', 'files',
-      'frames',
+      'frames', 'pause', 'resume', 'handoff',
     ];
     const track = document.getElementById('marqueeTrack');
     if (track) {

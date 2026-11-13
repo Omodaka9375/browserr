@@ -20,7 +20,8 @@ Tools:
     browser_set_field / browser_fill_form / browser_submit_form
     browser_read_outcome / browser_click_ref / browser_screenshot_annotated
     browser_pause / browser_resume / browser_detect_handoff
-    browser_wait_for_user
+    browser_wait_for_user / browser_wait_auth / browser_auth_answer
+    browser_wait_filepicker / browser_files_answer
     browser_evidence / browser_set_credentials (profile on browser_start)
 """
 import json
@@ -54,13 +55,32 @@ class State:
                 raise McpError("browser not started; call browser_start first")
             return self.driver
 
-    def start(self, attach_port=None, token=None, profile=None):
+    def status(self, **fields):
+        """Session result with discoverable, absolute audit locations."""
+        result = dict(fields)
+        if self.driver is not None and self.driver.evidence_dir:
+            result["evidence_dir"] = os.path.abspath(self.driver.evidence_dir)
+            result["action_log_path"] = os.path.abspath(
+                self.driver.action_log_path)
+        return result
+
+    @staticmethod
+    def _engine_log_path():
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "mcp-engine.log")
+
+    def start(self, attach_port=None, token=None, profile=None, auto_auth=True,
+              headed=False):
         with self.lock:
             if self.driver is not None:
-                return {"started": False, "note": "already running"}
+                return self.status(started=False, note="already running")
+            if attach_port and headed:
+                raise McpError("headed cannot change an attached engine; "
+                               "start that engine with --headed instead")
             if attach_port:
                 self.driver = Driver.attach(attach_port, token=token)
             elif profile:
+                engine_args = ["--headed"] if headed else None
                 # Persistent profile: logins and storage survive sessions.
                 # Name is sanitized to a single path component.
                 safe = "".join(c for c in profile if c.isalnum() or c in "-_")
@@ -69,22 +89,28 @@ class State:
                 pdir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     "mcp-profiles", safe)
                 os.makedirs(pdir, exist_ok=True)
-                self.driver = Driver(profile_dir=pdir)
+                self.driver = Driver(profile_dir=pdir, engine_args=engine_args,
+                                     log=self._engine_log_path())
             else:
-                self.driver = Driver(ephemeral=True)
+                self.driver = Driver(ephemeral=True,
+                                     engine_args=["--headed"] if headed else None,
+                                     log=self._engine_log_path())
             # Trust layer on by default: evidence + action log per profile
             # (or per session for ephemeral/attach).
-            label = profile or f"session-{int(time.time())}"
+            label = profile or f"session-{time.time_ns()}"
             evdir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                  "mcp-evidence", safe_name(label))
             os.makedirs(evdir, exist_ok=True)
             self.driver.enable_evidence(evdir)
-            self.driver.start_auto_auth()
+            if auto_auth:
+                self.driver.start_auto_auth()
             # spawn = a fresh engine this server owns; attach = connected to
-            # a running engine's driver port. There is no headed mode.
-            return {"started": True, "mode": "attach" if attach_port else "spawn",
-                    "profile": profile or "ephemeral",
-                    "evidence_dir": evdir}
+            # a running engine's driver port.
+            return self.status(
+                started=True, mode="attach" if attach_port else "spawn",
+                engine_pid=self.driver.proc.pid if self.driver.proc else None,
+                profile=profile or "ephemeral", auto_auth=bool(auto_auth),
+                headed=bool(headed) if not attach_port else "unknown")
 
     def stop(self):
         with self.lock:
@@ -106,13 +132,23 @@ TOOLS = [
         "description": "Start the browser: spawns a fresh engine (ephemeral "
                        "profile) by default; pass attach_port to attach to a "
                        "running engine started with --driver-port. Pass token "
-                       "if that engine was started with --driver-token.",
+                       "if that engine was started with --driver-token. Set "
+                       "auto_auth false to handle auth challenges manually. "
+                       "headed true opens a real interactive native window; "
+                       "it requires a desktop and graphics support. The "
+                       "default remains headless CPU rendering.",
         "inputSchema": {"type": "object", "properties": {
             "attach_port": {"type": "integer",
                             "description": "driver port of a running engine"},
             "token": {"type": "string",
                       "description": "driver auth token if the engine was "
-                                      "started with --driver-token"}},
+                                      "started with --driver-token"},
+            "profile": {"type": "string",
+                        "description": "persistent profile name (letters, digits, - and _)"},
+            "auto_auth": {"type": "boolean",
+                          "description": "answer auth from stored credentials; default true"},
+            "headed": {"type": "boolean",
+                       "description": "show a real interactive browser window (spawn only)"}},
             "required": []},
     },
     {
@@ -415,12 +451,51 @@ TOOLS = [
             "required": ["host", "user", "password"]},
     },
     {
+        "name": "browser_wait_auth",
+        "description": "Wait for an unanswered HTTP auth challenge and return "
+                       "{id, tab, url, proxy}. The engine denies unanswered "
+                       "challenges after 10 seconds. Start with auto_auth "
+                       "false to handle challenges with browser_auth_answer.",
+        "inputSchema": {"type": "object", "properties": {
+            "tab": {"type": "integer"},
+            "timeout_seconds": {"type": "number"}}, "required": []},
+    },
+    {
+        "name": "browser_auth_answer",
+        "description": "Answer an HTTP auth challenge. Omit user/password or "
+                       "pass null to deny it without sending credentials.",
+        "inputSchema": {"type": "object", "properties": {
+            "id": {"type": "integer"}, "user": {"type": "string"},
+            "password": {"type": "string"}}, "required": ["id"]},
+    },
+    {
+        "name": "browser_wait_filepicker",
+        "description": "Wait for an unanswered file picker and return "
+                       "{id, tab, multiple}. The engine cancels unanswered "
+                       "pickers after 60 seconds; answer with "
+                       "browser_files_answer.",
+        "inputSchema": {"type": "object", "properties": {
+            "tab": {"type": "integer"},
+            "timeout_seconds": {"type": "number"}}, "required": []},
+    },
+    {
+        "name": "browser_files_answer",
+        "description": "Choose local file paths for a pending file picker; "
+                       "an empty or omitted paths list cancels it.",
+        "inputSchema": {"type": "object", "properties": {
+            "id": {"type": "integer"},
+            "paths": {"type": "array", "items": {"type": "string"}}},
+            "required": ["id"]},
+    },
+    {
         "name": "browser_wait_for_user",
-        "description": "Long-poll the browser while paused: returns as soon "
-                       "as the page changes or the page stops showing a "
-                       "handoff condition (e.g. the user solved the "
-                       "CAPTCHA), or after timeout_seconds with done:false. "
-                       "Call in a loop to watch a user handoff.",
+        "description": "Long-poll while paused: returns when the page "
+                       "navigates or a previously detected handoff condition "
+                       "clears. An unchanged or unrecognized gate does NOT "
+                       "count as completion. In a native window the user can "
+                       "press Enter after a generic or cross-origin challenge "
+                       "to confirm completion. Returns done:false on timeout; "
+                       "call again to keep watching.",
         "inputSchema": {"type": "object", "properties": {
             "timeout_seconds": {"type": "number"}}, "required": []},
     },
@@ -428,36 +503,65 @@ TOOLS = [
 
 
 def _wait_for_user(timeout_seconds=30):
-    """Watch the page while a human has control. Returns done=True when the
-    handoff condition cleared (CAPTCHA solved, OTP entered...) or the page
-    navigated; done=False on timeout. Reads only: safe while paused."""
-    import time as _time
+    """Watch a paused page without treating a clean first scan as success.
+
+    Completion requires navigation or a true-to-false handoff transition
+    observed by this call. Generic gates are not detectable, so they keep
+    waiting until the human navigates or the agent resumes explicitly.
+    """
     d = STATE.d()
-    start = _time.time()
+    if d.paused is None:
+        raise McpError("call browser_pause before browser_wait_for_user")
+    timeout = max(0.0, min(float(timeout_seconds), 120))
+    start = time.time()
+    # Remember a detected gate across polling calls for the same pause.
+    seen_handoff = getattr(d, "_handoff_seen", False)
+    last_handoff = {"handoff": False, "reasons": []}
     try:
-        before_url = d.eval_js("location.href") or ""
-    except Exception:
-        before_url = ""
-    while _time.time() - start < min(float(timeout_seconds), 120):
+        before_url = d.eval_js("location.href", timeout=2.0)
+        if not isinstance(before_url, str):
+            before_url = None
+    except TimeoutError:
+        before_url = None  # unknown is not a changed page
+    while time.time() - start < timeout:
         try:
-            now_url = d.eval_js("location.href", timeout=2.0) or ""
-            if now_url != before_url:
+            now_url = d.eval_js("location.href", timeout=2.0)
+            if (isinstance(now_url, str) and before_url is not None
+                    and now_url != before_url):
                 return {"done": True, "why": "navigated",
-                        "url": now_url, "handoff": d.detect_handoff()}
-            h = d.detect_handoff()
-            if not h.get("handoff"):
-                return {"done": True, "why": "handoff cleared", "handoff": h}
-        except Exception:
+                        "url": now_url, "handoff": d.detect_handoff(timeout=2.0)}
+            if isinstance(now_url, str):
+                before_url = now_url
+            handoff = d.detect_handoff(timeout=2.0)
+            if isinstance(handoff, dict) and isinstance(
+                    handoff.get("handoff"), bool):
+                last_handoff = handoff
+                detected = handoff["handoff"]
+                if seen_handoff and not detected:
+                    d._handoff_seen = False
+                    return {"done": True, "why": "handoff cleared",
+                            "handoff": last_handoff}
+                seen_handoff = seen_handoff or detected
+                d._handoff_seen = seen_handoff
+        except TimeoutError:
             pass  # page mid-navigation; keep watching
-        _time.sleep(0.5)
+        if d.handoff_complete(timeout=2.0):
+            return {"done": True, "why": "confirmed",
+                    "handoff": last_handoff}
+        time.sleep(min(0.5, max(0.001, start + timeout - time.time())))
     return {"done": False, "why": "timeout",
-            "handoff": d.detect_handoff()}
+            "seen_handoff": seen_handoff,
+            "handoff": last_handoff,
+            "hint": "Human input is unchanged or not recognized; "
+                    "check the visible browser, then resume when done."}
 
 
 def call_tool(name, args):
     if name == "browser_start":
         return STATE.start(args.get("attach_port"), token=args.get("token"),
-                           profile=args.get("profile"))
+                           profile=args.get("profile"),
+                           auto_auth=args.get("auto_auth", True),
+                           headed=args.get("headed", False))
     if name == "browser_stop":
         return STATE.stop()
 
@@ -465,10 +569,21 @@ def call_tool(name, args):
     if name == "browser_ping":
         return d.ping()
     if name == "browser_navigate":
+        cursor = d.event_cursor()
         d.navigate(args["url"])
-        # The first url event on a fresh engine is the initial about:blank;
-        # wait for one that actually reflects the navigation target.
-        d.wait_load(contains=args["url"].split("://", 1)[-1][:48] or None)
+        # Auth holds a main-frame load. Return that decision to the caller
+        # instead of waiting for a page that cannot arrive until it is answered.
+        target = args["url"].split("://", 1)[-1][:48] or None
+        ev = d.wait_for(
+            lambda e: ((e.get("ev") == "auth" and e.get("tab") == 0
+                        and e.get("id") not in d._answered_auth)
+                       or (e.get("ev") == "url" and e.get("tab") == 0
+                           and (target is None or target in e.get("url", "")))),
+            timeout=15.0, after=cursor)
+        if ev.get("ev") == "auth":
+            return {"url": ev.get("url"), "auth_required": {
+                "id": ev.get("id"), "tab": ev.get("tab"),
+                "url": ev.get("url"), "proxy": ev.get("proxy")}}
         d.wait_ready()
         return {"url": d.eval_js("location.href")}
     if name == "browser_read":
@@ -541,7 +656,8 @@ def call_tool(name, args):
         d.intercept(args["on"])
         return {"intercept": args["on"]}
     if name == "browser_pending_requests":
-        reqs = [e for e in d.events if e.get("ev") == "request"]
+        reqs = [e for e in d.events if e.get("ev") == "request"
+                and e.get("id") not in d._answered_requests]
         return {"pending": [{"id": r["id"], "tab": r["tab"],
                               "method": r["method"], "url": r["url"],
                               "main": r["main"]} for r in reqs[-50:]]}
@@ -565,7 +681,25 @@ def call_tool(name, args):
                                  confirm=args.get("confirm", False),
                                  evidence=args.get("evidence", False))
     if name == "browser_evidence":
-        return d.evidence(mode=args.get("mode", "plain"))
+        return STATE.status(**d.evidence(mode=args.get("mode", "plain")))
+    if name == "browser_wait_auth":
+        ev = d.wait_auth(tab=args.get("tab"),
+                         timeout=args.get("timeout_seconds", 10.0))
+        return {"id": ev.get("id"), "tab": ev.get("tab"),
+                "url": ev.get("url"), "proxy": ev.get("proxy")}
+    if name == "browser_auth_answer":
+        user, password = args.get("user"), args.get("password")
+        d.auth_answer(args["id"], user, password)
+        return {"answered": args["id"], "credentials_sent": bool(
+            user is not None and password is not None)}
+    if name == "browser_wait_filepicker":
+        ev = d.wait_filepicker(tab=args.get("tab"),
+                               timeout=args.get("timeout_seconds", 60.0))
+        return {"id": ev.get("id"), "tab": ev.get("tab"),
+                "multiple": ev.get("multiple")}
+    if name == "browser_files_answer":
+        d.files_answer(args["id"], args.get("paths"))
+        return {"answered": args["id"], "paths": args.get("paths") or []}
     if name == "browser_set_credentials":
         d.set_credentials(args["host"], args["user"], args["password"])
         return {"stored": True, "host": d._host_of(args["host"]) or args["host"]}
@@ -584,9 +718,16 @@ def call_tool(name, args):
         return d.screenshot_annotated(path)
     if name == "browser_pause":
         d.pause(args.get("reason") or "user takeover")
-        return {"paused": True, "reason": d.paused}
+        d.set_engine_paused(True)
+        d._handoff_seen = False
+        return {"paused": True, "reason": d.paused,
+                "completion": "Press Enter in the native window when done",
+                "hint": "Interact directly in the native window when started "
+                        "with headed:true. Without it, only screenshots are "
+                        "available; cross-origin CAPTCHAs need headed mode."}
     if name == "browser_resume":
         d.resume()
+        d.set_engine_paused(False)
         return {"paused": False}
     if name == "browser_detect_handoff":
         return d.detect_handoff()

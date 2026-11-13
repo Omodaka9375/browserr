@@ -45,10 +45,13 @@ PAGE = """<!doctype html><html><head><title>Form Test</title></head><body>
 </form>
 <div id="out"></div>
 <script>
+window.counts = {tosClick: 0, tosInput: 0, tosChange: 0, pingClick: 0};
 function say(t){ document.getElementById('out').textContent = t; }
-document.getElementById('tos').addEventListener('change', function(){ say('tos:' + this.checked); });
+document.getElementById('tos').addEventListener('click', function(){ counts.tosClick++; });
+document.getElementById('tos').addEventListener('input', function(){ counts.tosInput++; });
+document.getElementById('tos').addEventListener('change', function(){ counts.tosChange++; say('tos:' + this.checked); });
 document.getElementById('country').addEventListener('change', function(){ say('country:' + this.value); });
-document.getElementById('ping').addEventListener('click', function(){ say('pinged'); });
+document.getElementById('ping').addEventListener('click', function(){ counts.pingClick++; say('pinged'); });
 </script>
 </body></html>"""
 
@@ -146,7 +149,15 @@ try:
     assert res["ok"] and res["value"] is True, res
     out = d.eval_js("document.getElementById('out').textContent")
     assert out == "tos:true", out
-    print("checkbox by ref OK:", res, "| handler:", out)
+    counts = d.eval_js("window.counts")
+    assert counts["tosClick"] == 1 and counts["tosInput"] == 1, counts
+    assert counts["tosChange"] == 1, counts
+    res = d.fill_form({"#tos": False})
+    assert res["ok"] and res["fields"]["#tos"]["value"] is False, res
+    counts = d.eval_js("window.counts")
+    assert counts["tosClick"] == 2 and counts["tosInput"] == 2, counts
+    assert counts["tosChange"] == 2, counts
+    print("checkbox writes fire exactly once OK:", counts)
 
     # 10. Select by LABEL (not value) resolves to the right option.
     r = d.read_structure()
@@ -180,7 +191,21 @@ try:
             break
         _time.sleep(0.1)
     assert out == "pinged", f"click_ref handler did not run: {out!r}"
-    print("click_ref OK:", ping["ref"], pt)
+    assert d.eval_js("window.counts.pingClick") == 1
+    r = d.read_structure()
+    tos_click = field(r, "tos")
+    d.click_ref(tos_click["ref"])
+    t0 = _time.time()
+    counts = None
+    while _time.time() - t0 < 5.0:
+        counts = d.eval_js("window.counts")
+        if counts["tosClick"] >= 3:
+            break
+        _time.sleep(0.1)
+    assert counts["tosClick"] == 3 and counts["tosInput"] == 3, counts
+    assert counts["tosChange"] == 3, counts
+    assert d.eval_js("document.getElementById('tos').checked") is True
+    print("click_ref dispatches one pointer click OK:", counts)
 
     # 13. A stale ref (page reloaded since the read) resolves to None.
     d.navigate(PAGE_URL + "?fresh=1")

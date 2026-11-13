@@ -13,7 +13,7 @@ GPULESS=0
 
 SDK_TESTS="test_driver test_agent test_elements test_structure test_watchdog test_features test_mcp test_scroll test_bind test_attach test_hardening test_intercept test_auth test_filepicker test_net test_frames test_form test_flow test_annotate test_handoff test_trust test_software_render"
 RAW_TESTS="test_input test_cursor_zoom test_close"
-GPULESS_TESTS="test_bind"
+GPULESS_TESTS="test_bind test_mcp_logic"
 
 echo "== fmt + clippy gate =="
 cargo fmt --manifest-path engine/Cargo.toml -- --check > fmt.log 2>&1 \

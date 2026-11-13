@@ -21,6 +21,8 @@ tools/*.html
 tools/*.bin
 tools/*-shot.png
 tools/filepicker-picked.txt
+tools/mcp-picker.txt
+tools/mcp-engine.log
 tools/net-test.html
 tools/net-api.json
 tools/net-xhr.txt

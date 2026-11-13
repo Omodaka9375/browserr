@@ -23,6 +23,8 @@
 //!           --ephemeral uses a throwaway profile dir under %TEMP% (deleted on exit).
 //!           --gpu opts into GPU rendering (CPU is the default; a GPU-less
 //!           machine with --gpu falls back to software automatically).
+//!           --headed creates a real interactive native window (requires a
+//!           desktop and graphics support; unlike --gpu this is not offscreen).
 //!           --software is accepted as the explicit spelling of the default.
 //! Automation: eval with an "id" reports {"ev":"evalresult","tab","id","value"};
 //! {"cmd":"screenshot","tab":N} answers with a SHT1 frame (magic, id, w, h, w*h*4 BGRA).
@@ -47,7 +49,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 
+mod headed;
 mod hw;
+use headed::{Headed, NativeEvent};
 use hw::HardwareRenderingContext;
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -71,7 +75,7 @@ fn hard_exit() -> ! {
 }
 
 /// Commands an attached driver may send; validated before queueing.
-const DRIVER_CMDS: [&str; 19] = [
+const DRIVER_CMDS: [&str; 22] = [
     "navigate",
     "back",
     "forward",
@@ -91,6 +95,9 @@ const DRIVER_CMDS: [&str; 19] = [
     "auth",
     "files",
     "frames",
+    "pause",
+    "resume",
+    "handoff",
 ];
 
 /// Attached-driver hub (computer-use mode: `--driver-port=N`). Driver
@@ -434,6 +441,10 @@ struct Shared {
     icons: Mutex<std::collections::HashMap<String, Vec<u8>>>,
     /// Fail-closed interception armed by the driver ({"cmd":"intercept","on":true}).
     intercept_on: AtomicBool,
+    /// All automation is paused, including other attached drivers. Native
+    /// input continues: a native Enter marks an explicit handoff complete.
+    paused: AtomicBool,
+    handoff_complete: AtomicBool,
 }
 
 /// An auth challenge held for a driver answer. Keeping the
@@ -1372,6 +1383,7 @@ fn main() {
     let mut adblock_list = None;
     let mut ephemeral = false;
     let mut prefer_gpu = false;
+    let mut headed_mode = false;
     let mut driver_port = None;
     let mut driver_token = None;
     for a in std::env::args().skip(1) {
@@ -1385,6 +1397,8 @@ fn main() {
             ephemeral = true;
         } else if a == "--gpu" {
             prefer_gpu = true;
+        } else if a == "--headed" {
+            headed_mode = true;
         } else if a == "--software" {
             // Explicit spelling of the default; kept so scripts written
             // against older versions do not break.
@@ -1444,6 +1458,8 @@ fn main() {
         started: Mutex::new(std::collections::HashSet::new()),
         icons: Mutex::new(std::collections::HashMap::new()),
         intercept_on: AtomicBool::new(false),
+        paused: AtomicBool::new(false),
+        handoff_complete: AtomicBool::new(false),
     });
 
     let mut opts = servo::Opts::default();
@@ -1476,6 +1492,23 @@ fn main() {
     }
 
     let initial_size = dpi::PhysicalSize::new(1200u32, 760u32);
+    let mut headed = if headed_mode {
+        match Headed::new(initial_size) {
+            Ok(window) => Some(window),
+            Err(e) => {
+                eprintln!("engine: --headed failed: {e}");
+                cleanup_ephemeral(&ephemeral_dir);
+                hard_exit();
+            }
+        }
+    } else {
+        None
+    };
+    let headed_context = headed.as_ref().map(Headed::context);
+    let headed_scale = std::rc::Rc::new(std::cell::Cell::new(
+        headed.as_ref().map(Headed::scale).unwrap_or(1.0) as f32,
+    ));
+    let mut window_focused = true;
 
     // Net evidence: a document-start user script injected into every frame
     // of every tab (a page cannot evade it by grabbing references first).
@@ -1488,7 +1521,10 @@ fn main() {
     )));
 
     let make_tab = |id: u64| -> Option<Tab> {
-        let context = make_context(initial_size, prefer_gpu)?;
+        let context = match &headed_context {
+            Some(context) => context.clone(),
+            None => make_context(initial_size, prefer_gpu)?,
+        };
         let _ = context.make_current();
         let delegate = std::rc::Rc::new(FrameDelegate {
             tab: id,
@@ -1498,7 +1534,11 @@ fn main() {
         let webview = servo::WebViewBuilder::new(&servo, context.clone())
             .delegate(delegate)
             .user_content_manager(ucm.clone())
+            .hidpi_scale_factor(euclid::Scale::new(headed_scale.get()))
             .build();
+        if headed_context.is_some() && id != shared.active.load(Ordering::SeqCst) {
+            webview.hide();
+        }
         // Complete the webview's registration handshake before any LoadUrl.
         servo.spin_event_loop();
         Some(Tab {
@@ -1544,6 +1584,110 @@ fn main() {
     // failure or if the chrome reports it cannot import them.
 
     loop {
+        // Native input and lifecycle are independent of the driver's pause
+        // flag: a paused MCP driver cannot intercept a human using the window.
+        let mut window_closed = false;
+        if let Some(window) = &mut headed {
+            window_closed |= window.pump();
+            for event in window.take_events() {
+                let active = shared.active.load(Ordering::SeqCst);
+                match event {
+                    NativeEvent::Close => window_closed = true,
+                    NativeEvent::Redraw => {
+                        if let Some(tab) = tabs.get(&active) {
+                            tab.webview.paint();
+                            tab.context.present();
+                        }
+                    }
+                    NativeEvent::Resize(size) => {
+                        current_size = size;
+                        if let Some(tab) = tabs.get(&active) {
+                            tab.webview.resize(size);
+                        }
+                    }
+                    NativeEvent::Scale(scale) => {
+                        headed_scale.set(scale as f32);
+                        for tab in tabs.values() {
+                            tab.webview
+                                .set_hidpi_scale_factor(euclid::Scale::new(scale as f32));
+                        }
+                    }
+                    NativeEvent::Focus(focus) => {
+                        window_focused = focus;
+                        if let Some(tab) = tabs.get(&active) {
+                            tab.webview.set_focused(focus);
+                        }
+                    }
+                    NativeEvent::Move(x, y) => {
+                        if let Some(tab) = tabs.get(&active) {
+                            tab.webview.notify_input_event(servo::InputEvent::MouseMove(
+                                servo::MouseMoveEvent {
+                                    point: servo::WebViewPoint::Device(
+                                        webrender_api::units::DevicePoint::new(x, y),
+                                    ),
+                                    is_compatibility_event_for_touch: false,
+                                },
+                            ));
+                        }
+                    }
+                    NativeEvent::Button(action, button, x, y) => {
+                        if let Some(tab) = tabs.get(&active) {
+                            if action == servo::MouseButtonAction::Down {
+                                tab.webview.set_focused(true);
+                            }
+                            tab.webview
+                                .notify_input_event(servo::InputEvent::MouseButton(
+                                    servo::MouseButtonEvent {
+                                        action,
+                                        button,
+                                        point: servo::WebViewPoint::Device(
+                                            webrender_api::units::DevicePoint::new(x, y),
+                                        ),
+                                        is_compatibility_event_for_touch: false,
+                                    },
+                                ));
+                        }
+                    }
+                    NativeEvent::Wheel(x, y, px, py, mode) => {
+                        if let Some(tab) = tabs.get(&active) {
+                            tab.webview.notify_input_event(servo::InputEvent::Wheel(
+                                servo::WheelEvent {
+                                    delta: servo::WheelDelta { x, y, z: 0.0, mode },
+                                    point: servo::WebViewPoint::Device(
+                                        webrender_api::units::DevicePoint::new(px, py),
+                                    ),
+                                },
+                            ));
+                        }
+                    }
+                    NativeEvent::Key(event) => {
+                        if shared.paused.load(Ordering::SeqCst)
+                            && let servo::InputEvent::Keyboard(key) = &event
+                            && key.event.state == keyboard_types::KeyState::Down
+                            && key.event.key
+                                == keyboard_types::Key::Named(keyboard_types::NamedKey::Enter)
+                        {
+                            shared.handoff_complete.store(true, Ordering::SeqCst);
+                            event_id += 1;
+                            send_event(
+                                &mut out,
+                                event_id,
+                                "{\"ev\":\"handoff_complete\",\"tab\":0}",
+                            );
+                        }
+                        if let Some(tab) = tabs.get(&active) {
+                            tab.webview.notify_input_event(event);
+                        }
+                    }
+                }
+            }
+        }
+        if window_closed {
+            eprintln!("engine: native window closed");
+            cleanup_ephemeral(&ephemeral_dir);
+            hard_exit();
+        }
+
         reader
             .get_ref()
             .set_read_timeout(Some(std::time::Duration::from_millis(1)))
@@ -1589,7 +1733,27 @@ fn main() {
                     }
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
                         let tab_id = v["tab"].as_u64().unwrap_or(0);
-                        match v["cmd"].as_str() {
+                        let command = v["cmd"].as_str();
+                        if shared.paused.load(Ordering::SeqCst)
+                            && matches!(
+                                command,
+                                Some(
+                                    "navigate"
+                                        | "input"
+                                        | "wheel"
+                                        | "activate"
+                                        | "key"
+                                        | "new_tab"
+                                        | "close_tab"
+                                        | "back"
+                                        | "forward"
+                                )
+                            )
+                        {
+                            eprintln!("engine: automation paused; command blocked");
+                            continue;
+                        }
+                        match command {
                             Some("navigate") => {
                                 if let Some(u) = v["url"].as_str()
                                     && let Ok(url) = url::Url::parse(u)
@@ -1614,6 +1778,26 @@ fn main() {
                                     tab.pending = Some(url);
                                     tab.pending_sent = false;
                                 }
+                            }
+                            Some("pause") => {
+                                shared.handoff_complete.store(false, Ordering::SeqCst);
+                                shared.paused.store(true, Ordering::SeqCst);
+                            }
+                            Some("resume") => {
+                                shared.paused.store(false, Ordering::SeqCst);
+                                shared.handoff_complete.store(false, Ordering::SeqCst);
+                            }
+                            Some("handoff") => {
+                                let complete = shared.handoff_complete.load(Ordering::SeqCst);
+                                let req = v["id"].as_u64().unwrap_or(0);
+                                event_id += 1;
+                                send_event(
+                                    &mut out,
+                                    event_id,
+                                    &format!(
+                                        "{{\"ev\":\"handoff_status\",\"id\":{req},\"complete\":{complete}}}"
+                                    ),
+                                );
                             }
                             Some("new_tab") => {
                                 if let std::collections::hash_map::Entry::Vacant(e) =
@@ -1650,8 +1834,20 @@ fn main() {
                                     }
                                 }
                                 eprintln!("engine: activate tab {tab_id}");
-                                shared.active.store(tab_id, Ordering::SeqCst);
+                                let old = shared.active.swap(tab_id, Ordering::SeqCst);
+                                if headed.is_some() {
+                                    if let Some(tab) = tabs.get(&old) {
+                                        tab.webview.set_focused(false);
+                                        tab.webview.hide();
+                                    }
+                                    tabs.get(&tab_id).unwrap().webview.show();
+                                    tabs.get(&tab_id)
+                                        .unwrap()
+                                        .webview
+                                        .set_focused(window_focused);
+                                }
                                 tabs.get(&tab_id).unwrap().webview.resize(current_size);
+                                last_hash = 0;
                                 // Re-send this tab's last known state so the chrome's
                                 // pill and title follow the switch.
                                 let tab = tabs.get(&tab_id).unwrap();
@@ -1716,6 +1912,10 @@ fn main() {
                                     let next = tabs.keys().copied().min().unwrap_or(0);
                                     shared.active.store(next, Ordering::SeqCst);
                                     if let Some(t) = tabs.get(&next) {
+                                        if headed.is_some() {
+                                            t.webview.show();
+                                            t.webview.set_focused(window_focused);
+                                        }
                                         t.webview.resize(current_size);
                                     }
                                     shared.frame_ready.store(true, Ordering::SeqCst);
@@ -1781,6 +1981,15 @@ fn main() {
                                 // pixels as a SHT1 frame (BGRA).
                                 if let Some(tab) = tabs.get(&tab_id) {
                                     eprintln!("engine: screenshot (tab {tab_id})");
+                                    let active = shared.active.load(Ordering::SeqCst);
+                                    // Tabs share the native surface. Paint a hidden
+                                    // tab explicitly, then restore the visible one.
+                                    if headed.is_some() && tab_id != active {
+                                        if let Some(current) = tabs.get(&active) {
+                                            current.webview.hide();
+                                        }
+                                        tab.webview.show();
+                                    }
                                     tab.webview.paint();
                                     let _ = tab.context.make_current();
                                     let rect = webrender_api::units::DeviceIntRect::new(
@@ -1790,6 +1999,12 @@ fn main() {
                                             current_size.height as i32,
                                         ),
                                     );
+                                    if headed.is_some() && tab_id != active {
+                                        tab.webview.hide();
+                                        if let Some(current) = tabs.get(&active) {
+                                            current.webview.show();
+                                        }
+                                    }
                                     if let Some(image) = tab.context.read_to_image(rect) {
                                         let mut bgra = image.into_raw();
                                         for px in bgra.as_chunks_mut::<4>().0 {
@@ -1818,17 +2033,16 @@ fn main() {
                                 }
                             }
                             Some("input") => {
-                                // Pointer input from the chrome's page area;
-                                // coordinates are the page's device pixels.
+                                // Automation coordinates are CSS page pixels;
+                                // Servo applies display and page zoom itself.
                                 if let (Some(kind), Some(tab)) =
                                     (v["kind"].as_str(), tabs.get(&tab_id))
                                 {
                                     eprintln!("engine: input (tab {tab_id}) {kind}");
                                     let x = v["x"].as_f64().unwrap_or(0.0) as f32;
                                     let y = v["y"].as_f64().unwrap_or(0.0) as f32;
-                                    let point = servo::WebViewPoint::Device(
-                                        webrender_api::units::DevicePoint::new(x, y),
-                                    );
+                                    let point =
+                                        servo::WebViewPoint::Page(euclid::Point2D::new(x, y));
                                     match kind {
                                         "down" | "up" => {
                                             let button = match v["button"].as_str() {
@@ -1878,9 +2092,8 @@ fn main() {
                                     let dy = v["dy"].as_f64().unwrap_or(0.0);
                                     let x = v["x"].as_f64().unwrap_or(0.0) as f32;
                                     let y = v["y"].as_f64().unwrap_or(0.0) as f32;
-                                    let point = servo::WebViewPoint::Device(
-                                        webrender_api::units::DevicePoint::new(x, y),
-                                    );
+                                    let point =
+                                        servo::WebViewPoint::Page(euclid::Point2D::new(x, y));
                                     // Same sign convention as the chrome: a
                                     // positive dy means the content moves down,
                                     // i.e. the view scrolls up (servo agrees).
@@ -2064,6 +2277,9 @@ fn main() {
                                 let s = dpi::PhysicalSize::new(w.max(1), h.max(1));
                                 if s != current_size {
                                     current_size = s;
+                                    if let Some(window) = &headed {
+                                        window.resize(s);
+                                    }
                                     let active = shared.active.load(Ordering::SeqCst);
                                     if let Some(tab) = tabs.get(&active) {
                                         tab.webview.resize(s);
@@ -2296,6 +2512,11 @@ fn main() {
                     );
                 }
                 if let Some(title) = &u.title {
+                    if u.tab == shared.active.load(Ordering::SeqCst)
+                        && let Some(window) = &headed
+                    {
+                        window.set_title(title);
+                    }
                     let esc = title.replace('\\', "\\\\").replace('"', "\\\"");
                     send_event(
                         &mut out,
@@ -2428,6 +2649,25 @@ fn main() {
                     continue;
                 }
                 let t0 = std::time::Instant::now();
+                if headed.is_some() {
+                    // Native mode presents directly. Do not read every frame
+                    // back into RAM just to discard it for a hash.
+                    tab.webview.paint();
+                    tab.context.present();
+                    last_push = Some(std::time::Instant::now());
+                    frame_id += 1;
+                    event_id += 1;
+                    send_event(
+                        &mut out,
+                        event_id,
+                        &format!(
+                            "{{\"ev\":\"frame\",\"tab\":{active},\"w\":{},\"h\":{}}}",
+                            current_size.width, current_size.height
+                        ),
+                    );
+                    pump.wait(std::time::Duration::from_millis(4));
+                    continue;
+                }
                 // Composite the page into the rendering context; without this the
                 // context surface stays blank and read_to_image returns white.
                 tab.webview.paint();

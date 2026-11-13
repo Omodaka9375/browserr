@@ -8,6 +8,7 @@ stop. Uses newline-delimited JSON-RPC on stdin/stdout (the MCP stdio shape).
 import os as _os
 TOOLS_DIR = _os.path.dirname(_os.path.abspath(__file__))
 ROOT = _os.path.dirname(TOOLS_DIR)
+import base64
 import functools
 import http.server
 import json
@@ -35,6 +36,41 @@ handler = functools.partial(http.server.SimpleHTTPRequestHandler,
                             directory=TOOLS_DIR)
 httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 8130), handler)
 threading.Thread(target=httpd.serve_forever, daemon=True).start()
+
+
+class AuthHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        credentials = self.headers.get("Authorization", "")
+        expected = "Basic " + base64.b64encode(b"agent:secret").decode()
+        if credentials == expected:
+            body = b"<html><body>AUTHOK</body></html>"
+            self.send_response(200)
+        else:
+            body = b"<html><body>DENIED</body></html>"
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="mcp-test"')
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, fmt, *args):
+        pass
+
+
+authd = http.server.ThreadingHTTPServer(("127.0.0.1", 8128), AuthHandler)
+threading.Thread(target=authd.serve_forever, daemon=True).start()
+PICKER_PATH = TOOLS_DIR + "/mcp-picker.txt"
+with open(PICKER_PATH, "w") as f:
+    f.write("MCP PICKED 42")
+with open(TOOLS_DIR + "/mcp-picker.html", "w") as f:
+    f.write("""<!doctype html><html><body><input id=pick type=file>
+<div id=out></div>
+<script>document.getElementById('pick')
+.addEventListener('change',function(){var f=this.files[0];if(!f)return;
+var r=new FileReader();r.onload=function(){
+document.getElementById('out').textContent=f.name+':'+r.result};
+r.readAsText(f);});</script></body></html>""")
 with open(TOOLS_DIR + "/mcp-test.html", "w") as f:
     f.write(PAGE)
 with open(TOOLS_DIR + "/mcp-next.html", "w") as f:
@@ -55,6 +91,29 @@ def recv():
     line = proc.stdout.readline()
     assert line, "server closed stdout"
     return json.loads(line)
+
+
+def native_windows(pid):
+    """Visible top-level HWNDs owned by a process (Windows only)."""
+    if os.name != "nt":
+        return []
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    found = []
+    callback_type = ctypes.WINFUNCTYPE(
+        ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+    @callback_type
+    def visit(hwnd, _):
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value == pid and user32.IsWindowVisible(hwnd):
+            found.append(hwnd)
+        return True
+
+    user32.EnumWindows(visit, 0)
+    return found
 
 
 def call(name, args=None):
@@ -86,9 +145,19 @@ try:
     tools = recv()["result"]["tools"]
     names = {t["name"] for t in tools}
     assert "browser_navigate" in names and "browser_read" in names, names
+    expected_new = {"browser_wait_auth", "browser_auth_answer",
+                    "browser_wait_filepicker", "browser_files_answer"}
+    assert expected_new <= names, expected_new - names
+    start_schema = next(t for t in tools if t["name"] == "browser_start")
+    assert "profile" in start_schema["inputSchema"]["properties"]
+    assert "headed" in start_schema["inputSchema"]["properties"]
     print(f"tools/list OK ({len(names)} tools)")
 
-    assert call("browser_start")["started"] is True
+    started = call("browser_start", {"auto_auth": False})
+    assert started["started"] is True and started["auto_auth"] is False
+    assert os.path.isabs(started["evidence_dir"]), started
+    assert started["action_log_path"] == os.path.join(
+        started["evidence_dir"], "actions.jsonl"), started
     print("start OK")
     print("ping:", call("browser_ping"))
 
@@ -161,8 +230,61 @@ try:
     assert r["clicked"] == "#go2", r
     print("element tools OK")
 
+    # Manual auth is returned by navigate instead of wedging the load.
+    r = call("browser_navigate", {"url": "http://127.0.0.1:8128/private"})
+    challenge = r.get("auth_required")
+    assert challenge and "127.0.0.1:8128" in challenge["url"], r
+    assert call("browser_auth_answer", {
+        "id": challenge["id"], "user": "agent", "password": "secret"
+    })["credentials_sent"] is True
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        if "AUTHOK" in call("browser_read")["text"]:
+            break
+        time.sleep(0.2)
+    assert "AUTHOK" in call("browser_read")["text"]
+    print("manual auth tools OK")
+
+    # File selection is an explicit MCP event and answer, not SDK-only.
+    call("browser_navigate", {"url": "http://127.0.0.1:8130/mcp-picker.html"})
+    r = call("browser_read_structure")
+    picker = next(i for i in r["inputs"] if i["id"] == "pick")
+    call("browser_click_ref", {"ref": picker["ref"]})
+    picker_event = call("browser_wait_filepicker", {"timeout_seconds": 10})
+    assert picker_event["id"] >= 1, picker_event
+    call("browser_files_answer", {"id": picker_event["id"],
+                                  "paths": [PICKER_PATH]})
+    deadline = time.time() + 10
+    picked = ""
+    while time.time() < deadline:
+        picked = call("browser_read")["text"]
+        if "mcp-picker.txt:MCP PICKED 42" in picked:
+            break
+        time.sleep(0.2)
+    assert "mcp-picker.txt:MCP PICKED 42" in picked, picked
+    evidence = call("browser_evidence", {"mode": "plain"})
+    assert evidence["action_log_path"] == started["action_log_path"], evidence
+    assert os.path.isfile(evidence["path"]), evidence
+    print("file picker and evidence paths OK")
+
     call("browser_stop")
     print("stop OK")
+
+    # MCP itself can create a visible native window (not just the SDK test).
+    started = call("browser_start", {"headed": True})
+    assert started["headed"] is True, started
+    deadline = time.time() + 15
+    hwnds = []
+    while time.time() < deadline and not hwnds:
+        hwnds = native_windows(started["engine_pid"])
+        time.sleep(0.2)
+    if os.name == "nt" and os.environ.get("CI") != "true":
+        assert hwnds, "MCP engine has no visible HWND"
+        print("MCP native HWND OK")
+    call("browser_navigate", {"url": "http://127.0.0.1:8130/mcp-test.html"})
+    assert call("browser_read")["title"] == "MCP Test Page"
+    call("browser_stop")
+    print("MCP headed start, navigate, stop OK")
 
     print("ALL OK")
 finally:
