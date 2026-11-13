@@ -414,6 +414,23 @@ directory deleted on engine exit.
   forms and common SPA patterns (React, Vue, data-fetching grids) work
   well. No EME (DRM video), no WebRTC, no service-worker offline support;
   crypto.subtle covers digests/randomUUID only (no AES-GCM), via a shim.
+- CAPTCHA challenges (Cloudflare Turnstile, hCaptcha, reCAPTCHA v2) do
+  not work: their iframe RPC channels hit Servo's strict cross-origin
+  frame policy (SecurityError on window.frames access patterns that
+  Chrome permits). Turnstile and hCaptcha widgets never mount at all;
+  reCAPTCHA's iframe mounts but its contents never load (SecurityError
+  in the loader, then "reCAPTCHA Timeout", zero challenge-domain
+  traffic). Verified live against all three (2026-11, see
+  tools/test_captcha.py). Solver chains cannot run against them and the
+  headed human handoff cannot solve them either - the iframe content
+  never loads. Detection works: console SecurityErrors plus zero
+  challenge-domain traffic in the net ring reliably distinguish a
+  challenged walk from an empty page. Sites using these or SW-based bot
+  defense are hard blockers for automation.
+- Server-side-rendered React 18 hydration (#418/#422 mismatch errors)
+  partially crashes client interactivity on some sites: the server HTML
+  renders fine, hydrated components may fail. Client-rendered React
+  (createRoot) is unaffected.
 - No devtools, no find-in-page.
 - History records urls only, without page titles.
 
@@ -446,6 +463,7 @@ test_handoff.py           pause/resume, detect_handoff, reads while paused
 test_trust.py            evidence dir, action log, auto-auth, confirm gate
 test_software_render.py  CPU-default and --gpu rendering log markers
 test_compat.py           SPA/JS APIs, WebGL via ANGLE, digest vectors, gzip
+test_captcha.py          challenge-page signatures (online; not in suite)
 test_headed.py           Windows-only: real HWND, OS mouse/keyboard handoff
 test_mcp_logic.py        handoff transition and answered-event regressions
 test_input.py            raw-socket input forwarding

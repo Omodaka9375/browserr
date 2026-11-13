@@ -15,11 +15,20 @@ access to example.com.
 import os as _os
 TOOLS_DIR = _os.path.dirname(_os.path.abspath(__file__))
 ROOT = _os.path.dirname(TOOLS_DIR)
+import subprocess
 import sys
 import time
 
 sys.path.insert(0, TOOLS_DIR)
 from driver import Driver
+
+# Suite-safe: launch the fixture proxy ourselves (idempotent bind: an
+# already-running instance keeps port 8888 and our child exits; that is
+# fine - the fixture either way is reachable).
+_proxy = subprocess.Popen(
+    [sys.executable, _os.path.join(TOOLS_DIR, "logging_proxy.py")],
+    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+time.sleep(1)  # bind + listen
 
 PORT = 8888
 USER = "proxyuser"
