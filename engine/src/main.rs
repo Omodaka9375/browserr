@@ -377,6 +377,28 @@ if(window.XMLHttpRequest){
     return oo.apply(this,arguments);
   };
 }
+// Main-document status: servo's net stack does not surface the document's
+// HTTP status to page JS (no responseStatus on PerformanceNavigationTiming
+// in 0.8), so the ring can only carry what the page can observe. Provide a
+// re-fetch probe the driver calls after load: a same-origin HEAD of the
+// document URL, whose status lands in the ring as 'document-probe'. That
+// distinguishes a served page (200) from a served fake-404 (404) from a
+// network error (probe-error) - the block-vs-dead question - using the
+// same cookies/session as the original walk.
+window.__browserr_doc_probe=function(){
+  var u;
+  try{u=String(location.href);}catch(_){return 'no-location';}
+  if(location.protocol!=='http:'&&location.protocol!=='https:'){
+    return 'not-http';
+  }
+  of.call(window,u,{method:'HEAD',cache:'no-store'}).then(function(r){
+    push('document-probe',u,{status:r.status,
+      type:(r.headers&&r.headers.get)?r.headers.get('content-type'):''});
+  },function(e){
+    push('document-probe-error',u,{error:String(e)});
+  });
+  return 'probe-started';
+};
 })()"#;
 
 /// Returns JSON for the page's frame tree (tier-1 frame control):
@@ -1620,6 +1642,9 @@ fn main() {
     let mut headed_mode = false;
     let mut driver_port = None;
     let mut driver_token = None;
+    let mut proxy = None;
+    let mut proxy_https = None;
+    let mut no_proxy = None;
     for a in std::env::args().skip(1) {
         if let Some(v) = a.strip_prefix("--user-agent=") {
             user_agent = Some(v.to_string());
@@ -1641,6 +1666,23 @@ fn main() {
             driver_port = v.parse::<u16>().ok();
         } else if let Some(v) = a.strip_prefix("--driver-token=") {
             driver_token = Some(v.to_string());
+        } else if let Some(v) = a.strip_prefix("--proxy=") {
+            // Upstream proxy for ALL http(s) loads: servo routes them
+            // through a hyper CONNECT tunnel. Basic auth goes in the URL:
+            //   --proxy=http://user:pass@host:port
+            // (surfman/hyper extract user:pass from the authority and send
+            // Proxy-Authorization on the CONNECT). Overrides the
+            // http_proxy/https_proxy env vars (set here, after the env
+            // read in Preferences::default()).
+            proxy = Some(v.to_string());
+        } else if let Some(v) = a.strip_prefix("--proxy-https=") {
+            // Optional separate proxy for https:// URLs (some providers
+            // expose different endpoints); defaults to --proxy.
+            proxy_https = Some(v.to_string());
+        } else if let Some(v) = a.strip_prefix("--no-proxy=") {
+            // Comma-separated hosts/domains exempt from proxying (the
+            // loopback exemption is implied by the engine itself).
+            no_proxy = Some(v.to_string());
         }
     }
 
@@ -1717,6 +1759,22 @@ fn main() {
     if let Some(ua) = user_agent {
         eprintln!("engine: custom user agent set");
         prefs.user_agent = ua;
+    }
+    // Proxy: --proxy (and optional --proxy-https/--no-proxy) beat the env
+    // vars because this runs after Preferences::default() already read
+    // http_proxy/https_proxy/no_proxy from the environment. Setting BOTH
+    // http and https prefs from --proxy covers the common single-endpoint
+    // residential/rotating provider; --proxy-https overrides https only.
+    if let Some(p) = proxy {
+        eprintln!("engine: proxy enabled (all http/https traffic)");
+        prefs.network_http_proxy_uri = p.clone();
+        prefs.network_https_proxy_uri = proxy_https.unwrap_or(p);
+    } else if let Some(p) = proxy_https {
+        eprintln!("engine: proxy enabled (https traffic)");
+        prefs.network_https_proxy_uri = p;
+    }
+    if let Some(np) = no_proxy {
+        prefs.network_http_no_proxy = np;
     }
     // SPA/JS compatibility: servo 0.8 ships these web APIs implemented but
     // pref-gated OFF upstream (they flip them for WPT runs only). Pref flips

@@ -38,7 +38,7 @@ $sdk_tests = @(
     "test_bind", "test_attach", "test_hardening", "test_intercept",
     "test_auth", "test_filepicker", "test_net", "test_frames", "test_form",
     "test_flow", "test_annotate", "test_handoff", "test_trust",
-    "test_software_render", "test_compat"
+    "test_software_render", "test_compat", "test_proxy"
 )
 if (-not $gpuless -and $env:CI -ne "true") { $sdk_tests += "test_headed" }
 # Always run the render-free MCP handoff regression tests.

@@ -71,17 +71,30 @@ class State:
                             "mcp-engine.log")
 
     def start(self, attach_port=None, token=None, profile=None, auto_auth=True,
-              headed=False):
+              headed=False, proxy=None, proxy_https=None, no_proxy=None):
         with self.lock:
             if self.driver is not None:
                 return self.status(started=False, note="already running")
             if attach_port and headed:
                 raise McpError("headed cannot change an attached engine; "
                                "start that engine with --headed instead")
+            if attach_port and (proxy or proxy_https or no_proxy):
+                raise McpError("proxy cannot change an attached engine; "
+                               "start that engine with --proxy= instead")
+            # Proxy flags go straight to the engine's argv (spawn only);
+            # basic auth rides inside the URL (user:pass@host:port) and is
+            # never logged (engine_args are not in the action log).
+            proxy_args = []
+            if proxy:
+                proxy_args.append("--proxy=" + proxy)
+            if proxy_https:
+                proxy_args.append("--proxy-https=" + proxy_https)
+            if no_proxy:
+                proxy_args.append("--no-proxy=" + no_proxy)
             if attach_port:
                 self.driver = Driver.attach(attach_port, token=token)
             elif profile:
-                engine_args = ["--headed"] if headed else None
+                engine_args = (["--headed"] if headed else []) + proxy_args
                 # Persistent profile: logins and storage survive sessions.
                 # Name is sanitized to a single path component.
                 safe = "".join(c for c in profile if c.isalnum() or c in "-_")
@@ -90,11 +103,12 @@ class State:
                 pdir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     "mcp-profiles", safe)
                 os.makedirs(pdir, exist_ok=True)
-                self.driver = Driver(profile_dir=pdir, engine_args=engine_args,
+                self.driver = Driver(profile_dir=pdir, engine_args=engine_args or None,
                                      log=self._engine_log_path())
             else:
+                engine_args = (["--headed"] if headed else []) + proxy_args
                 self.driver = Driver(ephemeral=True,
-                                     engine_args=["--headed"] if headed else None,
+                                     engine_args=engine_args or None,
                                      log=self._engine_log_path())
             # Trust layer on by default: evidence + action log per profile
             # (or per session for ephemeral/attach).
@@ -111,7 +125,8 @@ class State:
                 started=True, mode="attach" if attach_port else "spawn",
                 engine_pid=self.driver.proc.pid if self.driver.proc else None,
                 profile=profile or "ephemeral", auto_auth=bool(auto_auth),
-                headed=bool(headed) if not attach_port else "unknown")
+                headed=bool(headed) if not attach_port else "unknown",
+                proxy=bool(proxy or proxy_https))
 
     def stop(self):
         with self.lock:
@@ -149,7 +164,18 @@ TOOLS = [
             "auto_auth": {"type": "boolean",
                           "description": "answer auth from stored credentials; default true"},
             "headed": {"type": "boolean",
-                       "description": "show a real interactive browser window (spawn only)"}},
+                       "description": "show a real interactive browser window (spawn only)"},
+            "proxy": {"type": "string",
+                      "description": "upstream proxy URL for all http/https "
+                                      "traffic, e.g. "
+                                      "http://user:pass@host:port "
+                                      "(basic auth in the URL; spawn only)"},
+            "proxy_https": {"type": "string",
+                            "description": "separate proxy for https URLs; "
+                                            "defaults to proxy (spawn only)"},
+            "no_proxy": {"type": "string",
+                         "description": "comma-separated hosts exempt from "
+                                         "the proxy (spawn only)"}},
             "required": []},
     },
     {
@@ -166,9 +192,21 @@ TOOLS = [
     {
         "name": "browser_navigate",
         "description": "Navigate the active tab to a URL and wait until the page "
-                       "is ready for interaction.",
+                       "is ready for interaction. The url event must arrive "
+                       "within 15s (raise wait_ms to raise that commit "
+                       "budget); afterwards the page settles for up to "
+                       "settle_ms more (default 30000, readyState complete "
+                       "within it). On slow SPAs the tool returns settled:false "
+                       "INSTEAD of throwing when content is still pending - "
+                       "the right reaction is wait_ready or a re-read, not a "
+                       "retry.",
         "inputSchema": {"type": "object", "properties": {
-            "url": {"type": "string"}}, "required": ["url"]},
+            "url": {"type": "string"},
+            "wait_ms": {"type": "integer",
+                        "description": "budget for the load to commit (url event), default 15000"},
+            "settle_ms": {"type": "integer",
+                          "description": "budget for readyState complete after commit, default 30000; 0 skips"}},
+            "required": ["url"]},
     },
     {
         "name": "browser_read",
@@ -323,6 +361,20 @@ TOOLS = [
                        "newest last.",
         "inputSchema": {"type": "object", "properties": {
             "limit": {"type": "integer"}}, "required": []},
+    },
+    {
+        "name": "browser_document_status",
+        "description": "Re-fetch the current document (same-origin HEAD) "
+                       "and report its HTTP status and content-type. This "
+                       "distinguishes a real 404 (status 404) from a block "
+                       "that serves a fake-404 page (also 404 but with a "
+                       "rendered body) and from a network-level block "
+                       "(null). Servo never surfaces the main document's "
+                       "status elsewhere, so agents should call this after "
+                       "any navigation that looks like a dead listing. The "
+                       "result also lands in the browser_net ring as "
+                       "'document-probe'.",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "browser_frames",
@@ -572,7 +624,10 @@ def call_tool(name, args):
         return STATE.start(args.get("attach_port"), token=args.get("token"),
                            profile=args.get("profile"),
                            auto_auth=args.get("auto_auth", True),
-                           headed=args.get("headed", False))
+                           headed=args.get("headed", False),
+                           proxy=args.get("proxy"),
+                           proxy_https=args.get("proxy_https"),
+                           no_proxy=args.get("no_proxy"))
     if name == "browser_stop":
         return STATE.stop()
 
@@ -590,13 +645,26 @@ def call_tool(name, args):
                         and e.get("id") not in d._answered_auth)
                        or (e.get("ev") == "url" and e.get("tab") == 0
                            and (target is None or target in e.get("url", "")))),
-            timeout=15.0, after=cursor)
+            timeout=float(args.get("wait_ms", 15000)) / 1000.0,
+            after=cursor)
         if ev.get("ev") == "auth":
             return {"url": ev.get("url"), "auth_required": {
                 "id": ev.get("id"), "tab": ev.get("tab"),
                 "url": ev.get("url"), "proxy": ev.get("proxy")}}
-        d.wait_ready()
-        return {"url": d.eval_js("location.href")}
+        # Settle phase: readyState complete within settle_ms, but an unset
+        # page is NOT an error - a slow SPA that renders seconds later is
+        # normal (careers.oracle.com class). Report settled:false and let
+        # the agent wait_ready or re-read; never teach retry-spam.
+        settle_ms = args.get("settle_ms", 30000)
+        if settle_ms:
+            try:
+                d.wait_ready(timeout=float(settle_ms) / 1000.0)
+                settled = True
+            except TimeoutError:
+                settled = False
+        else:
+            settled = None
+        return {"url": d.eval_js("location.href"), "settled": settled}
     if name == "browser_read":
         title, text = d.read_page()
         return {"title": title, "text": text}
@@ -680,6 +748,9 @@ def call_tool(name, args):
         return {"answered": args["id"], "action": args["action"]}
     if name == "browser_net":
         return {"entries": d.net_evidence(limit=args.get("limit", 200))}
+    if name == "browser_document_status":
+        status, ctype = d.document_status()
+        return {"status": status, "content_type": ctype}
     if name == "browser_frames":
         return d.frames()
     if name == "browser_set_field":

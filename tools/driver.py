@@ -793,6 +793,31 @@ class Driver:
             return json.loads(raw)
         return raw or []
 
+    def document_status(self, tab: int = 0, timeout=15.0):
+        """Re-fetch the current document (same-origin HEAD) and return its
+        HTTP status: distinguishes a served page (200/40x) from a network
+        error (None on failure). The probe result also lands in the net
+        ring as 'document-probe'. This exists because servo 0.8 never
+        surfaces the main document's response status to page JS or the
+        embedder - a block that serves a fake 404 looks identical to a
+        real 404 without this. Returns (status, content_type) or
+        (None, None) when the probe cannot run (non-http page, network
+        error, timeout)."""
+        marker = len(self.net_evidence(limit=500, tab=tab))
+        r = self.eval_js("window.__browserr_doc_probe&&window.__browserr_doc_probe()", tab)
+        if r != "probe-started":
+            return (None, None)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            ring = self.net_evidence(limit=500, tab=tab)
+            for e in ring[marker:]:
+                if e.get("kind") == "document-probe":
+                    return (e.get("status"), e.get("type"))
+                if e.get("kind") == "document-probe-error":
+                    return (None, None)
+            time.sleep(0.2)
+        return (None, None)
+
     def frames(self, tab: int = 0, timeout=10.0):
         """The page's frame tree: {url, origin, children:[...]}.
         Same-origin frames are walked (title, nested children); cross-origin

@@ -41,7 +41,7 @@ that follow from owning the whole stack:
 - **Runs where Chromium cannot.** CPU rendering by default: instant start
   on GPU-less machines, containers, CI runners and a Raspberry Pi 4/5
   (ARM64 builds included).
-- **MCP-native, not wrapper-native.** All 41 tools surface directly to any
+- **MCP-native, not wrapper-native.** All 42 tools surface directly to any
   MCP-capable agent. No CDP quirks, no driver downloads, no version drift.
 - **SPA-ready.** Modern JS syntax, fetch/WebSockets/Workers, custom
   elements, shadow DOM, React 18 + Vue 3 verified rendering, plus
@@ -308,7 +308,7 @@ Timing rules worth knowing:
 ## MCP server
 
 `tools/browserr_mcp.py` is a Model Context Protocol server (standard
-library only, newline JSON-RPC on stdio) exposing 41 tools:
+library only, newline JSON-RPC on stdio) exposing 42 tools:
 
 - session: start (with optional persistent `profile`), stop, ping
 - page: navigate, read, read_structure, links, forms
@@ -316,7 +316,8 @@ library only, newline JSON-RPC on stdio) exposing 41 tools:
   set_field, fill_form, key, set_value, submit_form, read_outcome
 - capture: screenshot, screenshot_annotated, wait_for, tabs, console,
   evidence, download
-- network: intercept, pending_requests, intercept_answer, net, frames
+- network: intercept, pending_requests, intercept_answer, net, frames,
+  document_status
 - trust: pause, resume, detect_handoff, wait_for_user, set_credentials
 - events: wait_auth, auth_answer, wait_filepicker, files_answer
 
@@ -327,6 +328,36 @@ evidence dir and action log; evidence shots, auto-auth and the submit
 confirm gate are on by default for MCP-started engines. Set
 `auto_auth: false` to use the manual auth tools. Navigation returns an
 `auth_required` challenge instead of waiting for a blocked page.
+
+### Upstream proxy
+
+All http/https traffic can route through an upstream proxy (hyper CONNECT
+tunnel; TLS stays end-to-end, no MITM). Basic auth rides in the URL:
+
+```text
+engine:            --proxy=http://user:pass@host:port [--proxy-https=...]
+                   [--no-proxy=host1,host2]
+SDK:               Driver(engine_args=["--proxy=..."])
+MCP:               browser_start(proxy="http://user:pass@host:port",
+                              proxy_https=..., no_proxy=...)
+```
+
+`--proxy` covers both http and https; `--proxy-https` overrides https
+only. Credentials are never logged. Per-attempt rotation: spawn one
+ephemeral engine per walk, each with its own proxy. Known gaps: WebSocket
+connections bypass the proxy, and DNS resolves locally (CONNECT tunnels
+are exempt: the proxy resolves the hostname).
+
+### Block vs dead-listing detection
+
+Servo never surfaces the main document's HTTP status, so a block that
+serves a fake 404 is indistinguishable from a real 404 by page content
+alone. `browser_document_status` re-fetches the document URL (same-origin
+HEAD, same cookies/session) and reports the status: 200 means the page
+served normally, 404 means the URL is either genuinely dead or blocked
+( correlate with proxy rotation to separate the two), `null` means a
+network-level failure. The probe also lands in the `browser_net` ring as
+a `document-probe` entry.
 
 For human handoff, start with `{headed: true}`. This is a real browser
 window with no separate tab bar; MCP tab switching controls its contents.
