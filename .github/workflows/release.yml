@@ -36,7 +36,9 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libdbus-1-dev \
+          # libxkbcommon-x11-dev: winit's X11 backend (engine --headed)
+          # dlopens libxkbcommon-x11 at startup and panics without it.
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libdbus-1-dev \
             libegl1-mesa-dev libgl1-mesa-dev libgbm-dev \
             libfontconfig1-dev libfreetype-dev \
             libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxinerama-dev \

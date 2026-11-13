@@ -66,8 +66,10 @@ jobs:
             echo "::error::$desc failed after 4 attempts"; return 1
           }
           run_with_retries "apt-get update" apt-get update
+          # libxkbcommon-x11-dev: winit's X11 backend (engine --headed)
+          # dlopens libxkbcommon-x11 at startup and panics without it.
           run_with_retries "apt-get install" apt-get install -y --fix-missing \
-            libxkbcommon-dev libdbus-1-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libdbus-1-dev \
             libegl1-mesa-dev libgl1-mesa-dev libgbm-dev \
             libfontconfig1-dev libfreetype-dev \
             libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxinerama-dev \
