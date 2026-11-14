@@ -599,7 +599,23 @@ class Term:
             elif n == "End":
                 self.d.wheel(-10000, tab=self.active)
             elif not self.url_mode:
-                self.d.key(n, tab=self.active)
+                # Servo 0.8 does not implement implicit form submission:
+                # Enter in an <input> does nothing (verified). Click the
+                # owning form's submit button ourselves, like a polyfill.
+                if n == "Enter":
+                    js = ("(function(){var e=document.activeElement;"
+                          "if(e&&e.form){var b=e.form.querySelector("
+                          "'button[type=submit],input[type=submit]');"
+                          "if(b){b.click();return true}}"
+                          "return false})()")
+                    try:
+                        submitted = self.d.eval_js(js, tab=self.active)
+                    except TimeoutError:
+                        submitted = False
+                    if not submitted:
+                        self.d.key("Enter", tab=self.active)
+                else:
+                    self.d.key(n, tab=self.active)
         elif ev["kind"] == "text":
             if self.url_mode:
                 self.url_buf += ev["text"]

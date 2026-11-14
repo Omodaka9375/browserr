@@ -1,0 +1,17 @@
+<!doctype html>
+<html><head><title>Login</title>
+<style>body{font:18px Arial;background:#fcfcfc;color:#171717}
+form{max-width:420px;margin:60px auto;padding:30px;border:1px solid #ddd}
+input{display:block;width:100%;margin:10px 0;padding:10px;font-size:18px}
+button{padding:10px 24px;font-size:18px;margin-top:10px}
+#welcome{display:none;color:green;font-weight:bold}</style></head>
+<body><form id="f" onsubmit="event.preventDefault();
+  if (u.value==='agent'&&p.value==='hunter2'){err.textContent='';welcome.style.display='block';f.style.display='none'}
+  else {err.textContent='wrong credentials'}">
+<h2>Sign in</h2>
+<input id="u" name="username" placeholder="username" autocomplete="off">
+<input id="p" name="password" type="password" placeholder="password" autocomplete="off">
+<div id="err" style="color:red"></div>
+<button type="submit">Log in</button>
+</form>
+<div id="welcome">WELCOME-AGENT</div></body></html>
