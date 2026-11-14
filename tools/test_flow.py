@@ -167,19 +167,25 @@ try:
     assert res["outcome"]["title"] == "Done", res["outcome"]
     print("submit without ref OK")
 
-    # 7. Cross-origin GET submit to a MORE-LOCAL target: servo 0.8 blocks
-    # page-initiated navigations that go public->local (and IP->localhost),
-    # so the form silently does nothing. The driver must report navigated
-    # false (plus a diagnostic) and NOT hang; the embedder-level navigate
-    # bypasses the block and lands.
+    # 7. Cross-origin GET submit to a MORE-LOCAL target: servo 0.8 on
+    # WINDOWS blocks page-initiated navigations that go public->local
+    # (and IP->localhost), so the form silently does nothing; on Linux
+    # the same submit navigates. Either way the driver must report
+    # honestly: navigated true + landed, or navigated false + nav_note,
+    # and the embedder-level navigate() always lands.
     import time as _t
     d.navigate(PAGE_URL)
     d.wait_load(contains="form-flow.html")
     d.wait_ready()
     r = structure_with_fields()
     res = d.submit_and_wait('#xorigin')
-    assert res["navigated"] is False, res
-    assert "nav_note" in res, res
+    assert res["submit"].get("ok"), res
+    if res["navigated"]:
+        assert "localhost" in res["outcome"]["url"], res["outcome"]
+        print("cross-origin submit navigated OK")
+    else:
+        assert "nav_note" in res, res
+        print("local-network block detected (Windows servo)")
     d.navigate("http://localhost:8135/done")
     d.wait_load(contains="/done")
     d.wait_ready()

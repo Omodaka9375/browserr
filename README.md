@@ -431,11 +431,12 @@ directory deleted on engine exit.
   partially crashes client interactivity on some sites: the server HTML
   renders fine, hydrated components may fail. Client-rendered React
   (createRoot) is unaffected.
-- Servo 0.8 blocks PAGE-INITIATED navigations to a MORE-LOCAL address
-  space (public -> local, and IP host -> localhost name): a form GET
-  (or location.href / a submit-button click) to such a target silently
-  does nothing. Embedder-level loads (the driver's navigate) are NOT
-  blocked, so the workaround is to read the form's action and call
+- Servo 0.8 on WINDOWS blocks PAGE-INITIATED navigations to a
+  MORE-LOCAL address space (public -> local, and IP host -> localhost
+  name): a form GET (or location.href / a submit-button click) to such
+  a target silently does nothing. Linux allows the same navigation.
+  Embedder-level loads (the driver's navigate) are NOT blocked on
+  either, so the workaround is to read the form's action and call
   navigate() with it - submit_and_wait reports a nav_note hint when it
   detects this. Public -> public form navigation (e.g. HN's search box
   to hn.algolia.com) is unaffected.
