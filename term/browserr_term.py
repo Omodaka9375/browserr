@@ -419,7 +419,10 @@ class Term:
         self.d = driver
         self.cols, self.rows = cols, rows
         self.out = out
-        self.view_rows = rows - 1
+        # One row for URL/status and one for key help. Graphics never enter
+        # these rows; bottom-edge terminal scrolling would otherwise smear
+        # the Sixel image and detach patch coordinates from the screen.
+        self.view_rows = max(1, rows - 2)
         self.url_mode = False
         self.url_buf = ""
         self.status = "starting"
@@ -531,7 +534,6 @@ class Term:
         self.d.navigate(url)
 
     def draw_status(self):
-        bar = self.rows
         mode = "URL" if self.url_mode else "VIEW"
         s = f" [{mode}] {self.url if not self.url_mode else self.url_buf + '_'}"
         s += f" | tab {self.active} | {self.status} | {self.fps_now:.0f}fps"
@@ -541,10 +543,20 @@ class Term:
             ms = getattr(self.renderer, "last_ms", 0.0)
             if ms:
                 s += f" write:{ms:.1f}ms"
-        s += " | ctrl+l url ctrl+t tab ctrl+q quit"
-        s = s[:self.cols]
-        self.out.write(f"{ESC}[{bar};1H{ESC}[48;2;170;170;170m"
-                       f"{ESC}[38;2;0;0;0m{s}{RESET}")
+        url_bar = self.rows - 1
+        help_bar = self.rows
+        text = (
+            f"{ESC}[{url_bar};1H{ESC}[48;2;170;170;170m"
+            f"{ESC}[38;2;0;0;0m{s[:self.cols].ljust(self.cols)}{RESET}"
+            f"{ESC}[{help_bar};1H{ESC}[48;2;30;30;30m"
+            f"{ESC}[38;2;235;235;235m"
+            f"{'ctrl+l url  ctrl+t tab  ctrl+]/[ switch  ctrl+q quit'[:self.cols].ljust(self.cols)}{RESET}")
+        if hasattr(self.out, "buffer"):
+            self.out.buffer.write(text.encode())
+            self.out.buffer.flush()
+        else:
+            self.out.write(text)
+            self.out.flush()
         self.out.flush()
 
     def render_frame(self, w, h, bgra):
@@ -776,7 +788,7 @@ def main(argv):
     # for fps when the software raster is the bottleneck.
     if mode in ("sixel", "kitty"):
         eng_w = max(320, min(2400, int(cols * cell[0] * scale)))
-        eng_h = max(200, min(1600, int((rows - 1) * cell[1] * scale)))
+        eng_h = max(200, min(1600, int(max(1, rows - 2) * cell[1] * scale)))
     else:
         eng_w, eng_h = 1200, 760
     # geometry log: the numbers that decide readability; append for diagnosis
@@ -803,19 +815,22 @@ def main(argv):
         if mode == "kitty":
             t.kitty = True
             t.cell = cell
-            t.renderer = NativeKitty(kout, d, cols, rows - 1)
+            t.renderer = NativeKitty(kout, d, cols, max(1, rows - 2))
         elif mode == "sixel":
             t.sixel = True
             t.cell = cell
             t.renderer = NativeSixel(kout, cell)
         else:
-            t.renderer = HalfblockDirty(cols, rows - 1, t.out)
+            t.renderer = HalfblockDirty(cols, max(1, rows - 2), t.out)
 
         print(f"Browserr Term: {mode}, engine {eng_w}x{eng_h}, "
               f"terminal {cols}x{rows}, cell {cell[0]}x{cell[1]}, "
               f"max {fps}fps", file=sys.stderr)
         time.sleep(2)
         setup_terminal()
+        if mode in ("sixel", "kitty"):
+            sys.stdout.write(f"{ESC}[1;{t.view_rows}r{ESC}[1;1H")
+            sys.stdout.flush()
         frame_min = 1.0 / fps
         last_render = 0.0
         last_meta = 0.0
@@ -860,6 +875,7 @@ def main(argv):
                             t.status = f"err: {e}"
                             t.draw_status()
         finally:
+            sys.stdout.write(f"{ESC}[r{RESET}")
             teardown_terminal()
         return 0
     finally:

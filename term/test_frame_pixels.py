@@ -26,7 +26,7 @@ assert np.array_equal(a, b), f"pixel mismatch: {np.sum(a != b)} values"
 print("native PNG matches BGRA screenshot exactly")
 
 sixel = d.native_frame(format="sixel", force=True)[0][4]
-assert sixel.startswith(b"\x1bP0;1;0q")
+assert sixel.startswith(b"\x1bP7;1;0q")
 print("Sixel forced frame bytes:", len(sixel))
 # Same encoder used repeatedly must be deterministic.
 sixel2 = d.native_frame(format="sixel", force=True)[0][4]
@@ -36,7 +36,10 @@ print("Sixel deterministic")
 
 def decode_sixel(data, width, height):
     """Minimal independent decoder for our 8-bit palette, RLE Sixel stream."""
-    body = data[len(b"\x1bP0;1;0q"):-2].decode("ascii")
+    body = data[data.index(b"q") + 1:-2].decode("ascii")
+    if body.startswith('"'):
+        end = body.index("#") if "#" in body else len(body)
+        body = body[end:]
     palette = {}
     canvas = np.zeros((height, width, 3), dtype=np.uint8)
     color = 0
@@ -48,7 +51,7 @@ def decode_sixel(data, width, height):
             match = re.match(r"#(\d+)(?:;2;(\d+);(\d+);(\d+))?", body[i:])
             color = int(match.group(1))
             if match.group(2) is not None:
-                palette[color] = tuple(round(int(match.group(n)) / 257) for n in (2, 3, 4))
+                palette[color] = tuple(round(int(match.group(n)) * 255 / 100) for n in (2, 3, 4))
             i += match.end()
         elif c == "!":
             j = i + 1

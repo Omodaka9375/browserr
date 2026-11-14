@@ -82,7 +82,10 @@ handling. The existing `scripts/ci.ps1` suite (29 tests) remains green.
 ## Current limits
 
 - Sixel uses a native 216-color cube plus 32 grayscale levels. Text and
-  geometry retain native resolution; color gradients are quantized.
+  geometry retain native resolution; color gradients are quantized. The
+  encoder uses square pixels (P1=7), RGB percentages, and explicit raster
+  dimensions for Windows Terminal compatibility. Two terminal rows are
+  reserved for URL/status and help; graphics are restricted to the top area.
 - Kitty retransmits its composited image when a patch arrives, because the
   protocol has no universal in-place rectangle replacement operation.
 - Terminal resize currently requires restarting the client.

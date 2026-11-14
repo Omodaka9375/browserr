@@ -1828,9 +1828,13 @@ mod frame_tests {
         assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
         assert_eq!(&png[png.len() - 8..png.len() - 4], b"IEND");
         let sixel = encode_sixel(&image, 20, 12);
-        assert!(sixel.starts_with(b"\x1bP0;1;0q"));
+        assert!(sixel.starts_with(b"\x1bP7;1;0q\"1;1;20;12"));
         assert!(sixel.ends_with(b"\x1b\\"));
         assert!(sixel.windows(3).any(|w| w == b"!20"));
+        // Windows Terminal uses P1=7 for square pixels and RGB percentages.
+        let text = String::from_utf8(sixel).expect("sixel is ASCII");
+        assert!(!text.contains("65535"));
+        assert!(text.contains("#231;2;50;50;50") || text.contains(";2;50;50;50"));
     }
 }
 
@@ -1845,16 +1849,21 @@ fn encode_sixel(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
         used[color] = true;
     }
     let mut out = Vec::with_capacity(area / 2);
-    out.extend_from_slice(b"\x1bP0;1;0q");
+    // P1=7 selects square (1:1) pixels; 0 doubles the pixel height on
+    // Windows Terminal. Raster attributes bound the image to its actual
+    // rectangle instead of letting the terminal fill the whole viewport.
+    out.extend_from_slice(format!("\x1bP7;1;0q\"1;1;{width};{height}").as_bytes());
     for (color, present) in used.iter().enumerate() {
         if *present {
             let (r, g, b) = sixel_color(color);
             out.extend_from_slice(
                 format!(
                     "#{color};2;{};{};{}",
-                    r as u16 * 257,
-                    g as u16 * 257,
-                    b as u16 * 257
+                    // DECGCI uses RGB percentages (0-100), not 16-bit
+                    // channels. Larger values clamp to white on Windows.
+                    (r as u16 * 100 + 127) / 255,
+                    (g as u16 * 100 + 127) / 255,
+                    (b as u16 * 100 + 127) / 255
                 )
                 .as_bytes(),
             );
@@ -2792,11 +2801,15 @@ fn main() {
                                                 let bottom = tile_h.min(current_size.height - y);
                                                 rows.entry(row)
                                                     .and_modify(|old| {
+                                                        // Same cell row: crop
+                                                        // every dirty sub-row
+                                                        // together so no patch
+                                                        // erases a neighbor.
                                                         let left = old.x.min(r.x);
                                                         let right = (old.x + old.w).max(r.x + r.w);
                                                         old.x = left;
                                                         old.w = right - left;
-                                                        old.h = old.h.max(r.h);
+                                                        old.h = bottom;
                                                     })
                                                     .or_insert(DirtyRect {
                                                         x: r.x,
@@ -2806,6 +2819,7 @@ fn main() {
                                                     });
                                             }
                                             rects = rows.into_values().collect();
+                                            rects.sort_by_key(|r| (r.y, r.x));
                                         }
                                         for rect in rects {
                                             let Some(crop) =

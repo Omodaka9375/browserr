@@ -73,7 +73,7 @@ sixel = timed("native Sixel full frame", lambda: d.native_frame(format="sixel", 
 assert len(sixel) == 1 and sixel[0][2] == 2
 assert sixel[0][1] == (0, 0, 1200, 760), sixel[0][1]
 assert len(sixel[0][4]) > 1000, "full sixel frame collapsed to a single patch"
-assert sixel[0][4].startswith(b"\x1bP0;1;0q") and sixel[0][4].endswith(b"\x1b\\")
+assert sixel[0][4].startswith(b"\x1bP7;1;0q") and sixel[0][4].endswith(b"\x1b\\")
 print("Sixel bytes:", sum(len(p[4]) for p in sixel))
 wait_static("sixel")
 
