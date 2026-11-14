@@ -443,15 +443,22 @@ class NativeSixel:
     becomes one cursor-positioned Sixel write. The end packet carries no
     pixels and therefore no redraw.
 
-    Inside tmux, image escapes from an application are dropped unless
-    wrapped in tmux's DCS passthrough envelope (allow-passthrough on).
+    Inside tmux there are two transports. "passthrough" wraps the whole
+    write in tmux's DCS envelope (allow-passthrough on) and brackets it
+    with DECSC/DECRC *inside* the envelope: the outer terminal saves its
+    cursor, positions, draws, and restores, so its cursor state returns to
+    exactly where tmux believes it is. Without that, the inner cursor
+    positioning diverges from tmux's model and later tmux-mediated writes
+    land wherever the image left the cursor (the stacked status bars).
+    "raw" sends plain sequences for tmux to render into pane cells itself
+    (tmux 3.4+ with the sixel client feature) or for a direct terminal.
     """
 
-    def __init__(self, out, cell):
+    def __init__(self, out, cell, wrap_mode="raw"):
         self.out = out
         self.cell = cell
         self.last_ms = 0.0
-        self.wrap = bool(os.environ.get("TMUX"))
+        self.wrap_mode = wrap_mode
 
     def render(self, patches):
         t0 = time.time()
@@ -461,8 +468,8 @@ class NativeSixel:
             cx = x // self.cell[0] + 1
             cy = y // self.cell[1] + 1
             data = f"\x1b[{cy};{cx}H".encode() + payload
-            if self.wrap:
-                data = tmux_wrap(data)
+            if self.wrap_mode == "passthrough":
+                data = tmux_wrap(b"\x1b7" + data + b"\x1b8")
             self.out.write(data)
         self.out.flush()
         self.last_ms = (time.time() - t0) * 1000
@@ -986,7 +993,9 @@ def main(argv):
         elif mode == "sixel":
             t.sixel = True
             t.cell = cell
-            t.renderer = NativeSixel(kout, cell)
+            t.renderer = NativeSixel(
+                kout, cell,
+                wrap_mode="passthrough" if in_tmux else "raw")
         else:
             t.renderer = HalfblockDirty(cols, max(1, rows - 2), t.out)
 
