@@ -22,7 +22,10 @@ fn main() {
     // is missing so an asset-less tree still builds.
     if std::path::Path::new("assets/browserr.ico").is_file() {
         println!("cargo:rerun-if-changed=assets/browserr.ico");
-        match winresource::WindowsResource::new().set_icon("assets/browserr.ico").compile() {
+        match winresource::WindowsResource::new()
+            .set_icon("assets/browserr.ico")
+            .compile()
+        {
             Ok(()) => println!("cargo:warning=embedded browserr.ico as the exe icon"),
             Err(e) => panic!("failed to embed browserr.ico into the exe: {e}"),
         }
