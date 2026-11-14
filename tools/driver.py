@@ -226,6 +226,10 @@ class Driver:
 
         engine_path = engine_path or os.environ.get("BROWSERR_ENGINE", ENGINE_DEBUG)
         args = [engine_path, f"--width={width}", f"--height={height}"]
+        if port != 7411:
+            # Multi-engine hosts run several engines side by side; the
+            # default port is shared for backward compatibility.
+            args.append(f"--port={port}")
         if engine_args:
             # Extra engine CLI flags (e.g. --gpu) BEFORE the standard
             # profile flags; kept verbatim, no validation.

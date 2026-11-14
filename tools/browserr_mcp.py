@@ -41,28 +41,42 @@ class McpError(Exception):
 
 
 class State:
-    """One shared Driver instance; lazily started, stopped on session end."""
+    """Named engine sessions. Proxy and user_agent are engine-spawn
+    properties (servo applies them as global network prefs), so "tabs with
+    different proxies" is expressed as multiple named sessions, each with
+    its own engine; every browsing tool accepts an optional session name.
+    The default session keeps single-engine behavior unchanged."""
 
     def __init__(self):
-        self.driver = None
+        self.drivers = {}
         self.lock = threading.Lock()
         self.tab_counter = 1
         self.shot_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                      "mcp-shots")
+        self._next_port = 7412
 
-    def d(self):
+    @staticmethod
+    def _safe_session(name):
+        return "".join(c for c in (name or "default") if c.isalnum() or c in "-_") or "default"
+
+    def d(self, session=None):
         with self.lock:
-            if self.driver is None:
-                raise McpError("browser not started; call browser_start first")
-            return self.driver
+            key = self._safe_session(session)
+            if key not in self.drivers:
+                raise McpError(f"browser session {key!r} not started; "
+                               "call browser_start first")
+            return self.drivers[key]
 
-    def status(self, **fields):
+    def status(self, session=None, **fields):
         """Session result with discoverable, absolute audit locations."""
         result = dict(fields)
-        if self.driver is not None and self.driver.evidence_dir:
-            result["evidence_dir"] = os.path.abspath(self.driver.evidence_dir)
+        key = self._safe_session(session)
+        result["session"] = key
+        d = self.drivers.get(key)
+        if d is not None and d.evidence_dir:
+            result["evidence_dir"] = os.path.abspath(d.evidence_dir)
             result["action_log_path"] = os.path.abspath(
-                self.driver.action_log_path)
+                d.action_log_path)
         return result
 
     @staticmethod
@@ -72,10 +86,12 @@ class State:
 
     def start(self, attach_port=None, token=None, profile=None, auto_auth=True,
               headed=False, proxy=None, proxy_https=None, no_proxy=None,
-              user_agent=None):
+              user_agent=None, session=None):
         with self.lock:
-            if self.driver is not None:
-                return self.status(started=False, note="already running")
+            key = self._safe_session(session)
+            if key in self.drivers:
+                return self.status(session=key, started=False,
+                                   note="already running")
             if attach_port and headed:
                 raise McpError("headed cannot change an attached engine; "
                                "start that engine with --headed instead")
@@ -99,7 +115,7 @@ class State:
             if no_proxy:
                 proxy_args.append("--no-proxy=" + no_proxy)
             if attach_port:
-                self.driver = Driver.attach(attach_port, token=token)
+                driver = Driver.attach(attach_port, token=token)
             elif profile:
                 engine_args = (["--headed"] if headed else []) + proxy_args + ua_args
                 # Persistent profile: logins and storage survive sessions.
@@ -110,13 +126,19 @@ class State:
                 pdir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     "mcp-profiles", safe)
                 os.makedirs(pdir, exist_ok=True)
-                self.driver = Driver(profile_dir=pdir, engine_args=engine_args or None,
-                                     log=self._engine_log_path())
+                driver = Driver(profile_dir=pdir, engine_args=engine_args or None,
+                                log=self._engine_log_path())
             else:
                 engine_args = (["--headed"] if headed else []) + proxy_args + ua_args
-                self.driver = Driver(ephemeral=True,
-                                     engine_args=engine_args or None,
-                                     log=self._engine_log_path())
+                # Non-default sessions get their own engine port: several
+                # engines run side by side, one per proxy/UA group.
+                port = 7411 if key == "default" else self._next_port
+                self._next_port += 1
+                driver = Driver(ephemeral=True, port=port,
+                                engine_args=engine_args or None,
+                                log=self._engine_log_path())
+            self.drivers[key] = driver
+            self.driver = driver  # back-compat alias for status()/d() callers
             # Trust layer on by default: evidence + action log per profile
             # (or per session for ephemeral/attach).
             label = profile or f"session-{time.time_ns()}"
@@ -125,23 +147,27 @@ class State:
             os.makedirs(evdir, exist_ok=True)
             self.driver.enable_evidence(evdir)
             if auto_auth:
-                self.driver.start_auto_auth()
+                driver.start_auto_auth()
             # spawn = a fresh engine this server owns; attach = connected to
             # a running engine's driver port.
             return self.status(
+                session=key,
                 started=True, mode="attach" if attach_port else "spawn",
-                engine_pid=self.driver.proc.pid if self.driver.proc else None,
+                engine_pid=driver.proc.pid if driver.proc else None,
                 profile=profile or "ephemeral", auto_auth=bool(auto_auth),
                 headed=bool(headed) if not attach_port else "unknown",
                 proxy=bool(proxy or proxy_https))
 
-    def stop(self):
+    def stop(self, session=None):
         with self.lock:
-            if self.driver is None:
-                return {"stopped": False, "note": "not running"}
-            self.driver.close()
-            self.driver = None
-            return {"stopped": True}
+            key = self._safe_session(session)
+            if key not in self.drivers:
+                return {"stopped": False, "note": f"session {key!r} not running"}
+            self.drivers[key].close()
+            del self.drivers[key]
+            if getattr(self, "driver", None) is self.drivers.get(key):
+                self.driver = None
+            return {"stopped": True, "session": key}
 
 
 def safe_name(s):
@@ -187,14 +213,23 @@ TOOLS = [
                            "description": "custom HTTP User-Agent for all "
                                            "requests (spawn only), e.g. a "
                                            "desktop Chrome UA to avoid "
-                                           "mobile/blocked variants"}},
+                                           "mobile/blocked variants"},
+            "session": {"type": "string",
+                        "description": "named engine session; proxy and "
+                                        "user_agent are engine properties, "
+                                        "so use one session per proxy/UA "
+                                        "group (letters, digits, - and _)"}},
             "required": []},
     },
     {
         "name": "browser_stop",
         "description": "Stop the browser (detaches in computer-use mode without "
-                       "stopping the engine).",
-        "inputSchema": {"type": "object", "properties": {}, "required": []},
+                       "stopping the engine). Pass session to stop one "
+                       "named session; without it, stops the default one.",
+        "inputSchema": {"type": "object", "properties": {
+            "session": {"type": "string",
+                        "description": "named session to stop (default: 'default')"}},
+            "required": []},
     },
     {
         "name": "browser_ping",
@@ -640,11 +675,12 @@ def call_tool(name, args):
                            proxy=args.get("proxy"),
                            proxy_https=args.get("proxy_https"),
                            no_proxy=args.get("no_proxy"),
-                           user_agent=args.get("user_agent"))
+                           user_agent=args.get("user_agent"),
+                           session=args.get("session"))
     if name == "browser_stop":
-        return STATE.stop()
+        return STATE.stop(args.get("session"))
 
-    d = STATE.d()
+    d = STATE.d(args.get("session"))
     if name == "browser_ping":
         return d.ping()
     if name == "browser_navigate":

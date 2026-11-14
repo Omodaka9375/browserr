@@ -2005,8 +2005,14 @@ fn main() {
     let mut no_proxy = None;
     let mut initial_width = 1200u32;
     let mut initial_height = 760u32;
+    let mut port = PORT;
     for a in std::env::args().skip(1) {
-        if let Some(v) = a.strip_prefix("--width=") {
+        if let Some(v) = a.strip_prefix("--port=") {
+            // Multi-engine hosts (one engine per proxy/UA group) run several
+            // engines side by side; the default port is only kept for
+            // backward compatibility with drivers that do not pass one.
+            port = v.parse().unwrap_or(PORT);
+        } else if let Some(v) = a.strip_prefix("--width=") {
             initial_width = v.parse().unwrap_or(initial_width).clamp(320, 4096);
         } else if let Some(v) = a.strip_prefix("--height=") {
             initial_height = v.parse().unwrap_or(initial_height).clamp(200, 4096);
@@ -2078,7 +2084,7 @@ fn main() {
     let listener = {
         let mut bound = None;
         for _ in 0..50 {
-            match TcpListener::bind(("127.0.0.1", PORT)) {
+            match TcpListener::bind(("127.0.0.1", port)) {
                 Ok(l) => {
                     bound = Some(l);
                     break;
@@ -2088,7 +2094,7 @@ fn main() {
         }
         bound.expect("engine: bind failed")
     };
-    eprintln!("engine: listening on {PORT}");
+    eprintln!("engine: listening on {port}");
     let (stream, _peer) = listener.accept().expect("engine: accept failed");
     eprintln!("engine: chrome connected");
     let out_stream = stream.try_clone().expect("engine: clone stream");
