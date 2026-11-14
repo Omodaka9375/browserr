@@ -30,6 +30,7 @@ import os
 import sys
 import threading
 import time
+import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from driver import Driver, save_png
@@ -238,15 +239,17 @@ TOOLS = [
     },
     {
         "name": "browser_navigate",
-        "description": "Navigate the active tab to a URL and wait until the page "
-                       "is ready for interaction. The url event must arrive "
-                       "within 15s (raise wait_ms to raise that commit "
-                       "budget); afterwards the page settles for up to "
-                       "settle_ms more (default 30000, readyState complete "
-                       "within it). On slow SPAs the tool returns settled:false "
-                       "INSTEAD of throwing when content is still pending - "
-                       "the right reaction is wait_ready or a re-read, not a "
-                       "retry.",
+        "description": "Navigate the active tab and wait for the page to commit "
+                       "(wait_ms, default 15000) and settle (settle_ms, default "
+                       "30000). Fail-last, not fail-first: a redirect that "
+                       "rewrites the url or a commit slower than wait_ms is "
+                       "verified against the engine event stream instead of "
+                       "throwing - the result carries the final url, settled "
+                       "(false = still pending; the right reaction is "
+                       "wait_ready or a re-read, not a retry) and a note when "
+                       "the commit was verified by evidence. An unreachable "
+                       "site returns error_page:true (fix the url/proxy, do "
+                       "not retry); only a stalled engine raises.",
         "inputSchema": {"type": "object", "properties": {
             "url": {"type": "string"},
             "wait_ms": {"type": "integer",
@@ -689,13 +692,81 @@ def call_tool(name, args):
         # Auth holds a main-frame load. Return that decision to the caller
         # instead of waiting for a page that cannot arrive until it is answered.
         target = args["url"].split("://", 1)[-1][:48] or None
-        ev = d.wait_for(
-            lambda e: ((e.get("ev") == "auth" and e.get("tab") == 0
-                        and e.get("id") not in d._answered_auth)
-                       or (e.get("ev") == "url" and e.get("tab") == 0
-                           and (target is None or target in e.get("url", "")))),
-            timeout=float(args.get("wait_ms", 15000)) / 1000.0,
-            after=cursor)
+        try:
+            t_host = urllib.parse.urlparse(args["url"]).hostname
+        except ValueError:
+            t_host = None
+        wait_ms = float(args.get("wait_ms", 15000))
+
+        def _nav_pred(e):
+            if e.get("ev") == "auth" and e.get("tab") == 0 \
+                    and e.get("id") not in d._answered_auth:
+                return True
+            if e.get("ev") != "url" or e.get("tab") != 0:
+                return False
+            u = e.get("url", "")
+            if target is not None and target in u:
+                return True
+            # Redirect chains rewrite queries and paths; a commit on the
+            # requested host is ours even when the substring stopped matching.
+            if t_host:
+                try:
+                    return urllib.parse.urlparse(u).hostname == t_host
+                except ValueError:
+                    return False
+            return False
+
+        ev = None
+        try:
+            ev = d.wait_for(_nav_pred, timeout=wait_ms / 1000.0,
+                            after=cursor)
+        except TimeoutError:
+            # Fail-last, not fail-first: a late commit or a redirect that
+            # rewrote the url leaves the substring dead while the page is
+            # loading fine. Verify from the event stream; only a
+            # navigation that never committed at all is an error. The
+            # transient about:blank doc alone is NOT a commit - a load to
+            # a dead port produces it and nothing else; a real commit is
+            # always followed by further load evidence (a second url
+            # event, a title, or a frame paint).
+            deadline = time.time() + 2.0
+            while time.time() < deadline:
+                recent = [e for e in d.events
+                          if e.get("_driver_seq", 0) > cursor]
+                for e in reversed(recent):
+                    if _nav_pred(e):
+                        ev = e
+                        break
+                if ev is None:
+                    urls = [e for e in recent
+                            if e.get("ev") == "url" and e.get("tab") == 0
+                            and e.get("url")]
+                    committed = any(u.get("url") != "about:blank"
+                                    for u in urls)
+                    # A single about:blank followed by real load evidence
+                    # (title/frame events) means the page committed past
+                    # the transient doc even if the url event was missed.
+                    if not committed and urls:
+                        later = [e for e in recent
+                                 if e.get("ev") in ("title", "frame")]
+                        if later:
+                            ev = {"ev": "url", "url": None}
+                if ev is not None:
+                    break
+                time.sleep(0.1)
+            if ev is None:
+                # Servo commits unreachable URLs too (its own "Error
+                # loading page"); a navigation is only un-committed when
+                # the engine produced no events at all.
+                recent = [e for e in d.events
+                          if e.get("_driver_seq", 0) > cursor]
+                if not recent:
+                    raise McpError(
+                        "navigation did not commit within "
+                        f"{wait_ms:.0f}ms and the engine produced no "
+                        "events; it looks stalled. Check browser_ping, "
+                        "then retry")
+                ev = {"ev": "url", "url": None}
         if ev.get("ev") == "auth":
             return {"url": ev.get("url"), "auth_required": {
                 "id": ev.get("id"), "tab": ev.get("tab"),
@@ -705,15 +776,44 @@ def call_tool(name, args):
         # normal (careers.oracle.com class). Report settled:false and let
         # the agent wait_ready or re-read; never teach retry-spam.
         settle_ms = args.get("settle_ms", 30000)
+        error_page = False
         if settle_ms:
             try:
                 d.wait_ready(timeout=float(settle_ms) / 1000.0)
                 settled = True
             except TimeoutError:
                 settled = False
+            if settled:
+                # Servo renders its own error doc for unreachable hosts.
+                # Report it explicitly: the navigation succeeded at the
+                # engine level but the site is not reachable.
+                try:
+                    if str(d.eval_js("document.title")).strip() \
+                            == "Error loading page":
+                        error_page = True
+                        settled = False
+                except TimeoutError:
+                    pass
         else:
             settled = None
-        return {"url": d.eval_js("location.href"), "settled": settled}
+        try:
+            final_url = d.eval_js("location.href")
+        except TimeoutError:
+            # A mid-load document drops evals; report the last known commit.
+            commits = [e for e in d.events
+                       if e.get("ev") == "url" and e.get("tab") == 0
+                       and e.get("url")]
+            final_url = commits[-1].get("url") if commits else args["url"]
+        result = {"url": final_url, "settled": settled}
+        if error_page:
+            result["error_page"] = True
+            result["note"] = ("site unreachable; the engine rendered its "
+                             "error page. Check the url, proxy, or network.")
+        elif ev.get("url") is None:
+            result["note"] = ("committed to a url that no longer matches "
+                              "the request (redirect or late commit); "
+                              "verified from the event stream")
+        return result
     if name == "browser_read":
         title, text = d.read_page()
         return {"title": title, "text": text}
