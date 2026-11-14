@@ -344,6 +344,7 @@ class Driver:
         self.dead = False           # set by the reader thread on socket loss
         self._paused = None        # reason string while a human has control
         self._handoff_seen = False
+        self._nav_target = {}      # tab -> last navigate() url (for wait_ready)
 
         # Trust layer state: evidence dir, action log, stored credentials.
         self.evidence_dir = None
@@ -491,6 +492,7 @@ class Driver:
     def navigate(self, url: str, tab: int = 0) -> None:
         self._guard_paused("navigate")
         self._log_action("navigate", url=url)
+        self._nav_target[tab] = url
         self.cmd({"cmd": "navigate", "url": url, "tab": tab})
 
     def wait_load(self, tab: int = 0, timeout=15.0, contains: str = None):
@@ -507,12 +509,27 @@ class Driver:
         the document accepts input (early clicks report dispatch_failed); poll
         document.readyState instead. Evals sent too early are dropped by the
         engine, so short-timeout retries are the mechanism.
+
+        Servo also commits navigations through a transient about:blank
+        document whose readyState is instantly "complete", so readyState
+        alone can report ready while the REAL document is still loading
+        (every read/eval then sees an empty page). Ready therefore requires
+        readyState complete AND a live document that is not about:blank -
+        unless the caller navigated to about:blank on purpose.
         """
         deadline = time.time() + timeout
+        target = self._nav_target.get(tab)
         while time.time() < deadline:
             try:
-                if self.eval_js("document.readyState", tab, timeout=1.5) == "complete":
+                state = self.eval_js(
+                    "location.href + '\\n' + document.readyState",
+                    tab, timeout=1.5)
+                href, _, ready = (state or "").partition("\n")
+                if (ready == "complete"
+                        and (href != "about:blank" or target == "about:blank")):
                     return
+            except TimeoutError:
+                pass
             except TimeoutError:
                 pass
             time.sleep(0.2)
