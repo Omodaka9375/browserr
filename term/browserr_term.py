@@ -602,11 +602,19 @@ class Term:
                 # Servo 0.8 does not implement implicit form submission:
                 # Enter in an <input> does nothing (verified). Click the
                 # owning form's submit button ourselves, like a polyfill.
+                # Textareas are excluded: Enter there means a newline, and
+                # buttons outside the focused form are never touched.
                 if n == "Enter":
                     js = ("(function(){var e=document.activeElement;"
-                          "if(e&&e.form){var b=e.form.querySelector("
+                          "if(!e||!e.form||e.tagName==='TEXTAREA')"
+                          "{return false}"
+                          "var t=(e.getAttribute('type')||e.tagName)"
+                          ".toLowerCase();"
+                          "if(t==='button'||t==='submit'||t==='reset')"
+                          "{return false}"
+                          "var b=e.form.querySelector("
                           "'button[type=submit],input[type=submit]');"
-                          "if(b){b.click();return true}}"
+                          "if(b){b.click();return true}"
                           "return false})()")
                     try:
                         submitted = self.d.eval_js(js, tab=self.active)

@@ -41,8 +41,10 @@ for ch in "agent":
 # 3) Tab to the password field, type. Password chars are NOT echoed by the
 #    TUI itself - only the page renders them (as dots).
 t.handle_key({"kind": "key", "name": "Tab"})
+time.sleep(0.3)
 for ch in "hunter2":
     t.handle_key({"kind": "text", "text": ch})
+time.sleep(0.3)
 
 assert d.eval_js("document.activeElement.id") == "p", \
     d.eval_js("document.activeElement.id")
@@ -65,6 +67,7 @@ time.sleep(0.3)
 d.click_element("#u")
 for ch in "agent":
     t.handle_key({"kind": "text", "text": ch})
+time.sleep(0.3)
 t.handle_key({"kind": "key", "name": "Tab"})
 for ch in "wrong":
     t.handle_key({"kind": "text", "text": ch})
@@ -73,6 +76,20 @@ time.sleep(0.6)
 assert "wrong credentials" in str(d.eval_js(
     "document.querySelector('#err').textContent"))
 print("wrong-credentials error renders in-page")
+
+# 6) Enter in a TEXTAREA inserts a newline, never submits the form.
+d.navigate(fixture)
+d.wait_load()
+d.wait_ready()
+time.sleep(0.3)
+d.click_element("#ta")
+t.handle_key({"kind": "key", "name": "Enter"})
+time.sleep(0.4)
+val = str(d.eval_js("document.querySelector('#ta').value"))
+assert "\n" in val, repr(val)
+assert d.eval_js(
+    "document.querySelector('#note').contains(document.activeElement)")
+print("Enter in textarea = newline, no submit")
 
 print("ALL OK")
 d.close()
