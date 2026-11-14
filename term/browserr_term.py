@@ -420,12 +420,18 @@ class NativeSixel:
     engine aligns dirty rectangles to the terminal's cell grid; each packet
     becomes one cursor-positioned Sixel write. The end packet carries no
     pixels and therefore no redraw.
+
+    Inside tmux, image escapes from an application are dropped unless
+    wrapped in tmux's DCS passthrough envelope (allow-passthrough on).
     """
 
     def __init__(self, out, cell):
         self.out = out
         self.cell = cell
         self.last_ms = 0.0
+        self.wrap = bool(os.environ.get("TMUX"))
+        self._wrap_open = f"{ESC}Ptmux;".encode()
+        self._wrap_close = b"\x1b\\"
 
     def render(self, patches):
         t0 = time.time()
@@ -434,7 +440,10 @@ class NativeSixel:
                 continue
             cx = x // self.cell[0] + 1
             cy = y // self.cell[1] + 1
-            self.out.write(f"\x1b[{cy};{cx}H".encode() + payload)
+            data = f"\x1b[{cy};{cx}H".encode() + payload
+            if self.wrap:
+                data = self._wrap_open + data + self._wrap_close
+            self.out.write(data)
         self.out.flush()
         self.last_ms = (time.time() - t0) * 1000
         return len(patches)
@@ -714,6 +723,13 @@ def _query_ansi(payload, terminator, timeout=0.4):
     try:
         import tty as _tty
         _tty.setcbreak(fd)
+        # Inside tmux, raw queries never reach the outer terminal: tmux
+        # answers some itself and drops the rest, so cell-size detection
+        # silently falls back to a wrong default and every patch lands in
+        # the wrong cell. Wrap the query in tmux's passthrough envelope
+        # (requires allow-passthrough on; the reply still reaches stdin).
+        if os.environ.get("TMUX"):
+            payload = f"{ESC}Ptmux;{payload}{ESC}\\"
         sys.stdout.write(payload)
         sys.stdout.flush()
         buf = b""
