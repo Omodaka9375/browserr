@@ -17,6 +17,13 @@ __pycache__/
 mcp-crash.log
 mcp-wrap.log
 tools/mcp-shots/
+tools/mcp-evidence/
+
+# icon tooling: scripts are committed, node_modules is not
+.iconbuild/node_modules/
+.iconbuild/pnpm-lock.yaml
+.iconbuild/icon-*.png
+.iconbuild/extracted-exe-icon.png
 tools/*.html
 tools/*.bin
 tools/*-shot.png

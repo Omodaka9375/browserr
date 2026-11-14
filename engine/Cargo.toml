@@ -38,6 +38,11 @@ glow = "0.17"
 adblock = "0.13"
 image = { version = "0.25", default-features = false, features = ["png", "ico", "jpeg", "bmp", "webp", "gif"] }
 
+[target.'cfg(windows)'.build-dependencies]
+# Windows-only: embeds browserr.ico as the exe icon (see build.rs). Must not
+# enter the non-Windows graphs (same rule as the no-wgl servo feature).
+winresource = "0.1"
+
 # Size-focused release profile. LTO + single codegen unit let the linker drop
 # unreferenced code across servo's ~600 crates. Symbols are stripped where the
 # MSVC toolchain allows. panic stays "unwind": close_tab catches the known

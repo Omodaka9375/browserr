@@ -15,6 +15,19 @@ fn main() {
     if target_os != "windows" {
         return;
     }
+
+    // Embed browserr.ico as the exe icon (Explorer, taskbar, downloads).
+    // Uses the Windows SDK resource compiler (rc.exe), which winresource
+    // locates via the SDK registry; no vcvars needed. Skipped if the asset
+    // is missing so an asset-less tree still builds.
+    if std::path::Path::new("assets/browserr.ico").is_file() {
+        println!("cargo:rerun-if-changed=assets/browserr.ico");
+        match winresource::WindowsResource::new().set_icon("assets/browserr.ico").compile() {
+            Ok(()) => println!("cargo:warning=embedded browserr.ico as the exe icon"),
+            Err(e) => panic!("failed to embed browserr.ico into the exe: {e}"),
+        }
+    }
+
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap_or_default());
     // OUT_DIR = <target>/<profile>/build/<crate>-<hash>/out
     let crate_dir = match out_dir.parent() {

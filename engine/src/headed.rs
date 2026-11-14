@@ -11,7 +11,18 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, KeyCode, ModifiersState, PhysicalKey};
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use winit::window::{Window, WindowAttributes, WindowId};
+use winit::window::{Icon, Window, WindowAttributes, WindowId};
+
+/// Embedded 64x64 RGBA window icon (title bar + taskbar while running).
+/// Rendered from docs/icon.svg; regenerate via .iconbuild/. The exe icon
+/// comes from the .ico resource embedded at build time (build.rs).
+const WINDOW_ICON_PNG: &[u8] = include_bytes!("../assets/icon.png");
+
+fn window_icon() -> Option<Icon> {
+    let img = image::load_from_memory(WINDOW_ICON_PNG).ok()?.to_rgba8();
+    let (w, h) = (img.width(), img.height());
+    Icon::from_rgba(img.into_raw(), w, h).ok()
+}
 
 pub enum NativeEvent {
     Close,
@@ -107,7 +118,8 @@ impl ApplicationHandler for Headed {
         let attributes = WindowAttributes::default()
             .with_title("Browserr")
             .with_inner_size(self.size)
-            .with_visible(true);
+            .with_visible(true)
+            .with_window_icon(window_icon());
         let window = match event_loop.create_window(attributes) {
             Ok(window) => window,
             Err(e) => {
