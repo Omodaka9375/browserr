@@ -790,9 +790,12 @@ def main(argv):
         eng_w = max(320, min(2400, int(cols * cell[0] * scale)))
         eng_h = max(200, min(1600, int(max(1, rows - 2) * cell[1] * scale)))
         if mode == "sixel":
-            # Sixel renders in whole 6-pixel bands; an unquantized viewport
-            # makes the last band overflow and scroll the terminal.
-            eng_h -= eng_h % 6
+            # Patches must align to both the 6px Sixel band grid and the
+            # terminal's cell grid (lcm). An off-grid viewport bottom makes
+            # the last band round up, overflow, and scroll the screen.
+            import math
+            super_h = 6 * cell[1] // math.gcd(6, cell[1])
+            eng_h -= eng_h % super_h
     else:
         eng_w, eng_h = 1200, 760
     # geometry log: the numbers that decide readability; append for diagnosis

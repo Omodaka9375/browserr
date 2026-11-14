@@ -2784,47 +2784,18 @@ fn main() {
                                     let captured = tab.context.read_to_image(rect);
                                     if let Some(image) = captured {
                                         let rgba = image.into_raw();
-                                        let (full, rects) = dirty_rects(
+                                        let (full, mut rects) = dirty_rects(
                                             &rgba,
                                             frame_states.get(&(tab_id, stream)),
                                             current_size.width,
                                             current_size.height,
                                             tile_w,
-                                            if format == "sixel" { 6 } else { tile_h },
+                                            tile_h,
                                             force || v["reset"].as_bool().unwrap_or(false),
                                         );
                                         if !rects.is_empty() {
                                             frame_id += 1;
                                         }
-                                        // Sixel images render in whole
-                                        // 6-pixel bands and any overflow past
-                                        // the scroll region makes Windows
-                                        // Terminal scroll the buffer - every
-                                        // later patch would then land in the
-                                        // wrong place. Patches are kept
-                                        // band-aligned (dirty tiles are 6px
-                                        // tall for sixel) and clamped to the
-                                        // largest whole band that fits, so
-                                        // they can never spill. Padding rows
-                                        // are transparent (P2=1) and later
-                                        // bands repaint any overlap.
-                                        let band_max = if format == "sixel" {
-                                            (current_size.height / 6) * 6
-                                        } else {
-                                            u32::MAX
-                                        };
-                                        let mut rects: Vec<DirtyRect> = rects
-                                            .into_iter()
-                                            .filter_map(|r| {
-                                                if r.y >= band_max {
-                                                    return None;
-                                                }
-                                                Some(DirtyRect {
-                                                    h: r.h.min(band_max - r.y),
-                                                    ..r
-                                                })
-                                            })
-                                            .collect();
                                         rects.sort_by_key(|r| (r.y, r.x));
                                         for rect in rects {
                                             let Some(crop) =
