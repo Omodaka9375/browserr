@@ -14,6 +14,15 @@ assert tmux_wrap(b"\x1b[1;1H\x1bP7;1;0qDATA\x1b\\") == (
     b"\x1bPtmux;\x1b\x1b[1;1H\x1b\x1bP7;1;0qDATA\x1b\x1b\\\x1b\\")
 print("tmux passthrough escaping OK")
 
+# --cell accepts both W:H and WxH, and rejects nonsense.
+from browserr_term import parse_cell_arg
+assert parse_cell_arg("16:32") == (16, 32)
+assert parse_cell_arg("16x32") == (16, 32)
+assert parse_cell_arg("bogus") is None
+assert parse_cell_arg("0:20") is None
+assert parse_cell_arg("200:20") is None
+print("cell arg parsing OK")
+
 # Ctrl combos: consoles deliver either the control code or the printable
 # char plus a CTRL flag; both must become the control byte. VK-only keys
 # (no UnicodeChar) must map to their CSI forms.

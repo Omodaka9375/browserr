@@ -33,6 +33,7 @@ import time
 import struct
 import io
 import base64
+import subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 for p in (os.path.join(HERE), os.path.join(HERE, "..", "tools"),
@@ -807,25 +808,66 @@ def query_cell_size():
     return parse_cell_size_reply(r)
 
 
+def tmux_ensure_passthrough():
+    """Make sure this tmux server lets image packets reach the terminal.
+
+    A fresh tmux server defaults allow-passthrough to off, and every packet
+    we send is then silently dropped - the screen stays black. The option is
+    per-server and harmless to enable from inside a pane.
+    """
+    try:
+        r = subprocess.run(
+            ["tmux", "show-options", "-v", "-g", "allow-passthrough"],
+            capture_output=True, text=True, timeout=2)
+        if r.stdout.strip() == "on":
+            return True
+        subprocess.run(
+            ["tmux", "set", "-g", "allow-passthrough", "on"],
+            capture_output=True, timeout=2)
+        print("Browserr Term: enabled tmux allow-passthrough",
+              file=sys.stderr)
+        return True
+    except Exception:
+        return False
+
+
+def parse_cell_arg(value):
+    """--cell W:H -> (W, H) or None."""
+    try:
+        w, h = value.lower().replace("x", ":").split(":")
+        w, h = int(w), int(h)
+        if w > 0 and h > 0 and w <= 64 and h <= 128:
+            return w, h
+    except (ValueError, AttributeError):
+        pass
+    return None
+
+
 def main(argv):
     url = "https://example.com"
     renderer = "auto"
     fps = 15
     scale = 1.0
     gpu = False
+    cell_arg = None
     self_test = False
     profile = None
     args = argv[1:]
     i = 0
     while i < len(args):
         a = args[i]
-        if a == "--self-test":
+        if a == "--cell" and i + 1 < len(args):
+            cell_arg = parse_cell_arg(args[i + 1])
+            i += 1
+        elif a == "--self-test":
             self_test = True
             if i + 1 < len(args) and not args[i + 1].startswith("-"):
                 url = args[i + 1]
                 i += 1
         elif a == "--renderer" and i + 1 < len(args):
             renderer = args[i + 1]
+            i += 1
+        elif a == "--cell" and i + 1 < len(args):
             i += 1
         elif a == "--fps" and i + 1 < len(args):
             fps = max(1, min(60, int(args[i + 1])))
@@ -855,18 +897,19 @@ def main(argv):
     # renderers do not require numpy/Pillow in the Python process.
     mode = "half"
     in_tmux = bool(os.environ.get("TMUX"))
-    cell = (10, 20)
-    if in_tmux:
+    cell = cell_arg or (10, 20)
+    if in_tmux and not self_test:
         # tmux does not forward CSI 16 t to the outer terminal (verified
-        # against a real pty): waiting for it produces the wrong 10x20
-        # geometry. Windows Terminal's Cascadia Mono cells are 10x20 at
-        # 100% zoom; BROWSERR_TERM_CELL=W:H overrides this when zoomed.
-        cell = (10, 20)
+        # against a real pty), so --cell or BROWSERR_TERM_CELL is the only
+        # reliable geometry source inside tmux. Without passthrough the
+        # packets are dropped entirely and the screen stays black.
+        tmux_ensure_passthrough()
         try:
             override = os.environ.get("BROWSERR_TERM_CELL")
-            if override:
-                w, h = override.lower().split(":")
-                cell = (int(w), int(h))
+            if override and not cell_arg:
+                parsed = parse_cell_arg(override)
+                if parsed:
+                    cell = parsed
         except (ValueError, AttributeError):
             pass
     if not self_test:
