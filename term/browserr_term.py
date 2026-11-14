@@ -57,6 +57,31 @@ RESET = "\x1b[0m"
 
 # ---------------------------------------------------------------- input
 
+# Windows virtual keys that arrive with no UnicodeChar still need to
+# reach parse_keys; translate them to the CSI forms it understands.
+VK_CSI = {
+    0x21: b"\x1b[5~", 0x22: b"\x1b[6~", 0x23: b"\x1b[H", 0x24: b"\x1b[F",
+    0x25: b"\x1b[D", 0x26: b"\x1b[A", 0x27: b"\x1b[C", 0x28: b"\x1b[B",
+    0x2D: b"\x1b[2~", 0x2E: b"\x1b[3~",
+}
+
+
+def win_key_bytes(vk, char_code, state):
+    """Translate a console KEY_EVENT_RECORD to parse_keys byte streams.
+
+    Ctrl+letter combos frequently arrive as the printable character with
+    a control-key flag instead of the control code; both consoles and
+    Windows Terminal do this depending on mode. Returns None to drop.
+    """
+    if char_code == 0:
+        return VK_CSI.get(vk)
+    # Ctrl without Alt (Ctrl+Alt is AltGr, a layout modifier, not control).
+    ctrl = (state & 0x000C) and not (state & 0x0003)
+    if ctrl and char_code < 0x80:
+        return bytes([char_code & 0x1F])
+    return chr(char_code).encode("utf-8")
+
+
 class RawInput:
     """Raw console/terminal bytes, with real mouse support on Windows.
 
@@ -170,8 +195,11 @@ class RawInput:
                         result += f"\x1b[<3;{x};{y}m".encode()
                 elif rec.EventType == 1 and rec.Event.KeyEvent.bKeyDown:
                     e = rec.Event.KeyEvent
-                    if e.uChar.UnicodeChar:
-                        result += e.uChar.UnicodeChar.encode("utf-8")
+                    data = win_key_bytes(e.wVirtualKeyCode,
+                                         ord(e.uChar.UnicodeChar),
+                                         e.dwControlKeyState)
+                    if data:
+                        result += data
         return bytes(result)
 
 
@@ -718,6 +746,7 @@ def main(argv):
     renderer = "auto"
     fps = 15
     scale = 1.0
+    gpu = False
     self_test = False
     profile = None
     args = argv[1:]
@@ -741,6 +770,8 @@ def main(argv):
         elif a == "--scale" and i + 1 < len(args):
             scale = max(0.25, min(1.0, float(args[i + 1])))
             i += 1
+        elif a == "--gpu":
+            gpu = True
         elif not a.startswith("-"):
             url = a
         i += 1
@@ -808,10 +839,13 @@ def main(argv):
         pass
 
     log = os.path.join(os.environ.get("TEMP", "."), "browserr-term-engine.log")
+    engine_args = ["--gpu"] if gpu else None
     if profile:
-        d = Driver(profile_dir=profile, log=log, width=eng_w, height=eng_h)
+        d = Driver(profile_dir=profile, log=log, width=eng_w, height=eng_h,
+                   engine_args=engine_args)
     else:
-        d = Driver(ephemeral=True, log=log, width=eng_w, height=eng_h)
+        d = Driver(ephemeral=True, log=log, width=eng_w, height=eng_h,
+                   engine_args=engine_args)
 
     try:
         if self_test:

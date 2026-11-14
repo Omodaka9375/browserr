@@ -6,7 +6,20 @@ for p in (HERE, os.path.join(HERE, "..", "tools")):
         sys.path.insert(0, p)
 from driver import Driver, save_png
 from browserr_term import (Term, HalfblockDirty, to_rgb, parse_keys,
-                           parse_cell_size_reply)
+                           parse_cell_size_reply, win_key_bytes)
+
+# Ctrl combos: consoles deliver either the control code or the printable
+# char plus a CTRL flag; both must become the control byte. VK-only keys
+# (no UnicodeChar) must map to their CSI forms.
+assert win_key_bytes(0x54, 0x14, 0) == b"\x14"          # ctrl+T as control code
+assert win_key_bytes(0x54, 0x74, 0x0008) == b"\x14"     # ctrl+T as 't' + LCTRL
+assert win_key_bytes(0x54, 0x54, 0x0008) == b"\x14"     # ctrl+shift+T
+assert win_key_bytes(0x54, 0x74, 0x0002) == b"t"        # alt only: no ctrl
+assert win_key_bytes(0x54, 0x74, 0x000A) == b"t"        # ctrl+alt = AltGr
+assert win_key_bytes(0x26, 0, 0) == b"\x1b[A"           # Up arrow (VK 0x26)
+assert win_key_bytes(0x22, 0, 0) == b"\x1b[6~"          # PageDown
+assert win_key_bytes(0x54, 0, 0) is None                # unknown VK, no char
+print("win key translation OK")
 
 # Terminal cell-size replies are height,width, not width,height.
 assert parse_cell_size_reply(b"\x1b[6;20;10t") == (10, 20)

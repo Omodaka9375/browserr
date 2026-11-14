@@ -41,7 +41,8 @@ Options:
 
 Keys: `ctrl+l` URL, `ctrl+t` tab, `ctrl+]`/`ctrl+[` next/previous tab,
 `ctrl+r` reload, `ctrl+q` quit. Arrows, PageUp/PageDown, mouse clicks and
-wheel go to the page.
+wheel go to the page. Pass `--gpu` to render with hardware GL (ANGLE/D3D11)
+when software raster is the bottleneck, and `--fps 60` for the frame cap.
 
 ## Native frame pipeline
 
