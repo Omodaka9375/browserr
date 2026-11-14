@@ -5,7 +5,24 @@ for p in (HERE, os.path.join(HERE, "..", "tools")):
     if p not in sys.path:
         sys.path.insert(0, p)
 from driver import Driver, save_png
-from browserr_term import Term, HalfblockDirty, to_rgb, parse_keys
+from browserr_term import (Term, HalfblockDirty, to_rgb, parse_keys,
+                           parse_cell_size_reply)
+
+# Terminal cell-size replies are height,width, not width,height.
+assert parse_cell_size_reply(b"\x1b[6;20;10t") == (10, 20)
+assert parse_cell_size_reply(b"\x1b[6;10;20t") == (20, 10)
+assert parse_cell_size_reply(b"\x1b[6;20t") is None
+assert parse_cell_size_reply(b"") is None
+print("cell geometry reply parsing OK")
+
+if os.name == "nt":
+    import ctypes
+    inp = __import__("browserr_term").RawInput()
+    with inp:
+        # _read_windows used to die constructing its structures before it
+        # could read any events; a zero-time read now exercises that path.
+        inp.read(timeout=0)
+    print("Windows console input structure/read OK")
 
 d = Driver(ephemeral=True)
 t = Term(d, 100, 30)

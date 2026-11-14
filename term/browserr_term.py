@@ -112,19 +112,31 @@ class RawInput:
         from ctypes import wintypes
         k = ctypes.windll.kernel32
         u = ctypes.wintypes
+
+        class Coord(ctypes.Structure):
+            _fields_ = [("X", u.SHORT), ("Y", u.SHORT)]
+
         class CharUnion(ctypes.Union):
             _fields_ = [("UnicodeChar", u.WCHAR), ("AsciiChar", u.CHAR)]
+
         class KeyEvent(ctypes.Structure):
             _fields_ = [("bKeyDown", u.BOOL), ("wRepeatCount", u.WORD),
                         ("wVirtualKeyCode", u.WORD), ("wVirtualScanCode", u.WORD),
                         ("uChar", CharUnion), ("dwControlKeyState", u.DWORD)]
+
         class MouseEvent(ctypes.Structure):
-            _fields_ = [("dwMousePosition", u.COORD), ("dwButtonState", u.DWORD),
+            _fields_ = [("dwMousePosition", Coord), ("dwButtonState", u.DWORD),
                         ("dwControlKeyState", u.DWORD), ("dwEventFlags", u.DWORD)]
+
         class EventUnion(ctypes.Union):
             _fields_ = [("KeyEvent", KeyEvent), ("MouseEvent", MouseEvent)]
+
         class InputRecord(ctypes.Structure):
             _fields_ = [("EventType", u.WORD), ("Event", EventUnion)]
+
+        assert ctypes.sizeof(Coord) == 4
+        assert ctypes.sizeof(MouseEvent) == 16
+        assert ctypes.sizeof(InputRecord) == 20
         end = time.time() + timeout
         result = bytearray()
         while time.time() < end:
@@ -664,25 +676,29 @@ def query_sixel_support():
     return any(p.lstrip(b"?") == b"4" for p in params)
 
 
+def parse_cell_size_reply(reply):
+    """Parse the CSI 16 t reply: CSI 6 ; height ; width t."""
+    if not reply or not reply.startswith(b"\x1b[6;") or not reply.endswith(b"t"):
+        return None
+    nums = reply[4:-1].split(b";")
+    if len(nums) != 2:
+        return None
+    try:
+        h, w = int(nums[0]), int(nums[1])
+        if w <= 0 or h <= 0 or w > 64 or h > 128:
+            return None
+        return w, h
+    except ValueError:
+        return None
+
+
 def query_cell_size():
     """CSI 16 t: cell size in device pixels -> (cell_w, cell_h) or None."""
     try:
         r = _query_ansi("\x1b[16t", b"t")
     except Exception:
         return None
-    if not r or not r.startswith(b"\x1b[6;") or not r.endswith(b"t"):
-        return None
-    nums = r[4:-1].split(b";")
-    if len(nums) != 2:
-        return None
-    try:
-        # CSI 16 t replies "CSI 6 ; <cell-width> ; <cell-height> t"
-        w, h = int(nums[0]), int(nums[1])
-        if w <= 0 or h <= 0 or w > 64 or h > 128:
-            return None  # nonsense cell size: fall back to defaults
-        return w, h
-    except ValueError:
-        return None
+    return parse_cell_size_reply(r)
 
 
 def main(argv):
