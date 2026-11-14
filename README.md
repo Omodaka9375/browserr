@@ -1,4 +1,4 @@
-<h1><img src="docs/icon.svg" alt="Browserr" height="56" style="vertical-align:-14px"> Browserr</h1>
+<h1><img src="docs/icon.svg" alt="Browserr" height="27" style="vertical-align:-16px"> Browserr</h1>
 
 [![CI](https://github.com/Omodaka9375/browserr/actions/workflows/ci.yml/badge.svg)](https://github.com/Omodaka9375/browserr/actions/workflows/ci.yml)
 
