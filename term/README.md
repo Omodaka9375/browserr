@@ -44,6 +44,12 @@ Keys: `ctrl+l` URL, `ctrl+t` tab, `ctrl+]`/`ctrl+[` next/previous tab,
 wheel go to the page. Pass `--gpu` to render with hardware GL (ANGLE/D3D11)
 when software raster is the bottleneck, and `--fps 60` for the frame cap.
 
+For tmux, enable `set -g allow-passthrough on` in `~/.tmux.conf`. Image
+packets are wrapped in tmux's DCS passthrough envelope with inner ESC bytes
+doubled. tmux does not forward pixel-size queries, so use
+`BROWSERR_TERM_CELL=16:32` when the terminal is zoomed (default 10:20).
+Use `--renderer half` only if the outer terminal has no Sixel support.
+
 ## Native frame pipeline
 
 `screenshot` remains the existing full-frame BGRA API. Terminal rendering

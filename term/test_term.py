@@ -6,7 +6,13 @@ for p in (HERE, os.path.join(HERE, "..", "tools")):
         sys.path.insert(0, p)
 from driver import Driver, save_png
 from browserr_term import (Term, HalfblockDirty, to_rgb, parse_keys,
-                           parse_cell_size_reply, win_key_bytes)
+                           parse_cell_size_reply, win_key_bytes, tmux_wrap)
+
+# tmux passthrough doubles inner ESCs; otherwise an inner Sixel DCS closes
+# the outer envelope and the terminal drops or prints the image.
+assert tmux_wrap(b"\x1b[1;1H\x1bP7;1;0qDATA\x1b\\") == (
+    b"\x1bPtmux;\x1b\x1b[1;1H\x1b\x1bP7;1;0qDATA\x1b\x1b\\\x1b\\")
+print("tmux passthrough escaping OK")
 
 # Ctrl combos: consoles deliver either the control code or the printable
 # char plus a CTRL flag; both must become the control byte. VK-only keys

@@ -329,6 +329,9 @@ class HalfblockDirty:
         self.cols, self.view_rows = cols, view_rows
         self.prev = None
 
+    def _region(self):
+        return f"{ESC}[1;{self.view_rows}r{ESC}[1;1H"
+
     def sample(self, img):
         th = self.view_rows * 2
         ys = (np.arange(th) * img.shape[0] // th).clip(0, img.shape[0] - 1)
@@ -343,10 +346,18 @@ class HalfblockDirty:
         top, bot, cur = self.sample(img)
         if self.prev is None or self.prev.shape != cur.shape:
             mask = np.ones(cur.shape[:2], dtype=bool)
+            first = True
         else:
             mask = np.any(cur != self.prev, axis=2)
+            first = False
         self.prev = cur
         out = self.out
+        if first:
+            # Clear only the reserved graphics viewport. Half-block text
+            # must never wrap into the status rows or scroll the terminal.
+            out.write(self._region())
+            for y in range(self.view_rows):
+                out.write(f"{ESC}[{y + 1};1H{ESC}[{self.cols}X")
         for y in range(self.view_rows):
             xs = np.nonzero(mask[y])[0]
             if xs.size == 0:
@@ -413,6 +424,16 @@ class NativeKitty:
         return len(patches)
 
 
+def tmux_wrap(data):
+    """Wrap raw terminal bytes in tmux's DCS passthrough envelope.
+
+    Every ESC inside the payload must be doubled; otherwise the inner
+    Sixel DCS terminates the passthrough and the image is dropped or
+    printed as garbage. Requires `set -g allow-passthrough on`.
+    """
+    return b"\x1bPtmux;" + data.replace(b"\x1b", b"\x1b\x1b") + b"\x1b\\"
+
+
 class NativeSixel:
     """Render engine-produced Sixel patches directly at native cell coords.
 
@@ -430,8 +451,6 @@ class NativeSixel:
         self.cell = cell
         self.last_ms = 0.0
         self.wrap = bool(os.environ.get("TMUX"))
-        self._wrap_open = f"{ESC}Ptmux;".encode()
-        self._wrap_close = b"\x1b\\"
 
     def render(self, patches):
         t0 = time.time()
@@ -442,7 +461,7 @@ class NativeSixel:
             cy = y // self.cell[1] + 1
             data = f"\x1b[{cy};{cx}H".encode() + payload
             if self.wrap:
-                data = self._wrap_open + data + self._wrap_close
+                data = tmux_wrap(data)
             self.out.write(data)
         self.out.flush()
         self.last_ms = (time.time() - t0) * 1000
@@ -607,12 +626,18 @@ class Term:
                 s += f" write:{ms:.1f}ms"
         url_bar = self.rows - 1
         help_bar = self.rows
+        # Pad to one column short of the terminal width: filling the last
+        # cell of the last row can advance the terminal even when wrapping
+        # is disabled. Short status text keeps the entire bar on one row.
+        width = max(20, self.cols - 1)
+        status = s[:width].ljust(width)
+        help_text = "ctrl+l url  ctrl+t tab  ctrl+]/[ switch  ctrl+q quit"
+        help_text = help_text[:width].ljust(width)
         text = (
             f"{ESC}[{url_bar};1H{ESC}[48;2;170;170;170m"
-            f"{ESC}[38;2;0;0;0m{s[:self.cols].ljust(self.cols)}{RESET}"
+            f"{ESC}[38;2;0;0;0m{status}{RESET}"
             f"{ESC}[{help_bar};1H{ESC}[48;2;30;30;30m"
-            f"{ESC}[38;2;235;235;235m"
-            f"{'ctrl+l url  ctrl+t tab  ctrl+]/[ switch  ctrl+q quit'[:self.cols].ljust(self.cols)}{RESET}")
+            f"{ESC}[38;2;235;235;235m{help_text}{RESET}")
         if hasattr(self.out, "buffer"):
             self.out.buffer.write(text.encode())
             self.out.buffer.flush()
@@ -729,7 +754,7 @@ def _query_ansi(payload, terminator, timeout=0.4):
         # the wrong cell. Wrap the query in tmux's passthrough envelope
         # (requires allow-passthrough on; the reply still reaches stdin).
         if os.environ.get("TMUX"):
-            payload = f"{ESC}Ptmux;{payload}{ESC}\\"
+            payload = tmux_wrap(payload.encode()).decode("latin1")
         sys.stdout.write(payload)
         sys.stdout.flush()
         buf = b""
@@ -829,7 +854,21 @@ def main(argv):
     # renderer pick (queries need a tty; self-test needs none). Native
     # renderers do not require numpy/Pillow in the Python process.
     mode = "half"
+    in_tmux = bool(os.environ.get("TMUX"))
     cell = (10, 20)
+    if in_tmux:
+        # tmux does not forward CSI 16 t to the outer terminal (verified
+        # against a real pty): waiting for it produces the wrong 10x20
+        # geometry. Windows Terminal's Cascadia Mono cells are 10x20 at
+        # 100% zoom; BROWSERR_TERM_CELL=W:H overrides this when zoomed.
+        cell = (10, 20)
+        try:
+            override = os.environ.get("BROWSERR_TERM_CELL")
+            if override:
+                w, h = override.lower().split(":")
+                cell = (int(w), int(h))
+        except (ValueError, AttributeError):
+            pass
     if not self_test:
         try:
             kitty = False
@@ -837,8 +876,11 @@ def main(argv):
                 kitty = query_kitty_support()
             sixel = False
             if renderer in ("auto", "sixel"):
-                sixel = query_sixel_support()
-                if sixel:
+                # tmux answers DA1 itself; it cannot tell us whether the
+                # outer terminal supports Sixel. Use Sixel with passthrough
+                # and let --renderer half force the fallback if needed.
+                sixel = True if in_tmux else query_sixel_support()
+                if sixel and not in_tmux:
                     cs = query_cell_size()
                     if cs:
                         cell = cs
@@ -910,9 +952,10 @@ def main(argv):
               f"max {fps}fps", file=sys.stderr)
         time.sleep(2)
         setup_terminal()
-        if mode in ("sixel", "kitty"):
-            sys.stdout.write(f"{ESC}[1;{t.view_rows}r{ESC}[1;1H")
-            sys.stdout.flush()
+        # Reserve graphics rows on BOTH render paths. The half-block path
+        # writes text runs and can otherwise scroll the entire terminal.
+        sys.stdout.write(f"{ESC}[1;{t.view_rows}r{ESC}[1;1H")
+        sys.stdout.flush()
         frame_min = 1.0 / fps
         last_render = 0.0
         last_meta = 0.0
