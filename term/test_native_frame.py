@@ -71,7 +71,10 @@ wait_static("png")
 
 sixel = timed("native Sixel full frame", lambda: d.native_frame(format="sixel", force=True))
 assert len(sixel) == 1 and sixel[0][2] == 2
-assert sixel[0][1] == (0, 0, 1200, 760), sixel[0][1]
+# Band clamping: the full frame is quantized to whole 6px sixel bands so it
+# can never overflow the scroll region and smear the screen (1200x760 -> 756).
+assert sixel[0][1] == (0, 0, 1200, 756), sixel[0][1]
+assert sixel[0][1][3] % 6 == 0
 assert len(sixel[0][4]) > 1000, "full sixel frame collapsed to a single patch"
 assert sixel[0][4].startswith(b"\x1bP7;1;0q") and sixel[0][4].endswith(b"\x1b\\")
 print("Sixel bytes:", sum(len(p[4]) for p in sixel))

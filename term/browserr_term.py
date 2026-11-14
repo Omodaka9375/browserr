@@ -789,6 +789,10 @@ def main(argv):
     if mode in ("sixel", "kitty"):
         eng_w = max(320, min(2400, int(cols * cell[0] * scale)))
         eng_h = max(200, min(1600, int(max(1, rows - 2) * cell[1] * scale)))
+        if mode == "sixel":
+            # Sixel renders in whole 6-pixel bands; an unquantized viewport
+            # makes the last band overflow and scroll the terminal.
+            eng_h -= eng_h % 6
     else:
         eng_w, eng_h = 1200, 760
     # geometry log: the numbers that decide readability; append for diagnosis

@@ -1823,7 +1823,14 @@ mod frame_tests {
 
     #[test]
     fn native_encoders_are_valid() {
-        let image = vec![128u8; 20 * 12 * 4];
+        // Deterministic color: plain gray plus one distinct saturated color,
+        // so the palette assertions do not depend on quantization rounding.
+        let mut image = vec![128u8; 20 * 12 * 4];
+        for px in image.as_chunks_mut::<4>().0 {
+            px[0] = 255;
+            px[1] = 0;
+            px[2] = 0;
+        }
         let png = encode_png(&image, 20, 12);
         assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
         assert_eq!(&png[png.len() - 8..png.len() - 4], b"IEND");
@@ -1831,10 +1838,11 @@ mod frame_tests {
         assert!(sixel.starts_with(b"\x1bP7;1;0q\"1;1;20;12"));
         assert!(sixel.ends_with(b"\x1b\\"));
         assert!(sixel.windows(3).any(|w| w == b"!20"));
-        // Windows Terminal uses P1=7 for square pixels and RGB percentages.
+        // Windows Terminal requires square-pixel P1=7 and RGB percentages.
         let text = String::from_utf8(sixel).expect("sixel is ASCII");
         assert!(!text.contains("65535"));
-        assert!(text.contains("#231;2;50;50;50") || text.contains(";2;50;50;50"));
+        // Pure red quantizes to cube register 180 -> #180;2;100;0;0.
+        assert!(text.contains("#180;2;100;0;0"));
     }
 }
 
@@ -2788,39 +2796,36 @@ fn main() {
                                         if !rects.is_empty() {
                                             frame_id += 1;
                                         }
-                                        let mut rects = rects;
-                                        if format == "sixel" && !full {
-                                            // Complete a cell's vertical
-                                            // coverage so Sixel padding can
-                                            // never erase unrelated pixels.
-                                            rects.sort_by_key(|r| (r.y / tile_h, r.x, r.y));
-                                            let mut rows: HashMap<u32, DirtyRect> = HashMap::new();
-                                            for r in rects {
-                                                let row = r.y / tile_h;
-                                                let y = row * tile_h;
-                                                let bottom = tile_h.min(current_size.height - y);
-                                                rows.entry(row)
-                                                    .and_modify(|old| {
-                                                        // Same cell row: crop
-                                                        // every dirty sub-row
-                                                        // together so no patch
-                                                        // erases a neighbor.
-                                                        let left = old.x.min(r.x);
-                                                        let right = (old.x + old.w).max(r.x + r.w);
-                                                        old.x = left;
-                                                        old.w = right - left;
-                                                        old.h = bottom;
-                                                    })
-                                                    .or_insert(DirtyRect {
-                                                        x: r.x,
-                                                        y,
-                                                        w: r.w,
-                                                        h: bottom,
-                                                    });
-                                            }
-                                            rects = rows.into_values().collect();
-                                            rects.sort_by_key(|r| (r.y, r.x));
-                                        }
+                                        // Sixel images render in whole
+                                        // 6-pixel bands and any overflow past
+                                        // the scroll region makes Windows
+                                        // Terminal scroll the buffer - every
+                                        // later patch would then land in the
+                                        // wrong place. Patches are kept
+                                        // band-aligned (dirty tiles are 6px
+                                        // tall for sixel) and clamped to the
+                                        // largest whole band that fits, so
+                                        // they can never spill. Padding rows
+                                        // are transparent (P2=1) and later
+                                        // bands repaint any overlap.
+                                        let band_max = if format == "sixel" {
+                                            (current_size.height / 6) * 6
+                                        } else {
+                                            u32::MAX
+                                        };
+                                        let mut rects: Vec<DirtyRect> = rects
+                                            .into_iter()
+                                            .filter_map(|r| {
+                                                if r.y >= band_max {
+                                                    return None;
+                                                }
+                                                Some(DirtyRect {
+                                                    h: r.h.min(band_max - r.y),
+                                                    ..r
+                                                })
+                                            })
+                                            .collect();
+                                        rects.sort_by_key(|r| (r.y, r.x));
                                         for rect in rects {
                                             let Some(crop) =
                                                 crop_rgba(&rgba, current_size.width, rect)
