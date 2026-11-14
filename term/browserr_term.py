@@ -43,6 +43,28 @@ for p in (os.path.join(HERE), os.path.join(HERE, "..", "tools"),
 
 from driver import Driver  # noqa: E402
 
+
+def find_engine():
+    """Locate the engine binary: env override, flat unpack, source tree.
+
+    In a source tree the NEWEST of release/debug wins - a dev build is
+    usually newer than the last release build, and an old release binary
+    silently missing new protocol commands is the worst failure mode.
+    """
+    env = os.environ.get("BROWSERR_ENGINE")
+    if env and os.path.isfile(env):
+        return env
+    exe = "engine.exe" if os.name == "nt" else "engine"
+    flat = os.path.join(HERE, exe)
+    if os.path.isfile(flat):
+        return flat
+    candidates = [os.path.join(HERE, "..", "engine", "target", p, exe)
+                  for p in ("release", "debug")]
+    candidates = [c for c in candidates if os.path.isfile(c)]
+    if not candidates:
+        return None
+    return max(candidates, key=os.path.getmtime)
+
 try:
     import numpy as np
 except ImportError:
@@ -972,13 +994,24 @@ def main(argv):
         pass
 
     log = os.path.join(os.environ.get("TEMP", "."), "browserr-term-engine.log")
-    engine_args = ["--gpu"] if gpu else None
+    engine_args = (["--gpu"] if gpu else [])
+    # Dedicated port: MCP servers spawn engines on the default 7411; when
+    # both run (Kai + a terminal session) the two cross wires on the shared
+    # listener. The engine accepts --port= since the sessions work.
+    engine_args.append("--port=7477")
+    engine_path = find_engine()
+    if not engine_path:
+        print("browserr-term: engine binary not found; set BROWSERR_ENGINE",
+              file=sys.stderr)
+        return 1
     if profile:
-        d = Driver(profile_dir=profile, log=log, width=eng_w, height=eng_h,
+        d = Driver(engine_path=engine_path, profile_dir=profile, log=log,
+                   port=7477, width=eng_w, height=eng_h,
                    engine_args=engine_args)
     else:
-        d = Driver(ephemeral=True, log=log, width=eng_w, height=eng_h,
-                   engine_args=engine_args)
+        d = Driver(engine_path=engine_path, ephemeral=True, log=log,
+                    port=7477, width=eng_w, height=eng_h,
+                    engine_args=engine_args)
 
     try:
         if self_test:

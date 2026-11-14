@@ -1,17 +1,9 @@
 #!/bin/sh
 # Browserr Term launcher (POSIX): terminal browser on the packaged engine.
-# Works from a release unpack (engine next to driver.py) and a source tree.
+# Works from a release unpack (engine next to browserr_term.py) and from a
+# source tree (engine discovery is done in browserr_term.py).
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 if [ -f "$here/engine" ]; then
     BROWSERR_ENGINE="$here/engine" exec python3 "$here/browserr_term.py" "$@"
 fi
-if [ -f "$here/../../engine/target/release/engine" ]; then
-    BROWSERR_ENGINE="$here/../../engine/target/release/engine" \
-        exec python3 "$here/browserr_term.py" "$@"
-fi
-if [ -f "$here/../../engine/target/debug/engine" ]; then
-    BROWSERR_ENGINE="$here/../../engine/target/debug/engine" \
-        exec python3 "$here/browserr_term.py" "$@"
-fi
-echo "browserr-term: engine binary not found (expected next to browserr_term.py)" >&2
-exit 1
+exec python3 "$here/browserr_term.py" "$@"
