@@ -31,6 +31,8 @@ $payload = @(
     (Join-Path $root "tools\driver.py"),
     (Join-Path $root "tools\browserr_mcp.py"),
     (Join-Path $root "tools\mcp_wrap.cmd"),
+    (Join-Path $root "term\browserr_term.py"),
+    (Join-Path $root "term\browserr-term.cmd"),
     (Join-Path $root "README.md"),
     (Join-Path $root "LICENSE")
 )

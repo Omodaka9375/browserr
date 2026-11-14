@@ -34,6 +34,8 @@ tar -czf "$out" \
     dist/engine \
     tools/driver.py \
     tools/browserr_mcp.py \
+    term/browserr_term.py \
+    term/browserr-term \
     README.md \
     LICENSE
 echo "packaged: $out ($(du -h "$out" | cut -f1))"

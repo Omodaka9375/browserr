@@ -145,11 +145,35 @@ libGLESv2.dll     must stay next to engine.exe
 driver.py         Python SDK (stdlib only)
 browserr_mcp.py   MCP server (stdlib only)
 mcp_wrap.cmd      Windows MCP launcher (cmd wrapper)
+browserr-term     terminal browser launcher (shell)
+browserr-term.cmd terminal browser launcher (Windows)
+browserr_term.py  terminal browser UI (stdlib; numpy improves the fallback)
 README.md, LICENSE
 ```
 
 Requirements: Python 3.10+ on PATH. `driver.py` finds the engine binary
 next to itself; override with `BROWSERR_ENGINE=/path/to/engine`.
+
+### Browse in your terminal
+
+Browserr Term renders real pages inside a terminal pane at native
+resolution, using Sixel or the Kitty graphics protocol with dirty-rectangle
+patches computed in the engine. It needs no installer step:
+
+```sh
+./browserr-term https://browserr.dev/        # macOS / Linux
+browserr-term.cmd https://browserr.dev/      # Windows
+```
+
+Use a terminal with image support for native resolution (Windows Terminal
+1.22+, iTerm2, wezterm, kitty, ghostty, mlterm; tmux works with
+`allow-passthrough on`). In terminals without image protocols the same
+command falls back to a low-resolution cell renderer.
+
+Keys: `ctrl+l` URL bar, `ctrl+t` new tab, `ctrl+]/[` switch tabs,
+`ctrl+r` reload, `ctrl+q` quit. Mouse clicks and wheel go to the page.
+Inside tmux pass `--cell W:H` to match your font size (tmux cannot relay
+the terminal's pixel-cell query). Details: `term/README.md` in the repo.
 
 ### Connect an MCP client (Kai, Claude Desktop, ...)
 

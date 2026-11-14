@@ -486,6 +486,7 @@
             <tr><td>point</td><td><b>Shared references.</b> Stable refs and numbered screenshot boxes: the agent says "click 7" and the human knows which one that is.</td></tr>
             <tr><td>proxy</td><td><b>Upstream proxy routing.</b> browser_start(proxy=...) routes all http/https traffic through a CONNECT tunnel (basic auth in the URL, per-engine rotation); document_status reports the main document's real HTTP status so a block serving a fake 404 is distinguishable from a dead page.</td></tr>
             <tr><td>handoff</td><td><b>Humans take over in a real native window.</b> Start MCP with headed:true; direct mouse and keyboard input keep working while agent mutations are paused. CAPTCHA support still depends on Servo compatibility.</td></tr>
+            <tr><td>term</td><td><b>Browse in your terminal.</b> browserr-term renders real pages inside a pane at native resolution (Sixel / Kitty graphics, engine-side dirty-rectangle patches); every terminal gets a working fallback. Works inside tmux. Same binary, same evidence, no extra install.</td></tr>
             <tr><td>trust</td><td><b>Fail-closed by design.</b> Persistent profiles, evidence shots, an append-only action log, a credential store and a confirm gate on payment submits.</td></tr>
           </tbody>
         </table>
@@ -558,6 +559,7 @@
             <tr><td>footprint</td><td><b>one ~120 MB binary</b></td><td>~16× less than Chromium</td><td>~30 MB</td><td>~200 MB+</td></tr>
             <tr><td>web compat</td><td><b>Servo 0.8 (text, docs, forms, SPAs)</b></td><td>growing</td><td>growing</td><td>full</td></tr>
             <tr><td>human handoff</td><td><b>native window, pause, wait_for_user</b></td><td>headless only</td><td>headless only</td><td>via wrappers</td></tr>
+            <tr><td>terminal browser</td><td><b>yes — native-res in-pane, tmux ok</b></td><td>no</td><td>no</td><td>via third-party wrappers</td></tr>
             <tr><td>trust layer</td><td><b>evidence, action log, confirm gate</b></td><td>no</td><td>no</td><td>no</td></tr>
             <tr><td>network policy</td><td><b>fail-closed, held to a decision</b></td><td>CDP opt-in</td><td>CDP opt-in</td><td>CDP opt-in</td></tr>
           </tbody>
