@@ -54,6 +54,7 @@ import os
 FRM1 = 0x46524D31
 EVT1 = 0x45565431
 SHT1 = 0x53485431
+FRM2 = 0x46524D32
 
 
 class EngineDeadError(ConnectionError):
@@ -224,7 +225,7 @@ class Driver:
         self.ephemeral = ephemeral
 
         engine_path = engine_path or os.environ.get("BROWSERR_ENGINE", ENGINE_DEBUG)
-        args = [engine_path]
+        args = [engine_path, f"--width={width}", f"--height={height}"]
         if engine_args:
             # Extra engine CLI flags (e.g. --gpu) BEFORE the standard
             # profile flags; kept verbatim, no validation.
@@ -329,6 +330,7 @@ class Driver:
         self.port = port
         self.events = []            # all EVT1 events, newest last
         self.shots = []             # (w, h, bgra) screenshots, newest last
+        self.native_frames = []     # FRM2 patches: (id, rect, format, flags, data)
         self._next_id = 1
         self._event_seq = 0         # driver-local ordering for event cursors
         self._answered_requests = set()
@@ -432,7 +434,19 @@ class Driver:
             a = struct.unpack("<I", hdr[12:16])[0]
             b = struct.unpack("<I", hdr[16:20])[0]
             try:
-                if magic == FRM1:            # live frame: skip
+                if magic == FRM2:
+                    # Header is 44 bytes: first 20 contain magic, request id,
+                    # payload length and x. Remaining 24: y/w/h, format,
+                    # flags, and an eight-byte frame id.
+                    x = struct.unpack("<I", hdr[16:20])[0]
+                    y, w, h, fmt, flags = struct.unpack("<5I", self._read_exact(20))
+                    self._read_exact(8)  # frame id (diagnostic only)
+                    payload = self._read_exact(a)
+                    with self._cond:
+                        self.native_frames.append((hdr[4:12], (x, y, w, h),
+                                                   fmt, flags, payload))
+                        self._cond.notify_all()
+                elif magic == FRM1:            # live frame: skip
                     self._read_exact(a * b * 4)
                 elif magic == SHT1:          # screenshot frame
                     data = self._read_exact(a * b * 4)
@@ -558,6 +572,39 @@ class Driver:
                     raise TimeoutError("no screenshot arrived")
                 self._cond.wait(min(remaining, 0.25))
         return self.shots[-1]
+
+    def native_frame(self, tab=0, format="png", stream=0, cell_w=10,
+                     cell_h=20, force=False, timeout=15.0):
+        """Return native compressed frame rectangles.
+
+        Each stream retains its own reference frame in the engine. Subsequent
+        calls return only dirty cell-aligned rectangles; unchanged frames
+        return an empty list. Format is 'png' or 'sixel'. This is the fast
+        path for interactive renderers; screenshot() stays the SDK's lossless
+        full-frame BGRA API.
+        """
+        req = self._next_id
+        self._next_id += 1
+        self.cmd({"cmd": "frame", "tab": tab, "id": req, "format": format,
+                  "stream": stream, "cell_w": cell_w, "cell_h": cell_h,
+                  "force": force})
+        deadline = time.time() + timeout
+        patches = []
+        with self._cond:
+            while True:
+                for packet in self.native_frames:
+                    if packet[0] == req.to_bytes(8, "little"):
+                        self.native_frames.remove(packet)
+                        if not (packet[3] & 2):
+                            patches.append(packet)
+                        else:
+                            return patches
+                if self.dead:
+                    raise EngineDeadError("engine socket gone (native frame)")
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    raise TimeoutError("native frame never completed")
+                self._cond.wait(min(remaining, 0.25))
 
     def screenshot_annotated(self, path, tab: int = 0, timeout=15.0):
         """Screenshot with every interactive element boxed and numbered by

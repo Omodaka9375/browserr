@@ -28,6 +28,9 @@
 //!           --software is accepted as the explicit spelling of the default.
 //! Automation: eval with an "id" reports {"ev":"evalresult","tab","id","value"};
 //! {"cmd":"screenshot","tab":N} answers with a SHT1 frame (magic, id, w, h, w*h*4 BGRA).
+//! {"cmd":"frame","tab":N,"format":"png"|"sixel","stream":N,"cell_w":W,
+//! "cell_h":H} answers FRM2 native compressed rectangles, then an empty
+//! end packet. Per-stream dirty tracking makes unchanged frames cost no bytes.
 //! {"cmd":"ping","id":N} answers {"ev":"pong","id":N,"tabs":K,"active":A} (health check).
 //! Interception (fail-closed): {"cmd":"intercept","on":bool} toggles it; when on,
 //! each qualifying HTTP request emits {"ev":"request","id","tab","method","url",
@@ -60,6 +63,21 @@ use std::sync::{Arc, Condvar, Mutex};
 const PORT: u16 = 7411;
 const EV_MAGIC: u32 = 0x45_56_54_31; // EVT1
 const SHOT_MAGIC: u32 = 0x53_48_54_31; // SHT1 (screenshot)
+const FRAME_MAGIC: u32 = 0x46_52_4d_32_u32; // FRM2 (native compressed frame patches)
+
+#[derive(Clone, Copy)]
+struct DirtyRect {
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+}
+
+struct FrameState {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+}
 
 /// Terminate the process immediately, skipping libc atexit handlers and
 /// static destructors. std::process::exit runs them; on Linux servo/mozglue
@@ -75,7 +93,7 @@ fn hard_exit() -> ! {
 }
 
 /// Commands an attached driver may send; validated before queueing.
-const DRIVER_CMDS: [&str; 22] = [
+const DRIVER_CMDS: [&str; 23] = [
     "navigate",
     "back",
     "forward",
@@ -87,6 +105,7 @@ const DRIVER_CMDS: [&str; 22] = [
     "key",
     "eval",
     "screenshot",
+    "frame",
     "zoom",
     "ping",
     "download",
@@ -1567,6 +1586,328 @@ fn broadcast_shot(bytes: &[u8]) {
     }
 }
 
+/// Frame packet: FRM2, request id, payload length, rect, format, flags,
+/// frame id, payload. Flag bit 0 = full frame, bit 1 = end-of-request.
+fn native_packet(
+    req: u64,
+    rect: DirtyRect,
+    kind: u32,
+    full: bool,
+    frame_id: u64,
+    payload: &[u8],
+) -> Vec<u8> {
+    let mut packet = Vec::with_capacity(40 + payload.len());
+    packet.extend_from_slice(&FRAME_MAGIC.to_le_bytes());
+    packet.extend_from_slice(&req.to_le_bytes());
+    packet.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    packet.extend_from_slice(&rect.x.to_le_bytes());
+    packet.extend_from_slice(&rect.y.to_le_bytes());
+    packet.extend_from_slice(&rect.w.to_le_bytes());
+    packet.extend_from_slice(&rect.h.to_le_bytes());
+    packet.extend_from_slice(&kind.to_le_bytes());
+    packet.extend_from_slice(&((full as u32) | ((payload.is_empty() as u32) << 1)).to_le_bytes());
+    packet.extend_from_slice(&frame_id.to_le_bytes());
+    packet.extend_from_slice(payload);
+    packet
+}
+
+/// Compare the native RGBA frame in coarse terminal-aligned tiles, then
+/// merge equal-width dirty runs vertically into rectangles. This is cheaper
+/// and steadier than per-pixel rectangle extraction and gives Sixel patches
+/// exact cell boundaries. A changed viewport always forces a full frame.
+fn dirty_rects(
+    current: &[u8],
+    previous: Option<&FrameState>,
+    width: u32,
+    height: u32,
+    tile_w: u32,
+    tile_h: u32,
+    force_full: bool,
+) -> (bool, Vec<DirtyRect>) {
+    let full = force_full || previous.is_none_or(|p| p.width != width || p.height != height);
+    if full {
+        return (
+            true,
+            vec![DirtyRect {
+                x: 0,
+                y: 0,
+                w: width,
+                h: height,
+            }],
+        );
+    }
+    let previous = previous.expect("previous frame exists");
+    let cols = width.div_ceil(tile_w.max(1));
+    let rows = height.div_ceil(tile_h.max(1));
+    let mut rects: Vec<DirtyRect> = Vec::new();
+    let mut active: HashMap<(u32, u32), usize> = HashMap::new();
+    for ty in 0..rows {
+        let y = ty * tile_h;
+        let th = tile_h.min(height - y);
+        let mut next_active: HashMap<(u32, u32), usize> = HashMap::new();
+        let mut tx = 0;
+        while tx < cols {
+            let x = tx * tile_w;
+            let tw = tile_w.min(width - x);
+            let dirty = (0..th).any(|dy| {
+                let offset = ((y + dy) * width + x) as usize * 4;
+                let len = tw as usize * 4;
+                current[offset..offset + len] != previous.rgba[offset..offset + len]
+            });
+            if !dirty {
+                tx += 1;
+                continue;
+            }
+            let start = tx;
+            let mut end = tx + 1;
+            while end < cols {
+                let ex = end * tile_w;
+                let ew = tile_w.min(width - ex);
+                let same = (0..th).any(|dy| {
+                    let offset = ((y + dy) * width + ex) as usize * 4;
+                    let len = ew as usize * 4;
+                    current[offset..offset + len] != previous.rgba[offset..offset + len]
+                });
+                if !same {
+                    break;
+                }
+                end += 1;
+            }
+            let key = (start * tile_w, (end - start) * tile_w);
+            if let Some(index) = active.get(&key).copied()
+                && rects[index].y + rects[index].h == y
+            {
+                active.remove(&key);
+                rects[index].h += th;
+                next_active.insert(key, index);
+            } else {
+                let index = rects.len();
+                rects.push(DirtyRect {
+                    x: key.0,
+                    y,
+                    w: key.1.min(width - key.0),
+                    h: th,
+                });
+                next_active.insert(key, index);
+            }
+            tx = end;
+        }
+        active = next_active;
+    }
+    (false, rects)
+}
+
+fn crop_rgba(rgba: &[u8], width: u32, rect: DirtyRect) -> Option<Vec<u8>> {
+    let end = (rect.y + rect.h).checked_sub(1)?;
+    if rect.x + rect.w > width || (end * width + rect.x + rect.w) as usize * 4 > rgba.len() {
+        return None;
+    }
+    let mut pixels = Vec::with_capacity((rect.w * rect.h * 4) as usize);
+    for y in rect.y..rect.y + rect.h {
+        let start = (y * width + rect.x) as usize * 4;
+        pixels.extend_from_slice(&rgba[start..start + rect.w as usize * 4]);
+    }
+    Some(pixels)
+}
+
+/// Native sixel quantization: a 6x6x6 color cube plus 32 grays. This uses
+/// integer arithmetic and one palette lookup per pixel, replacing the Python
+/// PIL quantization and per-column encoding that dominated the prototype.
+fn sixel_index(r: u8, g: u8, b: u8) -> usize {
+    let min = r.min(g).min(b);
+    let max = r.max(g).max(b);
+    if max - min < 18 {
+        let luma = (r as u16 * 30 + g as u16 * 59 + b as u16 * 11) / 100;
+        return 216 + ((luma * 31 + 127) / 255) as usize;
+    }
+    let lr = (r as u16 * 5 + 127) / 255;
+    let lg = (g as u16 * 5 + 127) / 255;
+    let lb = (b as u16 * 5 + 127) / 255;
+    (lr * 36 + lg * 6 + lb) as usize
+}
+
+fn sixel_color(index: usize) -> (u8, u8, u8) {
+    if index < 216 {
+        (
+            (index / 36 * 51) as u8,
+            ((index / 6) % 6 * 51) as u8,
+            (index % 6 * 51) as u8,
+        )
+    } else {
+        let gray = ((index - 216) * 255 / 31) as u8;
+        (gray, gray, gray)
+    }
+}
+
+fn encode_png(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
+    use flate2::{Compression, write::ZlibEncoder};
+    let mut raw = Vec::with_capacity((width * height * 4 + height) as usize);
+    for row in rgba.chunks_exact(width as usize * 4) {
+        raw.push(0); // PNG filter: None; entropy is handled by zlib.
+        raw.extend_from_slice(row);
+    }
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+    encoder.write_all(&raw).expect("in-memory PNG compression");
+    let compressed = encoder.finish().expect("in-memory PNG finish");
+    fn chunk(out: &mut Vec<u8>, name: &[u8; 4], data: &[u8]) {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(name);
+        out.extend_from_slice(data);
+        let mut hasher = crc32fast::Hasher::new();
+        hasher.update(name);
+        hasher.update(data);
+        out.extend_from_slice(&hasher.finalize().to_be_bytes());
+    }
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut header = Vec::with_capacity(13);
+    header.extend_from_slice(&width.to_be_bytes());
+    header.extend_from_slice(&height.to_be_bytes());
+    header.extend_from_slice(&[8, 6, 0, 0, 0]);
+    chunk(&mut out, b"IHDR", &header);
+    chunk(&mut out, b"IDAT", &compressed);
+    chunk(&mut out, b"IEND", &[]);
+    out
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::{FrameState, dirty_rects, encode_png, encode_sixel};
+
+    #[test]
+    fn dirty_tracking_is_cell_aligned_and_stable() {
+        let (w, h) = (100u32, 80u32);
+        let initial = vec![255u8; (w * h * 4) as usize];
+        let mut current = initial.clone();
+        for y in 20..40 {
+            for x in 10..30 {
+                let i = ((y * w + x) * 4) as usize;
+                current[i..i + 4].copy_from_slice(&[0, 0, 0, 255]);
+            }
+        }
+        let (full, rects) = dirty_rects(&current, None, w, h, 10, 20, false);
+        assert!(full);
+        assert_eq!(rects[0].w, w);
+        let (_, rects) = dirty_rects(
+            &current,
+            Some(&FrameState {
+                width: w,
+                height: h,
+                rgba: initial.clone(),
+            }),
+            w,
+            h,
+            10,
+            20,
+            false,
+        );
+        assert_eq!(rects.len(), 1);
+        assert_eq!(
+            (rects[0].x, rects[0].y, rects[0].w, rects[0].h),
+            (10, 20, 20, 20)
+        );
+        let (_, empty) = dirty_rects(
+            &current,
+            Some(&FrameState {
+                width: w,
+                height: h,
+                rgba: current.clone(),
+            }),
+            w,
+            h,
+            10,
+            20,
+            false,
+        );
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn native_encoders_are_valid() {
+        let image = vec![128u8; 20 * 12 * 4];
+        let png = encode_png(&image, 20, 12);
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(&png[png.len() - 8..png.len() - 4], b"IEND");
+        let sixel = encode_sixel(&image, 20, 12);
+        assert!(sixel.starts_with(b"\x1bP0;1;0q"));
+        assert!(sixel.ends_with(b"\x1b\\"));
+        assert!(sixel.windows(3).any(|w| w == b"!20"));
+    }
+}
+
+fn encode_sixel(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
+    const COLORS: usize = 248;
+    let area = (width * height) as usize;
+    let mut indices = vec![0u8; area];
+    let mut used = [false; COLORS];
+    for (pixel, index) in rgba.as_chunks::<4>().0.iter().zip(indices.iter_mut()) {
+        let color = sixel_index(pixel[0], pixel[1], pixel[2]);
+        *index = color as u8;
+        used[color] = true;
+    }
+    let mut out = Vec::with_capacity(area / 2);
+    out.extend_from_slice(b"\x1bP0;1;0q");
+    for (color, present) in used.iter().enumerate() {
+        if *present {
+            let (r, g, b) = sixel_color(color);
+            out.extend_from_slice(
+                format!(
+                    "#{color};2;{};{};{}",
+                    r as u16 * 257,
+                    g as u16 * 257,
+                    b as u16 * 257
+                )
+                .as_bytes(),
+            );
+        }
+    }
+    let w = width as usize;
+    let mut columns = vec![0u8; w * COLORS];
+    for band in 0..height.div_ceil(6) {
+        columns.fill(0);
+        let mut band_used = [false; COLORS];
+        let y0 = band * 6;
+        let rows = 6.min(height - y0);
+        for row in 0..rows {
+            let y = y0 + row;
+            for x in 0..w {
+                let color = indices[y as usize * w + x] as usize;
+                columns[x * COLORS + color] |= 1 << row;
+                band_used[color] = true;
+            }
+        }
+        for color in 0..COLORS {
+            if !band_used[color] {
+                continue;
+            }
+            out.extend_from_slice(format!("#{color}").as_bytes());
+            let mut x = 0;
+            while x < w {
+                let value = columns[x * COLORS + color];
+                let mut end = x + 1;
+                while end < w && columns[end * COLORS + color] == value {
+                    end += 1;
+                }
+                let mut run = end - x;
+                if run >= 4 {
+                    while run > 0 {
+                        let count = run.min(255);
+                        out.extend_from_slice(format!("!{count}").as_bytes());
+                        out.push(0x3f + value);
+                        run -= count;
+                    }
+                } else {
+                    out.extend(std::iter::repeat_n(0x3f + value, run));
+                }
+                x = end;
+            }
+            out.push(b'$');
+        }
+        out.push(b'-');
+    }
+    out.extend_from_slice(b"\x1b\\");
+    out
+}
+
 /// Windows-only, before any GL initialization: servo loads the ANGLE
 /// DLLs (libEGL.dll, libGLESv2.dll) BY NAME at the first EGL call, so
 /// they must sit next to engine.exe. engine/build.rs normally stages
@@ -1645,8 +1986,14 @@ fn main() {
     let mut proxy = None;
     let mut proxy_https = None;
     let mut no_proxy = None;
+    let mut initial_width = 1200u32;
+    let mut initial_height = 760u32;
     for a in std::env::args().skip(1) {
-        if let Some(v) = a.strip_prefix("--user-agent=") {
+        if let Some(v) = a.strip_prefix("--width=") {
+            initial_width = v.parse().unwrap_or(initial_width).clamp(320, 4096);
+        } else if let Some(v) = a.strip_prefix("--height=") {
+            initial_height = v.parse().unwrap_or(initial_height).clamp(200, 4096);
+        } else if let Some(v) = a.strip_prefix("--user-agent=") {
             user_agent = Some(v.to_string());
         } else if let Some(v) = a.strip_prefix("--profile-dir=") {
             profile_dir = Some(std::path::PathBuf::from(v));
@@ -1825,7 +2172,8 @@ fn main() {
         }));
     }
 
-    let initial_size = dpi::PhysicalSize::new(1200u32, 760u32);
+    let initial_size = dpi::PhysicalSize::new(initial_width, initial_height);
+    eprintln!("engine: viewport {}x{}", initial_width, initial_height);
     let mut headed = if headed_mode {
         match Headed::new(initial_size) {
             Ok(window) => Some(window),
@@ -1908,6 +2256,10 @@ fn main() {
     let mut frame_id: u64 = 0;
     let mut event_id: u64 = 0;
     let mut last_hash: u64 = 0;
+    // Native frame streams: (tab, caller-selected stream id) -> last frame.
+    // Separate stream ids let independent consumers request patches without
+    // stealing each other's reference frame.
+    let mut frame_states: HashMap<(u64, u64), FrameState> = HashMap::new();
     let mut last_push: Option<std::time::Instant> = None;
     let mut tick: u64 = 0;
 
@@ -2100,6 +2452,9 @@ fn main() {
                                 if let Some(u) = v["url"].as_str()
                                     && let Ok(url) = url::Url::parse(u)
                                 {
+                                    // A new document must not be diffed
+                                    // against the previous page's pixels.
+                                    frame_states.retain(|(tab, _), _| *tab != tab_id);
                                     eprintln!("engine: queue navigate (tab {tab_id}) {url}");
                                     if let std::collections::hash_map::Entry::Vacant(e) =
                                         tabs.entry(tab_id)
@@ -2371,6 +2726,137 @@ fn main() {
                                             out.write_all(&frame).ok();
                                             let _ = out.flush();
                                         }
+                                    }
+                                }
+                            }
+                            Some("frame") => {
+                                // Native frame extraction for terminal clients.
+                                // PNG is lossless and portable; sixel patches
+                                // are terminal-ready and cell-aligned. FRM2:
+                                // magic, request id, payload bytes, x, y, w, h,
+                                // format (1 png / 2 sixel), flags, frame id.
+                                if let Some(tab) = tabs.get(&tab_id) {
+                                    let format = v["format"].as_str().unwrap_or("png");
+                                    let stream = v["stream"].as_u64().unwrap_or(0);
+                                    let tile_w = (v["cell_w"].as_u64().unwrap_or(10) as u32).max(1);
+                                    let tile_h = (v["cell_h"].as_u64().unwrap_or(20) as u32).max(1);
+                                    let force = v["force"].as_bool().unwrap_or(false);
+                                    let req = v["id"].as_u64().unwrap_or(0);
+                                    let active = shared.active.load(Ordering::SeqCst);
+                                    if headed.is_some() && tab_id != active {
+                                        if let Some(current) = tabs.get(&active) {
+                                            current.webview.hide();
+                                        }
+                                        tab.webview.show();
+                                    }
+                                    tab.webview.paint();
+                                    let _ = tab.context.make_current();
+                                    let rect = webrender_api::units::DeviceIntRect::new(
+                                        webrender_api::units::DeviceIntPoint::zero(),
+                                        webrender_api::units::DeviceIntPoint::new(
+                                            current_size.width as i32,
+                                            current_size.height as i32,
+                                        ),
+                                    );
+                                    if headed.is_some() && tab_id != active {
+                                        tab.webview.hide();
+                                        if let Some(current) = tabs.get(&active) {
+                                            current.webview.show();
+                                        }
+                                    }
+                                    let captured = tab.context.read_to_image(rect);
+                                    if let Some(image) = captured {
+                                        let rgba = image.into_raw();
+                                        let (full, rects) = dirty_rects(
+                                            &rgba,
+                                            frame_states.get(&(tab_id, stream)),
+                                            current_size.width,
+                                            current_size.height,
+                                            tile_w,
+                                            if format == "sixel" { 6 } else { tile_h },
+                                            force || v["reset"].as_bool().unwrap_or(false),
+                                        );
+                                        if !rects.is_empty() {
+                                            frame_id += 1;
+                                        }
+                                        let mut rects = rects;
+                                        if format == "sixel" && !full {
+                                            // Complete a cell's vertical
+                                            // coverage so Sixel padding can
+                                            // never erase unrelated pixels.
+                                            rects.sort_by_key(|r| (r.y / tile_h, r.x, r.y));
+                                            let mut rows: HashMap<u32, DirtyRect> = HashMap::new();
+                                            for r in rects {
+                                                let row = r.y / tile_h;
+                                                let y = row * tile_h;
+                                                let bottom = tile_h.min(current_size.height - y);
+                                                rows.entry(row)
+                                                    .and_modify(|old| {
+                                                        let left = old.x.min(r.x);
+                                                        let right = (old.x + old.w).max(r.x + r.w);
+                                                        old.x = left;
+                                                        old.w = right - left;
+                                                        old.h = old.h.max(r.h);
+                                                    })
+                                                    .or_insert(DirtyRect {
+                                                        x: r.x,
+                                                        y,
+                                                        w: r.w,
+                                                        h: bottom,
+                                                    });
+                                            }
+                                            rects = rows.into_values().collect();
+                                        }
+                                        for rect in rects {
+                                            let Some(crop) =
+                                                crop_rgba(&rgba, current_size.width, rect)
+                                            else {
+                                                continue;
+                                            };
+                                            let (kind, payload) = if format == "sixel" {
+                                                (2u32, encode_sixel(&crop, rect.w, rect.h))
+                                            } else {
+                                                (1u32, encode_png(&crop, rect.w, rect.h))
+                                            };
+                                            let packet = native_packet(
+                                                req, rect, kind, full, frame_id, &payload,
+                                            );
+                                            if from_driver {
+                                                broadcast_shot(&packet);
+                                            } else {
+                                                out.write_all(&packet).ok();
+                                                let _ = out.flush();
+                                            }
+                                        }
+                                        frame_states.insert(
+                                            (tab_id, stream),
+                                            FrameState {
+                                                width: current_size.width,
+                                                height: current_size.height,
+                                                rgba,
+                                            },
+                                        );
+                                    } else {
+                                        eprintln!("engine: native frame capture failed");
+                                    }
+                                    let end = native_packet(
+                                        req,
+                                        DirtyRect {
+                                            x: 0,
+                                            y: 0,
+                                            w: 0,
+                                            h: 0,
+                                        },
+                                        0,
+                                        true,
+                                        frame_id,
+                                        &[],
+                                    );
+                                    if from_driver {
+                                        broadcast_shot(&end);
+                                    } else {
+                                        out.write_all(&end).ok();
+                                        let _ = out.flush();
                                     }
                                 }
                             }

@@ -24,6 +24,12 @@ tools/mcp-evidence/
 .iconbuild/pnpm-lock.yaml
 .iconbuild/icon-*.png
 .iconbuild/extracted-exe-icon.png
+.iconbuild/ci-*.log
+
+# terminal test captures and caches
+term/__pycache__/
+term/*.log
+term/native-frame.png
 tools/*.html
 tools/*.bin
 tools/*-shot.png

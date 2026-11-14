@@ -37,6 +37,9 @@ euclid = "0.22"
 glow = "0.17"
 adblock = "0.13"
 image = { version = "0.25", default-features = false, features = ["png", "ico", "jpeg", "bmp", "webp", "gif"] }
+# Native compressed frame extraction: avoid image's generic encoder.
+flate2 = "1"
+crc32fast = "1"
 
 [target.'cfg(windows)'.build-dependencies]
 # Windows-only: embeds browserr.ico as the exe icon (see build.rs). Must not
