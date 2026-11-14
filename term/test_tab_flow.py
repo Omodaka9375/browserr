@@ -33,14 +33,16 @@ time.sleep(0.8)
 patches = d.native_frame(format="png", tab=nid, stream=nid, force=False)
 assert patches and patches[0][3] & 1, "tab 1 must begin with a full frame"
 
-# Navigate tab 1 somewhere real, then poll engine events like the TUI does.
-d.navigate("https://example.com", tab=nid)
-d.wait_load(tab=nid, contains="example.com")
+# Navigate tab 1 to a real second document, then poll engine events like
+# the TUI does.
+fixture2 = "file:///" + os.path.join(HERE, "term-fixture.html").replace("\\", "/")
+d.navigate(fixture2, tab=nid)
+d.wait_load(tab=nid)
 d.wait_ready(tab=nid)
 time.sleep(0.3)
 t.poll_meta()
-assert t.url == "https://example.com/", t.url
-assert t.title == "Example Domain", t.title
+assert t.url == fixture2, t.url
+assert t.title == "Terminal Interaction", t.title
 print("tab 1 meta follows its own url/title")
 
 # Switch back to tab 0: forced full frame again, and status returns to the

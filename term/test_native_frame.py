@@ -1,15 +1,28 @@
 """Integration test for native FRM2 PNG/Sixel patches and benchmark."""
+import functools
 import io
 import os
 import sys
+import threading
 import time
+from http.server import HTTPServer, SimpleHTTPRequestHandler
 from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 from driver import Driver
 
-url = sys.argv[1] if len(sys.argv) > 1 else "https://browserr.dev/"
+def serve_fixtures():
+    """Serve term/ locally: a live page changes under the test and the
+    static-skip assertion becomes a coin flip."""
+    handler = functools.partial(SimpleHTTPRequestHandler, directory=HERE)
+    srv = HTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{srv.server_address[1]}"
+
+
+BASE = serve_fixtures()
+url = sys.argv[1] if len(sys.argv) > 1 else BASE + "/native-fixture.html"
 d = Driver(ephemeral=True, width=1200, height=760)
 d.navigate(url)
 d.wait_load()
@@ -89,13 +102,13 @@ assert patch and all(p[1][2] < 400 for p in patch), [p[1] for p in patch]
 print("Sixel patch:", [p[1] for p in patch], sum(len(p[4]) for p in patch), "bytes")
 
 # Interaction remains functional on this same engine/session.
-d.navigate("https://example.com")
-d.wait_load(contains="example.com")
+d.navigate(BASE + "/term-fixture.html")
+d.wait_load(contains="term-fixture.html")
 d.wait_ready()
 patches = d.native_frame(format="png", force=True)
 assert patches and patches[0][1] == (0, 0, 1200, 760)
 title = d.eval_js("document.title")
-assert title == "Example Domain", title
+assert title == "Terminal Interaction", title
 
 print("ALL OK")
 d.close()

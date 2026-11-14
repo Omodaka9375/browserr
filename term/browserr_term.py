@@ -41,7 +41,7 @@ for p in (os.path.join(HERE), os.path.join(HERE, "..", "tools"),
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from driver import Driver  # noqa: E402
+from driver import Driver, EngineDeadError  # noqa: E402
 
 
 def find_engine():
@@ -54,6 +54,9 @@ def find_engine():
     env = os.environ.get("BROWSERR_ENGINE")
     if env and os.path.isfile(env):
         return env
+    if env:
+        print(f"browserr-term: BROWSERR_ENGINE is set but missing: {env}; "
+              f"falling back to discovery", file=sys.stderr)
     exe = "engine.exe" if os.name == "nt" else "engine"
     flat = os.path.join(HERE, exe)
     if os.path.isfile(flat):
@@ -83,7 +86,8 @@ RESET = "\x1b[0m"
 # Windows virtual keys that arrive with no UnicodeChar still need to
 # reach parse_keys; translate them to the CSI forms it understands.
 VK_CSI = {
-    0x21: b"\x1b[5~", 0x22: b"\x1b[6~", 0x23: b"\x1b[H", 0x24: b"\x1b[F",
+    # 0x23 = VK_END, 0x24 = VK_HOME: End sends \x1b[F, Home sends \x1b[H.
+    0x21: b"\x1b[5~", 0x22: b"\x1b[6~", 0x23: b"\x1b[F", 0x24: b"\x1b[H",
     0x25: b"\x1b[D", 0x26: b"\x1b[A", 0x27: b"\x1b[C", 0x28: b"\x1b[B",
     0x2D: b"\x1b[2~", 0x2E: b"\x1b[3~",
 }
@@ -102,7 +106,9 @@ def win_key_bytes(vk, char_code, state):
     ctrl = (state & 0x000C) and not (state & 0x0003)
     if ctrl and char_code < 0x80:
         return bytes([char_code & 0x1F])
-    return chr(char_code).encode("utf-8")
+    # Astral keys arrive as two records, each a lone UTF-16 surrogate;
+    # a strict encode would raise UnicodeEncodeError and kill the loop.
+    return chr(char_code).encode("utf-8", "surrogatepass")
 
 
 class RawInput:
@@ -132,7 +138,9 @@ class RawInput:
         if self.win:
             import ctypes
             # Window input + mouse, no line buffering, echo, or cooked edit.
-            ctypes.windll.kernel32.SetConsoleMode(self.handle, 0x0018)
+            # ENABLE_EXTENDED_FLAGS (0x0080) turns QuickEdit off: with it on,
+            # conhost consumes mouse records before we ever see them.
+            ctypes.windll.kernel32.SetConsoleMode(self.handle, 0x0018 | 0x0080)
         else:
             self.old = self.termios.tcgetattr(sys.stdin.fileno())
             self.tty.setcbreak(sys.stdin.fileno())
@@ -281,9 +289,13 @@ def parse_keys(buf):
                         events.append(ev)
                     i = j + 1
                     continue
-                i += 2
+                if j == n:
+                    break  # incomplete: hold the bytes for the next read
+                i += 2  # malformed final byte: skip ESC [
                 continue
-            if buf[i:i + 2] == b"\x1bO" and i + 3 <= n:
+            if buf[i:i + 2] == b"\x1bO":
+                if i + 3 > n:
+                    break  # incomplete: hold the bytes for the next read
                 seq = buf[i:i + 3].decode("ascii", "replace")
                 ev = _csi_key(seq)
                 if ev:
@@ -533,8 +545,9 @@ class Term:
             px = (cx - 1) * cw
             py = (cy - 1) * ch
         else:
-            px = cx * self.d.width / max(1, self.cols)
-            py = cy * 2 * self.d.height / max(1, self.view_rows * 2)
+            # Center of the clicked cell, not its top-left corner.
+            px = (cx - 0.5) * self.d.width / max(1, self.cols)
+            py = (cy - 0.5) * self.d.height / max(1, self.view_rows)
         return int(min(self.d.width - 1, max(0, px))), \
             int(min(self.d.height - 1, max(0, py)))
 
@@ -574,9 +587,9 @@ class Term:
                 self.d.navigate(self.url or "about:blank", tab=self.active)
                 self.status = "reloading"
             elif c == "]":
+                # ctrl+[ is unreachable: 0x1B parses as Escape on both input
+                # paths. cycle_tab wraps, so one key reaches every tab.
                 self.cycle_tab(1)
-            elif c == "[":
-                self.cycle_tab(-1)
         elif ev["kind"] == "key":
             n = ev["name"]
             if n == "Escape":
@@ -615,7 +628,9 @@ class Term:
                           "var b=e.form.querySelector("
                           "'button[type=submit],input[type=submit]');"
                           "if(b){b.click();return true}"
-                          "return false})()")
+                          "if(e.form.requestSubmit){e.form.requestSubmit();"
+                          "return true}"
+                          "e.form.submit();return true})()")
                     try:
                         submitted = self.d.eval_js(js, tab=self.active)
                     except TimeoutError:
@@ -685,7 +700,7 @@ class Term:
         # is disabled. Short status text keeps the entire bar on one row.
         width = max(20, self.cols - 1)
         status = s[:width].ljust(width)
-        help_text = "ctrl+l url  ctrl+t tab  ctrl+]/[ switch  ctrl+q quit"
+        help_text = "ctrl+l url  ctrl+t tab  ctrl+] switch tab  ctrl+q quit"
         help_text = help_text[:width].ljust(width)
         text = (
             f"{ESC}[{url_bar};1H{ESC}[48;2;170;170;170m"
@@ -734,7 +749,9 @@ def setup_terminal():
 
 
 def teardown_terminal():
-    sys.stdout.write(f"{ESC}[?1002l{ESC}[?1000l{ESC}[?25h{ESC}[?1049l")
+    # ST first: if a Sixel/tmux DCS string was open when we unwound, the
+    # resets below would be swallowed by the unterminated sequence.
+    sys.stdout.write(f"{ESC}\\{ESC}[?1002l{ESC}[?1000l{ESC}[?25h{ESC}[?1049l")
     sys.stdout.flush()
 
 
@@ -919,8 +936,6 @@ def main(argv):
                 i += 1
         elif a == "--renderer" and i + 1 < len(args):
             renderer = args[i + 1]
-            i += 1
-        elif a == "--cell" and i + 1 < len(args):
             i += 1
         elif a == "--fps" and i + 1 < len(args):
             fps = max(1, min(60, int(args[i + 1])))
@@ -1108,6 +1123,14 @@ def main(argv):
                                 t.fps_now = t.frames / (now - fps_t0)
                                 t.frames = 0
                                 fps_t0 = now
+                        except EngineDeadError:
+                            # A dead engine never recovers: stop the loop
+                            # instead of spinning at full fps, and do not let
+                            # poll_meta overwrite the cause with "loading".
+                            t.status = "engine exited"
+                            t.draw_status()
+                            t.running = False
+                            break
                         except Exception as e:
                             t.status = f"err: {e}"
                             t.draw_status()

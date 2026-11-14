@@ -439,8 +439,8 @@ class Driver:
             b = struct.unpack("<I", hdr[16:20])[0]
             try:
                 if magic == FRM2:
-                    # Header is 44 bytes: first 20 contain magic, request id,
-                    # payload length and x. Remaining 24: y/w/h, format,
+                    # Header is 48 bytes: first 20 contain magic, request id,
+                    # payload length and x. Remaining 28: y/w/h, format,
                     # flags, and an eight-byte frame id.
                     x = struct.unpack("<I", hdr[16:20])[0]
                     y, w, h, fmt, flags = struct.unpack("<5I", self._read_exact(20))
@@ -607,6 +607,9 @@ class Driver:
                     raise EngineDeadError("engine socket gone (native frame)")
                 remaining = deadline - time.time()
                 if remaining <= 0:
+                    # Do not leak this request's patches into later scans.
+                    self.native_frames = [p for p in self.native_frames
+                                          if p[0] != req.to_bytes(8, "little")]
                     raise TimeoutError("native frame never completed")
                 self._cond.wait(min(remaining, 0.25))
 

@@ -2854,6 +2854,29 @@ fn main() {
                                         out.write_all(&end).ok();
                                         let _ = out.flush();
                                     }
+                                } else {
+                                    // Unknown tab: still answer END so the
+                                    // client never waits out its timeout.
+                                    let req = v["id"].as_u64().unwrap_or(0);
+                                    let end = native_packet(
+                                        req,
+                                        DirtyRect {
+                                            x: 0,
+                                            y: 0,
+                                            w: 0,
+                                            h: 0,
+                                        },
+                                        0,
+                                        true,
+                                        frame_id,
+                                        &[],
+                                    );
+                                    if from_driver {
+                                        broadcast_shot(&end);
+                                    } else {
+                                        out.write_all(&end).ok();
+                                        let _ = out.flush();
+                                    }
                                 }
                             }
                             Some("input") => {

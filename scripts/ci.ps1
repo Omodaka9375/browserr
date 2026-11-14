@@ -38,7 +38,9 @@ $sdk_tests = @(
     "test_bind", "test_attach", "test_hardening", "test_intercept",
     "test_auth", "test_filepicker", "test_net", "test_frames", "test_form",
     "test_flow", "test_annotate", "test_handoff", "test_trust",
-    "test_software_render", "test_compat", "test_proxy"
+    "test_software_render", "test_compat", "test_proxy",
+    "test_sessions", "test_useragent", "test_useragent_mcp",
+    "test_navigate_quirk"
 )
 if (-not $gpuless -and $env:CI -ne "true") { $sdk_tests += "test_headed" }
 # Always run the render-free MCP handoff regression tests.
@@ -85,6 +87,21 @@ foreach ($t in $raw_tests) {
     Start-Sleep 1
 }
 
+# Terminal client tests: protocol-level harnesses, no real terminal
+# needed. Skipped in GPU-less mode (they exercise frame capture).
+if (-not $gpuless) {
+    $term_tests = @("test_term", "test_native_frame", "test_native_interaction",
+                    "test_frame_pixels", "test_tab_flow", "test_login_flow")
+    foreach ($t in $term_tests) {
+        Write-Host "-- term/$t" -ForegroundColor Cyan
+        python "term\$t.py" *> "term-$t.log"
+        if ($LASTEXITCODE -ne 0) {
+            Get-Content "term-$t.log" -Tail 6 | Write-Host -ForegroundColor Red
+            $failed += "term/$t"
+        }
+    }
+}
+
 if ($failed.Count) {
     Write-Host "FAILED: $($failed -join ', ')" -ForegroundColor Red
     # Diagnostics: every engine log the tests wrote (context creation
@@ -97,4 +114,5 @@ if ($failed.Count) {
 }
 Remove-Item "$root\*.log" -ErrorAction SilentlyContinue
 $total = $sdk_tests.Count + $raw_tests.Count + $render_free.Count
+if (-not $gpuless) { $total += 6 }  # term client tests
 Write-Host "ALL GREEN ($total tests)$(if ($gpuless) { ' [GPU-LESS MODE: render tests skipped]' })" -ForegroundColor Green

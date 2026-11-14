@@ -14,6 +14,9 @@ GPULESS=0
 SDK_TESTS="test_driver test_agent test_elements test_structure test_watchdog test_features test_mcp test_scroll test_bind test_attach test_hardening test_intercept test_auth test_filepicker test_net test_frames test_form test_flow test_annotate test_handoff test_trust test_software_render test_compat test_proxy"
 RAW_TESTS="test_input test_cursor_zoom test_close"
 GPULESS_TESTS="test_bind test_mcp_logic"
+# Terminal client tests: protocol-level, need frame capture (skipped in
+# GPU-less mode).
+TERM_TESTS="test_term test_native_frame test_native_interaction test_frame_pixels test_tab_flow test_login_flow"
 
 echo "== fmt + clippy gate =="
 cargo fmt --manifest-path engine/Cargo.toml -- --check > fmt.log 2>&1 \
@@ -75,6 +78,15 @@ else
         pkill -f "$BROWSERR_ENGINE" 2>/dev/null
         sleep 1
     done
+    # Terminal client tests: protocol-level, need frame capture.
+    for t in $TERM_TESTS; do
+        echo "-- term/$t"
+        ${XUVB_PREFIX:-} python "term/$t.py" > "term-$t.log" 2>&1
+        if [ $? -ne 0 ]; then
+            tail -6 "term-$t.log"
+            failed="$failed term/$t"
+        fi
+    done
 fi
 
 if [ -n "$failed" ]; then
@@ -85,6 +97,6 @@ if [ -n "$failed" ]; then
     exit 1
 fi
 rm -f "$root"/*.log
-total=$(echo "$SDK_TESTS $RAW_TESTS" | wc -w)
+total=$(echo "$SDK_TESTS $RAW_TESTS $TERM_TESTS" | wc -w)
 [ "$GPULESS" -eq 1 ] && total=$(echo "$GPULESS_TESTS" | wc -w)
 echo "ALL GREEN ($total tests)"

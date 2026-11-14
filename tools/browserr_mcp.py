@@ -115,6 +115,15 @@ class State:
                 proxy_args.append("--proxy-https=" + proxy_https)
             if no_proxy:
                 proxy_args.append("--no-proxy=" + no_proxy)
+            # Non-default sessions get their own engine port: several engines
+            # run side by side, one per proxy/UA group. Profile sessions need
+            # a unique port too (two persistent profiles would otherwise fight
+            # over 7411). Attached engines reuse the given port; nothing is
+            # spawned.
+            port = 7411
+            if not attach_port and key != "default":
+                port = self._next_port
+                self._next_port += 1
             if attach_port:
                 driver = Driver.attach(attach_port, token=token)
             elif profile:
@@ -127,14 +136,11 @@ class State:
                 pdir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     "mcp-profiles", safe)
                 os.makedirs(pdir, exist_ok=True)
-                driver = Driver(profile_dir=pdir, engine_args=engine_args or None,
+                driver = Driver(profile_dir=pdir, port=port,
+                                engine_args=engine_args or None,
                                 log=self._engine_log_path())
             else:
                 engine_args = (["--headed"] if headed else []) + proxy_args + ua_args
-                # Non-default sessions get their own engine port: several
-                # engines run side by side, one per proxy/UA group.
-                port = 7411 if key == "default" else self._next_port
-                self._next_port += 1
                 driver = Driver(ephemeral=True, port=port,
                                 engine_args=engine_args or None,
                                 log=self._engine_log_path())
@@ -164,9 +170,9 @@ class State:
             key = self._safe_session(session)
             if key not in self.drivers:
                 return {"stopped": False, "note": f"session {key!r} not running"}
-            self.drivers[key].close()
-            del self.drivers[key]
-            if getattr(self, "driver", None) is self.drivers.get(key):
+            driver = self.drivers.pop(key)
+            driver.close()
+            if getattr(self, "driver", None) is driver:
                 self.driver = None
             return {"stopped": True, "session": key}
 
