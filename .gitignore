@@ -22,6 +22,7 @@ tools/mcp-evidence/
 # icon tooling: scripts are committed, node_modules is not
 .iconbuild/node_modules/
 .iconbuild/pnpm-lock.yaml
+.iconbuild/package-lock.json
 .iconbuild/icon-*.png
 .iconbuild/extracted-exe-icon.png
 .iconbuild/ci-*.log
