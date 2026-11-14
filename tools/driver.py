@@ -349,6 +349,7 @@ class Driver:
         self.evidence_dir = None
         self.action_log_path = None
         self._credentials = {}     # host[:port] -> (user, password)
+        self._auth_rejected = {}   # host -> ((user, pass), time of answer)
         self._auth_seen = set()    # auth event ids already answered
         self._auth_thread = None
         self._log_lock = threading.Lock()
@@ -1534,6 +1535,10 @@ class Driver:
         res = self.submit_form(ref_or_selector, tab, confirm=confirm)
         deadline = time.time() + timeout
         navigated = False
+        # Cross-origin GET navigations take longer than the old page stays
+        # idle, so the idle check must not win the race: it only counts
+        # after a short grace period (same-origin navs land well inside it).
+        idle_ok_after = time.time() + 1.0
         while time.time() < deadline:
             time.sleep(0.2)
             try:
@@ -1543,11 +1548,27 @@ class Driver:
             if now and now != before:
                 navigated = True
                 break
-            if self.wait_network_idle(quiet_ms=quiet_ms, timeout=0.5, tab=tab):
+            if time.time() >= idle_ok_after and self.wait_network_idle(
+                    quiet_ms=quiet_ms, timeout=0.5, tab=tab):
                 break
         self.wait_network_idle(quiet_ms=quiet_ms, timeout=3.0, tab=tab)
         outcome = self.read_outcome(tab)
         out = {"submit": res, "navigated": navigated, "outcome": outcome}
+        if not navigated and res.get("ok"):
+            # servo 0.8 blocks page-initiated navigations to a MORE-LOCAL
+            # address space (public->local, IP->localhost-name): a form GET
+            # to such a target silently does nothing. Embedder-level loads
+            # (navigate) are NOT blocked, so tell the agent the way out.
+            try:
+                action = res.get("action") or ""
+                if action and self._host_of(action) not in ("", self._host_of(outcome.get("url") or "")) \
+                        and "127.0.0.1" in (outcome.get("url") or ""):
+                    out["nav_note"] = (
+                        "page-initiated navigation may be blocked by "
+                        "servo's local-network rule; verify with "
+                        "navigate(action) which bypasses it")
+            except (TypeError, ValueError):
+                pass
         if evidence and self.evidence_dir:
             try:
                 out["evidence"] = self.evidence(mode="plain", tab=tab)
@@ -1615,9 +1636,13 @@ class Driver:
 
     @staticmethod
     def _host_of(url: str) -> str:
-        """host[:port] of a URL; empty string when unparseable."""
+        """host[:port] of a URL; empty string when unparseable. Userinfo
+        (user:pass@host) is stripped: servo puts answered credentials in
+        the re-challenge URL's userinfo."""
         m = re.match(r"^[a-z][a-z0-9+.-]*://([^/?#]+)", (url or "").lower())
-        return m.group(1) if m else ""
+        if not m:
+            return ""
+        return m.group(1).rsplit("@", 1)[-1]
 
     def enable_evidence(self, directory) -> None:
         """Set the directory annotated/plain evidence shots are written to
@@ -1692,11 +1717,20 @@ class Driver:
         host = self._host_of(origin_or_host) if "://" in origin_or_host \
             else origin_or_host
         self._credentials[host] = (user, password)
+        with self._cond:
+            self._auth_rejected.pop(host, None)
 
     def start_auto_auth(self) -> None:
         """Answer engine auth challenges from stored credentials, in the
         background. Unknown hosts fail closed (challenge dropped = no
-        credentials sent). Idempotent."""
+        credentials sent). Idempotent.
+
+        Rejection detection: a repeat challenge for the same host with the
+        same credentials means the server REJECTED the previous answer
+        (servo re-challenges on a 401). The stored credential is dropped
+        and the new challenge fails closed, so a wrong credential cannot
+        loop. The agent should call set_credentials with corrected values.
+        """
         if self._auth_thread is not None:
             return
 
@@ -1710,9 +1744,23 @@ class Driver:
                 self._auth_seen.add(rid)
                 host = self._host_of(ev.get("url") or "")
                 creds = self._credentials.get(host)
-                # Drop-on-no-creds: answering with nothing fails closed.
+                if creds is not None:
+                    with self._cond:
+                        rejected_at = self._auth_rejected.get(host)
+                    if rejected_at is not None \
+                            and rejected_at[0] == creds \
+                            and time.time() - rejected_at[1] < 20.0:
+                        # The same credentials were just rejected for this
+                        # host: do not re-send. Drop the stored value and
+                        # fail closed so a wrong credential cannot loop.
+                        self._credentials.pop(host, None)
+                        self._log_action("auth_rejected", host=host)
+                        creds = None
                 self.auth_answer(rid, creds[0] if creds else None,
                                  creds[1] if creds else None)
+                if creds is not None:
+                    with self._cond:
+                        self._auth_rejected[host] = (creds, time.time())
                 self._log_action("auth", host=host,
                                   answered=bool(creds))
 

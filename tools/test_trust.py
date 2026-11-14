@@ -24,6 +24,7 @@ from driver import Driver, NeedsConfirmError
 
 PAGE_URL = "http://127.0.0.1:8139/pay-test.html"
 AUTH_URL = "http://127.0.0.1:8140/secret"
+AUTH_URL2 = "http://127.0.0.1:8141/secret"
 EV = TOOLS_DIR + "/trust-evidence"
 
 PAGE = """<!doctype html><html><head><title>Checkout</title></head><body>
@@ -70,6 +71,8 @@ httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 8139), handler)
 threading.Thread(target=httpd.serve_forever, daemon=True).start()
 httpd2 = http.server.ThreadingHTTPServer(("127.0.0.1", 8140), AuthHandler)
 threading.Thread(target=httpd2.serve_forever, daemon=True).start()
+httpd3 = http.server.ThreadingHTTPServer(("127.0.0.1", 8141), AuthHandler)
+threading.Thread(target=httpd3.serve_forever, daemon=True).start()
 
 with open(TOOLS_DIR + "/pay-test.html", "w") as f:
     f.write(PAGE)
@@ -142,6 +145,36 @@ try:
         time.sleep(0.3)
     assert "AUTHOK" in body, body
     print("auto-auth OK: challenge answered from stored credentials")
+
+    # 6b. Rejected credentials are invalidated: store WRONG credentials
+    # for a FRESH origin (servo caches answered credentials per origin,
+    # so a reused origin would replay its cache instead of challenging),
+    # the server re-challenges, the driver detects the repeat challenge
+    # (same host + same creds within the window), drops the value and
+    # fails closed instead of looping. A later set_credentials restores.
+    d.set_credentials("http://127.0.0.1:8141", "bad", "creds")
+    d.navigate(AUTH_URL2)
+    deadline = time.time() + 25
+    rejected_seen = False
+    while time.time() < deadline and not rejected_seen:
+        with open(os.path.join(EV, "actions.jsonl"), encoding="utf-8") as f:
+            rejected_seen = '"auth_rejected"' in f.read()
+        time.sleep(0.3)
+    assert rejected_seen, "auth_rejected never logged"
+    assert ("127.0.0.1:8141" not in d._credentials), d._credentials
+    print("rejected credential invalidated OK")
+    # Corrected credentials answer cleanly again.
+    d.set_credentials("http://127.0.0.1:8140", "agent", "secret")
+    d.navigate(AUTH_URL)
+    deadline = time.time() + 15
+    body = ""
+    while time.time() < deadline:
+        body = d.eval_js("document.body ? document.body.textContent : ''") or ""
+        if "AUTHOK" in body:
+            break
+        time.sleep(0.3)
+    assert "AUTHOK" in body, body
+    print("corrected credential answers OK")
 
     # 7. Credentials never appear in the action log. (Check the VALUE, not
     # the word 'secret', which our test URL path also contains.)

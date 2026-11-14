@@ -29,6 +29,10 @@ PAGE = """<!doctype html><html><head><title>Form Flow</title></head><body>
   <div id="err" role="alert"></div>
   <button type="submit" id="go">Send</button>
 </form>
+<form id="xorigin" method="get" action="http://localhost:8135/done">
+  <input id="xo" name="q" value="cross">
+  <button type="submit" id="xgo">Cross</button>
+</form>
 <script>
 document.getElementById('f').addEventListener('submit', function (e) {
   var bad = [];
@@ -162,6 +166,30 @@ try:
     assert res["navigated"] is True, res
     assert res["outcome"]["title"] == "Done", res["outcome"]
     print("submit without ref OK")
+
+    # 7. Cross-origin GET submit to a MORE-LOCAL target: servo 0.8 blocks
+    # page-initiated navigations that go public->local (and IP->localhost),
+    # so the form silently does nothing. The driver must report navigated
+    # false (plus a diagnostic) and NOT hang; the embedder-level navigate
+    # bypasses the block and lands.
+    import time as _t
+    d.navigate(PAGE_URL)
+    d.wait_load(contains="form-flow.html")
+    d.wait_ready()
+    r = structure_with_fields()
+    res = d.submit_and_wait('#xorigin')
+    assert res["navigated"] is False, res
+    assert "nav_note" in res, res
+    d.navigate("http://localhost:8135/done")
+    d.wait_load(contains="/done")
+    d.wait_ready()
+    deadline = _t.time() + 10
+    while _t.time() < deadline:
+        if "localhost" in (d.eval_js("location.href") or ""):
+            break
+        _t.sleep(0.3)
+    assert "localhost" in (d.eval_js("location.href") or "")
+    print("local-network block detected + navigate() bypass OK")
 
     print("ALL OK")
 finally:
