@@ -466,6 +466,8 @@ class Term:
         self.frames = 0
         self.fps_now = 0.0
         self.last_frame_ms = 0.0
+        self.force_next = False     # full frame on next render (tab switch)
+        self._meta_seq = 0         # event cursor for url/title updates
 
     def to_page_xy(self, cx, cy):
         if (self.sixel or self.kitty) and getattr(self, "cell", None):
@@ -477,6 +479,22 @@ class Term:
             py = cy * 2 * self.d.height / max(1, self.view_rows * 2)
         return int(min(self.d.width - 1, max(0, px))), \
             int(min(self.d.height - 1, max(0, py)))
+
+    def poll_meta(self):
+        """Consume engine url/title events for the ACTIVE tab.
+
+        The engine pushes these on change; reading them costs no round
+        trip, unlike the eval polling this replaces (which also always
+        read tab 0, so the status bar never followed a tab switch)."""
+        events = self.d.events
+        if self._meta_seq > len(events):
+            self._meta_seq = 0  # events were cleared externally
+        for e in events[self._meta_seq:]:
+            if e.get("ev") == "url" and e.get("tab") == self.active:
+                self.url = e.get("url") or self.url
+            elif e.get("ev") == "title" and e.get("tab") == self.active:
+                self.title = (e.get("title") or "")[:40]
+        self._meta_seq = len(events)
 
     def handle_key(self, ev):
         if ev["kind"] == "ctrl":
@@ -493,8 +511,9 @@ class Term:
                 self.tabs.append(nid)
                 self.active = nid
                 self.d.navigate("about:blank", tab=nid)
+                self.force_next = True
             elif c == "r":
-                self.d.navigate(self.url or "about:blank")
+                self.d.navigate(self.url or "about:blank", tab=self.active)
                 self.status = "reloading"
             elif c == "]":
                 self.cycle_tab(1)
@@ -510,31 +529,31 @@ class Term:
                 if url:
                     self.go(url)
             elif n == "Up":
-                self.d.wheel(40)
+                self.d.wheel(40, tab=self.active)
             elif n == "Down":
-                self.d.wheel(-40)
+                self.d.wheel(-40, tab=self.active)
             elif n == "PageUp":
-                self.d.wheel(300)
+                self.d.wheel(300, tab=self.active)
             elif n == "PageDown":
-                self.d.wheel(-300)
+                self.d.wheel(-300, tab=self.active)
             elif n == "Home":
-                self.d.wheel(10000)
+                self.d.wheel(10000, tab=self.active)
             elif n == "End":
-                self.d.wheel(-10000)
+                self.d.wheel(-10000, tab=self.active)
             elif not self.url_mode:
-                self.d.key(n)
+                self.d.key(n, tab=self.active)
         elif ev["kind"] == "text":
             if self.url_mode:
                 self.url_buf += ev["text"]
             else:
                 ch = ev["text"]
-                self.d.key("text", ch, down=True)
-                self.d.key("text", ch, down=False)
+                self.d.key("text", ch, down=True, tab=self.active)
+                self.d.key("text", ch, down=False, tab=self.active)
         if ev["kind"] == "key" and ev.get("name") == "Backspace":
             if self.url_mode:
                 self.url_buf = self.url_buf[:-1]
             else:
-                self.d.key("Backspace")
+                self.d.key("Backspace", tab=self.active)
 
     def cycle_tab(self, d):
         if len(self.tabs) < 2:
@@ -542,16 +561,21 @@ class Term:
         i = (self.tabs.index(self.active) + d) % len(self.tabs)
         self.active = self.tabs[i]
         self.d.activate(self.active)
+        # The engine diffs each tab against its own reference; an unchanged
+        # tab would produce no patches, leaving the previous tab's pixels on
+        # screen. Force one full frame for the newly active tab.
+        self.force_next = True
+        self._meta_seq = 0  # rescan history for this tab's url/title
 
     def handle_mouse(self, ev):
         if ev["action"] == "wheel":
-            self.d.wheel(-40 * ev["dx"])
+            self.d.wheel(-40 * ev["dx"], tab=self.active)
             return
         px, py = self.to_page_xy(ev["x"], ev["y"])
         if ev["action"] == "press":
-            self.d.click(px, py)
+            self.d.click(px, py, tab=self.active)
         elif ev["action"] == "drag":
-            self.d.move(px, py)
+            self.d.move(px, py, tab=self.active)
 
     def go(self, url):
         if not (url.startswith("http://") or url.startswith("https://")
@@ -559,7 +583,8 @@ class Term:
             url = "https://" + url
         self.url = url
         self.status = "loading"
-        self.d.navigate(url)
+        self.d.navigate(url, tab=self.active)
+        self.force_next = True
 
     def draw_status(self):
         mode = "URL" if self.url_mode else "VIEW"
@@ -890,22 +915,25 @@ def main(argv):
                             else:
                                 t.handle_key(ev)
                     now = time.time()
+                    # Metadata: consume engine events (no eval round trips).
+                    if now - last_meta > 0.5:
+                        last_meta = now
+                        t.poll_meta()
+                        t.status = "ok" if t.title else "loading"
                     if now - last_render >= frame_min:
                         last_render = now
                         frame_t0 = time.perf_counter()
                         try:
                             if mode in ("sixel", "kitty"):
                                 patches = d.native_frame(
-                                    format=mode, cell_w=cell[0],
-                                    cell_h=cell[1], timeout=5)
+                                    format=mode, tab=t.active,
+                                    stream=t.active,
+                                    cell_w=cell[0], cell_h=cell[1],
+                                    force=t.force_next, timeout=5)
+                                t.force_next = False
                                 w, h, bgra = 0, 0, patches
                             else:
-                                w, h, bgra = d.screenshot()
-                            if now - last_meta > 0.5:
-                                last_meta = now
-                                t.url = (d.eval_js("location.href") or t.url)
-                                t.title = (d.eval_js("document.title") or "")[:40]
-                                t.status = "ok" if t.title else "loading"
+                                w, h, bgra = d.screenshot(tab=t.active)
                             t.last_frame_ms = (time.perf_counter() - frame_t0) * 1000
                             t.render_frame(w, h, bgra)
                             if now - fps_t0 > 1.0:
