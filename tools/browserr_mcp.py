@@ -71,7 +71,8 @@ class State:
                             "mcp-engine.log")
 
     def start(self, attach_port=None, token=None, profile=None, auto_auth=True,
-              headed=False, proxy=None, proxy_https=None, no_proxy=None):
+              headed=False, proxy=None, proxy_https=None, no_proxy=None,
+              user_agent=None):
         with self.lock:
             if self.driver is not None:
                 return self.status(started=False, note="already running")
@@ -81,6 +82,12 @@ class State:
             if attach_port and (proxy or proxy_https or no_proxy):
                 raise McpError("proxy cannot change an attached engine; "
                                "start that engine with --proxy= instead")
+            if attach_port and user_agent:
+                raise McpError("user_agent cannot change an attached engine; "
+                               "start that engine with --user-agent= instead")
+            # The UA string rides in engine argv (spawn only); it is NOT
+            # written to the action log (engine_args are not logged).
+            ua_args = ["--user-agent=" + user_agent] if user_agent else []
             # Proxy flags go straight to the engine's argv (spawn only);
             # basic auth rides inside the URL (user:pass@host:port) and is
             # never logged (engine_args are not in the action log).
@@ -94,7 +101,7 @@ class State:
             if attach_port:
                 self.driver = Driver.attach(attach_port, token=token)
             elif profile:
-                engine_args = (["--headed"] if headed else []) + proxy_args
+                engine_args = (["--headed"] if headed else []) + proxy_args + ua_args
                 # Persistent profile: logins and storage survive sessions.
                 # Name is sanitized to a single path component.
                 safe = "".join(c for c in profile if c.isalnum() or c in "-_")
@@ -106,7 +113,7 @@ class State:
                 self.driver = Driver(profile_dir=pdir, engine_args=engine_args or None,
                                      log=self._engine_log_path())
             else:
-                engine_args = (["--headed"] if headed else []) + proxy_args
+                engine_args = (["--headed"] if headed else []) + proxy_args + ua_args
                 self.driver = Driver(ephemeral=True,
                                      engine_args=engine_args or None,
                                      log=self._engine_log_path())
@@ -175,7 +182,12 @@ TOOLS = [
                                             "defaults to proxy (spawn only)"},
             "no_proxy": {"type": "string",
                          "description": "comma-separated hosts exempt from "
-                                         "the proxy (spawn only)"}},
+                                         "the proxy (spawn only)"},
+            "user_agent": {"type": "string",
+                           "description": "custom HTTP User-Agent for all "
+                                           "requests (spawn only), e.g. a "
+                                           "desktop Chrome UA to avoid "
+                                           "mobile/blocked variants"}},
             "required": []},
     },
     {
@@ -627,7 +639,8 @@ def call_tool(name, args):
                            headed=args.get("headed", False),
                            proxy=args.get("proxy"),
                            proxy_https=args.get("proxy_https"),
-                           no_proxy=args.get("no_proxy"))
+                           no_proxy=args.get("no_proxy"),
+                           user_agent=args.get("user_agent"))
     if name == "browser_stop":
         return STATE.stop()
 
