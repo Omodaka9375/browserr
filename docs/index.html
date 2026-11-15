@@ -358,6 +358,13 @@
     }
     .os-meta b { color: var(--ink); font-weight: 600; }
 
+    /* ————— terminal demo video ————— */
+    .demo { margin: 44px 0 0; }
+    .demo video { display: block; width: 100%; max-width: 880px; margin: 0 auto;
+      border: 1px solid var(--rule); border-radius: 6px; background: #0a0a0a; }
+    .demo figcaption { font-family: var(--mono); font-size: 0.72rem; line-height: 1.6;
+      color: var(--ink-3); text-align: center; margin: 12px auto 0; max-width: 60ch; }
+
     /* ————— footer / colophon ————— */
     footer { background: var(--ink); color: var(--paper); border-bottom: 0; }
     footer .wrap { padding-top: 40px; padding-bottom: 40px; display: flex; flex-wrap: wrap; gap: 32px; justify-content: space-between; align-items: baseline; }
@@ -492,6 +499,14 @@
             <tr><td>trust</td><td><b>Fail-closed by design.</b> Persistent profiles, evidence shots, an append-only action log, a credential store and a confirm gate on payment submits.</td></tr>
           </tbody>
         </table>
+
+        <figure class="demo fade-in">
+          <video controls preload="metadata" playsinline
+                 poster="media/browserr-term-demo.jpg"
+                 src="media/browserr-term-demo.mp4"></video>
+          <figcaption>browserr-term: a live web page rendered inside a terminal pane at
+            native resolution, driven by the same engine as the MCP server.</figcaption>
+        </figure>
       </div>
     </section>
 

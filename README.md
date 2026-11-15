@@ -178,6 +178,8 @@ Browserr Term renders real pages inside a terminal pane at native
 resolution, using Sixel or the Kitty graphics protocol with dirty-rectangle
 patches computed in the engine. It needs no installer step:
 
+[![Browserr Term demo: a live web page rendered inside a terminal](docs/media/browserr-term-demo.jpg)](docs/media/browserr-term-demo.mp4)
+
 ```sh
 ./browserr-term https://browserr.dev/        # macOS / Linux
 browserr-term.cmd https://browserr.dev/      # Windows
