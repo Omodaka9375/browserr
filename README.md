@@ -148,11 +148,27 @@ mcp_wrap.cmd      Windows MCP launcher (cmd wrapper)
 browserr-term     terminal browser launcher (shell)
 browserr-term.cmd terminal browser launcher (Windows)
 browserr_term.py  terminal browser UI (stdlib; numpy improves the fallback)
+update(.sh/.ps1/.cmd) in-place updater (see below)
 README.md, LICENSE
 ```
 
 Requirements: Python 3.10+ on PATH. `driver.py` finds the engine binary
 next to itself; override with `BROWSERR_ENGINE=/path/to/engine`.
+
+### Update an existing unpack
+
+Re-download the archive, or run the updater shipped inside it. It queries
+the GitHub API, verifies the download against the release's sha256 digest,
+backs up the current files, copies the new payload over this directory,
+and verifies the new binary before cleaning up. Stop a running engine
+first (a running executable cannot be replaced on Windows).
+
+```sh
+./update.sh                    # macOS / Linux: latest release
+./update.sh v0.7.0             # pin a version
+update.cmd                     # Windows (double-clickable)
+powershell -File update.ps1 -WhatIf   # report without touching anything
+```
 
 ### Browse in your terminal
 

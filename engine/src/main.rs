@@ -1,5 +1,7 @@
 //! Browserr page engine: a Servo child process.
-//! Listens on 127.0.0.1:7411. Protocol v2:
+//! Listens on 127.0.0.1:7411. `--version` prints the package version and
+//! exits (the updater greps it from the binary without starting servo).
+//! Protocol v2:
 //!   in:  newline JSON:
 //!        {"cmd":"navigate","url":"...","tab":N}   load in that tab (created on demand)
 //!        {"cmd":"back"|"forward","tab":N}         per-tab history
@@ -2007,7 +2009,12 @@ fn main() {
     let mut initial_height = 760u32;
     let mut port = PORT;
     for a in std::env::args().skip(1) {
-        if let Some(v) = a.strip_prefix("--port=") {
+        if a == "--version" {
+            // Print and exit before any GL/servo init so the updater can
+            // read the version from a live machine.
+            println!("browserr {}", env!("CARGO_PKG_VERSION"));
+            return;
+        } else if let Some(v) = a.strip_prefix("--port=") {
             // Multi-engine hosts (one engine per proxy/UA group) run several
             // engines side by side; the default port is only kept for
             // backward compatibility with drivers that do not pass one.

@@ -33,6 +33,8 @@ $payload = @(
     (Join-Path $root "tools\mcp_wrap.cmd"),
     (Join-Path $root "term\browserr_term.py"),
     (Join-Path $root "term\browserr-term.cmd"),
+    (Join-Path $root "scripts\update.ps1"),
+    (Join-Path $root "scripts\update.cmd"),
     (Join-Path $root "README.md"),
     (Join-Path $root "LICENSE")
 )

@@ -36,6 +36,7 @@ tar -czf "$out" \
     tools/browserr_mcp.py \
     term/browserr_term.py \
     term/browserr-term \
+    scripts/update.sh \
     README.md \
     LICENSE
 echo "packaged: $out ($(du -h "$out" | cut -f1))"
