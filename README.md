@@ -1,23 +1,36 @@
 <h1><img src="docs/icon.svg" alt="Browserr" height="27" style="vertical-align:-16px"> Browserr</h1>
 
 [![CI](https://github.com/Omodaka9375/browserr/actions/workflows/ci.yml/badge.svg)](https://github.com/Omodaka9375/browserr/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Omodaka9375/browserr?include_prereleases&label=release)](https://github.com/Omodaka9375/browserr/releases/latest)
+[![PyPI](https://img.shields.io/pypi/v/browserr-mcp?label=pypi%20browserr-mcp)](https://pypi.org/project/browserr-mcp/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-A Servo-based browser engine built for AI agents: 
-Headless by default, with an optional native interactive window for human handoff.
+A Servo-based browser engine built for AI agents. Headless by default,
+with an optional native interactive window for human handoff.
 
-Browserr is an alternative to embedding Chromium in an agent stack: a single
-`engine` binary (Rust + Servo) that renders pages, blocks ads, and exposes a
-small loopback protocol. It is built around three commitments: block when
-unsure, hand the page to a human when a human is needed, and leave evidence
-for everything it did.
+One Rust + Servo binary instead of embedding Chromium: it renders pages,
+blocks ads, and exposes a small loopback protocol built around three
+commitments: **block when unsure, hand the page to a human when a human
+is needed, and leave evidence for everything it did.**
 
-Rendering is CPU by default; `--gpu` opts into hardware rendering.
-`--headed` opens a real interactive native window and requires a desktop
-with graphics support. It runs on Windows, Linux (x64/ARM64) and macOS.
+## Quickstart
 
-Agents drive it through a Python SDK or through any MCP-capable client.
-The automation surface is deliberately small: the entire protocol is
-auditable in an afternoon, unlike CDP.
+Add it to any MCP-capable client (Claude Desktop, [Kai](https://github.com/Omodaka9375/kai),
+Cursor, ...) and you are done. The engine binary is downloaded and
+sha256-verified on first run:
+
+```json
+{
+  "mcpServers": {
+    "browserr": { "command": "uvx", "args": ["browserr-mcp"] }
+  }
+}
+```
+
+42 tools: navigate, token-cheap reads, structured inventories with
+stable element refs, type-aware form filling, fail-closed interception,
+evidence capture, and human handoff. Python SDK and manual install:
+[Install](#install).
 
 ## Why Browserr
 
@@ -128,10 +141,6 @@ that follow from owning the whole stack:
 - Concurrent driver clients over `--driver-port`,
   optional token authentication
 
-## Requirements
-- Python 3.10+ for the SDK and MCP server (standard library only)
-- Rust stable only if you build from source
-
 ## Install
 
 ### MCP clients: one command
@@ -199,10 +208,7 @@ Browserr Term renders real pages inside a terminal pane at native
 resolution, using Sixel or the Kitty graphics protocol with dirty-rectangle
 patches computed in the engine. It needs no installer step:
 
-
-
 https://github.com/user-attachments/assets/44773ac0-c758-4726-a90e-4809564101e3
-
 
 
 ```sh
