@@ -1,0 +1,221 @@
+# Changelog
+
+All notable changes to Browserr are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the versioning
+scheme is [SemVer](https://semver.org/). Releases are published by CI on
+tag push; asset archives and full diffs live on the
+[releases page](https://github.com/Omodaka9375/browserr/releases).
+
+## [Unreleased]
+
+### Added
+
+- Terminal client (`term/`): interactive TUI that renders the engine's
+  native frames. Native Sixel with dirty-rectangle patches (cell-aligned,
+  band-quantized to stop scroll corruption), Kitty graphics, half-block
+  fallback. Runs on Windows Terminal, conhost, and inside tmux (passthrough
+  envelope with DECSC/DECRC cursor-state bracketing, auto-enabled
+  `allow-passthrough`). Launchers: `term\browserr-term.cmd`,
+  `term/browserr-term`. Shipped in the release archives.
+- Engine `frame` command and FRM2 protocol: native RGBA readback encoded to
+  PNG or Sixel in Rust, per-tab/per-stream dirty tracking, cell-aligned
+  patch rectangles, explicit END packet on every path. The engine accepts
+  `--width=`, `--height=`, and `--port=`.
+- MCP named sessions: `browser_start` accepts a `session` name; each
+  session is its own engine (one per proxy/user-agent group) on its own
+  port. `browser_start` also accepts a `user_agent` (engine argv, never
+  logged). Profile sessions now get unique ports too.
+- MCP `browser_navigate` fails last instead of fail first: a redirect that
+  rewrites the URL or a late commit is verified against the engine event
+  stream; the result carries `settled`, `error_page`, and a note instead of
+  throwing. Only a stalled engine raises.
+- llms.txt served from the landing page root for agent consumption.
+
+### Fixed
+
+- Terminal client: swapped Home/End key translation on Windows; astral
+  (emoji) input crashed the input loop on a lone UTF-16 surrogate; engine
+  death left a frozen screen labeled "loading"; split escape sequences were
+  typed into pages as garbage; QuickEdit consumed mouse input on conhost;
+  teardown could be swallowed by an unterminated Sixel DCS; half-block
+  clicks mapped to cell corners instead of centers; forms without submit
+  buttons could not be submitted by Enter.
+- MCP: `browser_stop` did not clear the legacy driver alias.
+- Driver: a timed-out native frame request leaked its patches into later
+  scans; the FRM2 header-size comment was wrong.
+- Engine: the frame command sent no END packet for an unknown tab, stalling
+  the client until timeout.
+
+### Changed
+
+- Test suite restructured into `tests/` (42 files, git renames); icon
+  build tooling moved into `scripts/`; the CI gate runs the new session,
+  user-agent, navigate-quirk, and terminal tests (39 total).
+
+## [0.6.2] - 2026-11-14
+
+### Added
+
+- Application icon: chevron embedded as an exe resource and shown on the
+  headed window title bar and taskbar. Regeneration tooling included.
+
+### Fixed
+
+- `wait_ready` no longer reports ready during Servo's transient
+  about:blank commit document; reads, evals, and screenshots no longer see
+  a blank page right after navigation.
+- Non-Windows builds: the icon embed code is cfg-gated so the build script
+  compiles on every platform.
+
+## [0.6.1] - 2026-11-14
+
+### Fixed
+
+- HTTP auth: a same-credentials re-challenge within 20 seconds is treated
+  as a rejection; stored credentials are invalidated, the challenge fails
+  closed, and the event stream records `auth_rejected`.
+- The driver strips userinfo from re-challenge URLs (Servo places
+  `user:pass@host` there) so credential matching works.
+- `submit_and_wait` no longer breaks early on network idle; a diagnostic
+  note reports what it observed.
+- Test honesty: the cross-origin local-navigation block in Servo is
+  Windows-only; the flow test asserts the real behavior on each platform.
+
+## [0.6.0] - 2026-11-13
+
+### Added
+
+- Upstream proxy support (HTTP/HTTPS with optional basic auth in the URL),
+  `no_proxy` exemptions, and the `browser_document_status` probe (method,
+  status, content-type of the current document, no render needed).
+- Settle-aware `browser_navigate`: commit budget (`wait_ms`) plus a settle
+  budget (`settle_ms`) with `settled: false` results instead of errors on
+  slow SPAs.
+
+## [0.5.0] - 2026-11-13
+
+### Added
+
+- SPA and JavaScript compatibility: pref-gated Servo APIs enabled, WebGL
+  through ANGLE, crypto and idle shims.
+
+### Changed
+
+- Linux CI pinned to ubuntu-24.04 (mozangle bindgen is incompatible with
+  LLVM 21); ANGLE DLL packaging hardened.
+
+## [0.4.0] - 2026-11-13
+
+### Added
+
+- Headed native window: real OS window for human handoff (logins, captchas,
+  payments) driven by the same engine and driver port.
+- Download buttons on the landing page resolve real assets from the GitHub
+  release API, with separate Linux x64 and ARM64 links.
+
+### Fixed
+
+- Stale element refs raise clear errors; the action log is readable.
+
+## [0.3.1] - 2026-11-12
+
+### Changed
+
+- CPU rendering is the default: instant start and it never fails on
+  GPU-less machines (Raspberry Pi, containers, CI). `--gpu` opts into
+  hardware rendering with automatic CPU fallback; `--software` is kept as
+  an explicit alias.
+- linux-arm64 release target: native Ubuntu ARM64 runner, arch-aware cache
+  keys, Raspberry Pi 4/5 documented.
+
+### Fixed
+
+- Load retries are time-based (2 s deadline), not tick-based; a tick costs
+  16 ms on GPU but about 1 s on paravirtualized CI GL, starving the retry.
+- macOS: surface FBO binding before rendering (CGL reported FB0 undefined
+  and killed the engine at first paint); CI matrix leg and release asset.
+
+## [0.3.0] - 2026-11-12
+
+### Added
+
+- Trust layer: persistent profiles on `browser_start`, evidence shots
+  (plain and annotated) plus an append-only action log, stored credentials
+  auto-answering HTTP auth (unknown hosts fail closed, credentials are
+  never logged), and a submit confirm gate on payment and captcha pages.
+- Human-in-the-loop primitives: pause/resume (mutating actions raise while
+  paused, reads keep working), `detect_handoff` for captcha, OTP, password,
+  payment, and consent pages, and the `browser_pause`, `browser_resume`,
+  `browser_detect_handoff`, and `browser_wait_for_user` MCP tools.
+- Annotated screenshots: numbered boxes by stable ref with a built-in
+  digit font (no dependencies) and an item list.
+- Form flow: `fill_form` (one round trip, type-aware), `submit_form`
+  (native submit; Servo's `requestSubmit` never reaches submit listeners),
+  `read_outcome`, `wait_network_idle`, `submit_and_wait`.
+- Form model v2: labels, constraints, computed validity, select option
+  labels, form grouping, stable refs, shadow DOM piercing.
+- Fail-closed request interception: hold, allow, deny, or respond, with a
+  pending-requests listing; net evidence userscript records every fetch
+  and XHR in every frame at document start; frame-tree command with
+  same-origin walking.
+- Auth challenge and file picker handling; MCP tool count grew from 19 to
+  36.
+
+### Changed
+
+- MCP tools: 19 to 36; test suite: 15 to 24 tests.
+
+## [0.2.2] - 2026-11-11
+
+### Added
+
+- Install story: `mcp_wrap` uses a relative script directory (no hardcoded
+  dev path); the driver finds an engine bundled next to itself in unpacked
+  releases; README install and MCP client setup docs.
+
+### Fixed
+
+- Landing page `og:url` points at browserr.dev.
+
+## [0.2.1] - 2026-11-11
+
+### Added
+
+- macOS port: CI probe leg, release matrix with macos-arm64, packaging
+  label and platform copy.
+- Landing page CNAME (browserr.dev) and monochrome chevron icon matching
+  the site's ink/paper system.
+
+### Fixed
+
+- Rendering prepare step binds the surface FBO before painting on macOS
+  (see 0.3.1 note for the related time-based retry fix).
+- CI artifact path uses `runner.os` (the matrix OS string is lowercase).
+
+## [0.2.0] - 2026-11-11
+
+### Added
+
+- Linux port: platform-aware SDK paths, cfg-gated Windows-only code, Linux
+  CI, dist, and package scripts, xvfb-backed render suite, release matrix
+  with linux-x64 asset.
+- Frames announced as events with pixels fetched via screenshot on demand
+  (continuous push wedged undrained sockets on Linux); resize uses the
+  surface-bound path (EGL framebuffer-undefined panic).
+
+### Fixed
+
+- Engine exit skips atexit handlers (Servo teardown deadlock stalled exit
+  on Linux); screenshots answer only the requester (main-socket wedge).
+- Patient pong handshake: cold engine init exceeds 2 s on llvmpipe, and a
+  short timeout killed the engine via main-client disconnect.
+
+## [0.1.0] - 2026-11-10
+
+### Added
+
+- First release: Servo-based engine in one Rust binary speaking a JSON
+  lines protocol over TCP; Rune chrome child process with resize wiring;
+  screenshot and live-frame streaming; driver SDK and MCP server;
+  fail-closed defaults; pump self-deadlock fix verified by navigation and
+  frame streaming.
