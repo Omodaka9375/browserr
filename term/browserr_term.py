@@ -611,7 +611,10 @@ class Term:
                 self.d.wheel(10000, tab=self.active)
             elif n == "End":
                 self.d.wheel(-10000, tab=self.active)
-            elif not self.url_mode:
+            elif not self.url_mode and n != "Backspace":
+                # Backspace is routed exclusively through the trailing
+                # handler: falling through here as well used to send the
+                # key twice, so one press deleted two chars in the page.
                 # Servo 0.8 does not implement implicit form submission:
                 # Enter in an <input> does nothing (verified). Click the
                 # owning form's submit button ourselves, like a polyfill.
@@ -646,6 +649,7 @@ class Term:
                 ch = ev["text"]
                 self.d.key("text", ch, down=True, tab=self.active)
                 self.d.key("text", ch, down=False, tab=self.active)
+        # Sole Backspace path: edit the URL buffer, or delete one page char.
         if ev["kind"] == "key" and ev.get("name") == "Backspace":
             if self.url_mode:
                 self.url_buf = self.url_buf[:-1]

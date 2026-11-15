@@ -62,13 +62,28 @@ if [ -n "$expected" ] && [ "$actual" != "$expected" ]; then
 fi
 [ -n "$expected" ] || echo "warning: release carries no digest; installed without verification" >&2
 
-backup="$here/backup-$version.tmp"
+# The backup must live OUTSIDE the install: cp -a "$here/." "$here/..."
+# copies a directory into its own child, which GNU cp refuses (and, worse,
+# returns exit 0 while doing so, so set -e never fires and the "backup"
+# silently stays empty). Match update.ps1, which uses %TEMP%. PID-suffixed
+# so concurrent runs cannot share one backup.
+backup="${TMPDIR:-/tmp}/browserr-backup-$version.$$.tmp"
 rm -rf "$backup"
 mkdir -p "$backup"
-cp -a "$here/." "$backup/"
+cp -a "$here/." "$backup/" || { echo "backup to $backup failed" >&2; exit 1; }
 
 tar -xzf "$tmp/$asset" -C "$tmp"
-cp -a "$tmp/dist/engine" "$here/" 2>/dev/null || cp -a "$tmp/." "$here/"
+# Flat archive layout (see package.sh): every payload file sits at the
+# archive root. Copy the known manifest only - never the whole extraction
+# tree, which also holds the downloaded asset itself.
+for f in engine driver.py browserr_mcp.py browserr_term.py \
+         browserr-term update.sh README.md LICENSE; do
+    if [ -f "$tmp/$f" ]; then cp -a "$tmp/$f" "$here/"; fi
+done
+if [ ! -f "$here/engine" ]; then
+    echo "asset payload had no engine; backup kept at $backup" >&2
+    exit 1
+fi
 
 newversion="$("$exe" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)"
 case "$newversion" in

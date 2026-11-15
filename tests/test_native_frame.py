@@ -111,5 +111,35 @@ assert patches and patches[0][1] == (0, 0, 1200, 760)
 title = d.eval_js("document.title")
 assert title == "Terminal Interaction", title
 
+# Offline regression: a whole batch already queued when native_frame wakes
+# (TCP coalescing) must be consumed completely. The old consumer removed
+# items while iterating and dropped the packet right after each hit.
+class _Batched:
+    pass
+
+
+fake = _Batched()
+fake._cond = threading.Condition()
+fake._next_id = 500
+fake.dead = False
+fake.native_frames = []
+
+
+def _fake_cmd(obj):
+    rb = obj["id"].to_bytes(8, "little")
+    fake.native_frames = [
+        (rb, (0, 0, 10, 10), 1, 0, b"p1"),
+        (rb, (10, 0, 10, 10), 1, 0, b"p2"),
+        (rb, (20, 0, 10, 10), 1, 0, b"p3"),
+        (rb, (0, 0, 0, 0), 0, 2, b""),
+    ]
+
+
+fake.cmd = _fake_cmd
+batched = Driver.native_frame(fake, format="png", timeout=2)
+assert [p[4] for p in batched] == [b"p1", b"p2", b"p3"], batched
+assert fake.native_frames == [], fake.native_frames
+print("native_frame consumes a coalesced multi-patch batch")
+
 print("ALL OK")
 d.close()

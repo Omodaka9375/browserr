@@ -593,23 +593,29 @@ class Driver:
                   "stream": stream, "cell_w": cell_w, "cell_h": cell_h,
                   "force": force})
         deadline = time.time() + timeout
+        rb = req.to_bytes(8, "little")
         patches = []
         with self._cond:
             while True:
-                for packet in self.native_frames:
-                    if packet[0] == req.to_bytes(8, "little"):
-                        self.native_frames.remove(packet)
-                        if not (packet[3] & 2):
-                            patches.append(packet)
-                        else:
-                            return patches
+                # Take this request's whole batch in one pass. remove()
+                # inside a for-loop over self.native_frames shifts the list
+                # under the iterator and skips the packet right after each
+                # hit: a coalesced [P1, P2, END] wake returned only P1, and
+                # P2 stayed forever (request ids never repeat, so the
+                # timeout purge below never matches it either).
+                batch = [p for p in self.native_frames if p[0] == rb]
+                if batch:
+                    self.native_frames = [p for p in self.native_frames
+                                          if p[0] != rb]
+                    patches += [p for p in batch if not (p[3] & 2)]
+                    if any(p[3] & 2 for p in batch):
+                        return patches
                 if self.dead:
                     raise EngineDeadError("engine socket gone (native frame)")
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     # Do not leak this request's patches into later scans.
-                    self.native_frames = [p for p in self.native_frames
-                                          if p[0] != req.to_bytes(8, "little")]
+                    self.native_frames = [p for p in self.native_frames if p[0] != rb]
                     raise TimeoutError("native frame never completed")
                 self._cond.wait(min(remaining, 0.25))
 

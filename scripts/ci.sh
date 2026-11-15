@@ -44,7 +44,7 @@ fi
 run_test() {
     echo "-- $1"
     if [ -n "${XUVB_PREFIX:-}" ]; then
-        $XUVB_PREFIX python "tools/$1.py" > "$1.log" 2>&1
+        $XUVB_PREFIX python "tests/$1.py" > "$1.log" 2>&1
     else
         python "tests/$1.py" > "$1.log" 2>&1
     fi

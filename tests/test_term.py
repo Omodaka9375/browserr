@@ -112,5 +112,21 @@ d.wait_load()
 assert t.url == "file:///" + os.path.join(HERE, "term-fixture.html").replace("\\", "/"), t.url
 print("urlbar ok")
 
+# 7) Backspace fires exactly once per press in both modes. The main key
+# chain and the trailing handler used to BOTH send it: one press deleted
+# two chars in the page.
+keys_sent = []
+_real_key = t.d.key
+t.d.key = lambda *a, **k: keys_sent.append((a, k))
+t.handle_key({"kind": "key", "name": "Backspace", "text": ""})
+assert len(keys_sent) == 1 and keys_sent[0][0] == ("Backspace",), keys_sent
+t.handle_key({"kind": "ctrl", "c": "L"})
+t.url_buf = "abc/"
+t.handle_key({"kind": "key", "name": "Backspace", "text": ""})
+assert t.url_buf == "abc" and len(keys_sent) == 1, (t.url_buf, keys_sent)
+t.url_mode = False
+t.d.key = _real_key
+print("backspace single-send OK")
+
 print("ALL OK")
 d.close()

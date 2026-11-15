@@ -29,14 +29,24 @@ esac
 platform="$os-$arch"
 out="browserr-$version-$platform.tar.gz"
 rm -f "$out"
-tar -czf "$out" \
-    -C "$root" \
-    dist/engine \
-    tools/driver.py \
-    tools/browserr_mcp.py \
-    term/browserr_term.py \
-    term/browserr-term \
-    scripts/update.sh \
-    README.md \
-    LICENSE
+# Flat unpack layout (matches README and the Windows zip): every payload
+# file at the archive root, next to the engine. driver.py finds its engine
+# next to itself, the TUI launcher looks for the engine beside
+# browserr_term.py, and update.sh refuses to run unless the engine is next
+# to it - all three need the flat shape. tar cannot rename members
+# portably (--transform is GNU-only, macOS ships bsdtar), so stage a flat
+# directory and archive its contents.
+stage="$(mktemp -d)"
+cp "$root/dist/engine" \
+   "$root/tools/driver.py" \
+   "$root/tools/browserr_mcp.py" \
+   "$root/term/browserr_term.py" \
+   "$root/term/browserr-term" \
+   "$root/scripts/update.sh" \
+   "$root/README.md" \
+   "$root/LICENSE" \
+   "$stage/"
+chmod +x "$stage/engine" "$stage/browserr-term" "$stage/update.sh"
+tar -czf "$out" -C "$stage" .
+rm -rf "$stage"
 echo "packaged: $out ($(du -h "$out" | cut -f1))"
