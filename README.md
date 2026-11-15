@@ -158,10 +158,12 @@ next to itself; override with `BROWSERR_ENGINE=/path/to/engine`.
 ### Update an existing unpack
 
 Re-download the archive, or run the updater shipped inside it. It queries
-the GitHub API, verifies the download against the release's sha256 digest,
-backs up the current files, copies the new payload over this directory,
-and verifies the new binary before cleaning up. Stop a running engine
-first (a running executable cannot be replaced on Windows).
+the GitHub API, verifies the download against the release's sha256 digest
+and refuses to install if the digest is missing or wrong (pass
+`-AllowNoDigest` / set `ALLOW_NO_DIGEST=1` to override), backs up the
+current files, copies the new payload over this directory, and verifies
+the new binary before cleaning up. Stop a running engine first (a running
+executable cannot be replaced on Windows).
 
 ```sh
 ./update.sh                    # macOS / Linux: latest release

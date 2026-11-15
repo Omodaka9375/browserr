@@ -128,5 +128,30 @@ t.url_mode = False
 t.d.key = _real_key
 print("backspace single-send OK")
 
+# 8) poll_meta advances by what it consumed, not by a re-read list length.
+# The reader thread can append between the slice and the advance; the old
+# `self._meta_seq = len(events)` jumped over that event and the status bar
+# never saw it. _Appending models the race: len() is one ahead of what the
+# slice can see.
+class _Appending(list):
+    extra = 1
+
+    def __len__(self):
+        return list.__len__(self) + self.extra
+
+
+real_events = t.d.events
+fake = _Appending([{"ev": "url", "tab": 0, "url": "one/"}])
+t.d.events = fake
+t._meta_seq = 0
+t.poll_meta()
+assert t.url == "one/", t.url
+assert t._meta_seq == 1, t._meta_seq  # old code: 2, skipping the next event
+fake.append({"ev": "url", "tab": 0, "url": "two/"})
+t.poll_meta()
+assert t.url == "two/", (t.url, t._meta_seq)
+t.d.events = real_events
+print("poll_meta consumes concurrent appends OK")
+
 print("ALL OK")
 d.close()

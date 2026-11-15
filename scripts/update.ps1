@@ -19,7 +19,7 @@
 # job that is killed after a timeout (never leave an engine behind), and
 # an "unknown" version is acceptable: the update still proceeds.
 [CmdletBinding(SupportsShouldProcess)]
-param([string]$Version)
+param([string]$Version, [switch]$AllowNoDigest)
 $ErrorActionPreference = "Stop"
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -85,14 +85,22 @@ try {
         -Headers $headers -UserAgent "browserr-update"
 
     # GitHub's API reports the digest it observed on upload; a mismatch
-    # aborts before anything is unpacked.
+    # aborts before anything is unpacked. A missing digest is a hard stop
+    # too: silently installing an unverified binary defeats the whole
+    # point of the check (the digest is the only corruption/asset-swap
+    # guard - TLS only covers the transport). Opt in explicitly to skip.
     $expected = ($asset.digest -replace '^sha256:', '').ToLower()
     $actual = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLower()
     if ($expected -and ($actual -ne $expected)) {
         Write-Error "sha256 mismatch: expected $expected got $actual"
     }
     if (-not $expected) {
-        Write-Warning "release carries no digest; installed without verification"
+        if (-not $AllowNoDigest) {
+            Write-Error ("release carries no sha256 digest; refusing to " +
+                         "install unverified. Pass -AllowNoDigest to " +
+                         "override, or re-download the archive by hand.")
+        }
+        Write-Warning "no digest published; installing unverified (-AllowNoDigest)"
     }
 
     # --- back up, unpack, replace ------------------------------------------

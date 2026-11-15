@@ -60,7 +60,17 @@ if [ -n "$expected" ] && [ "$actual" != "$expected" ]; then
     echo "sha256 mismatch: expected $expected got $actual" >&2
     exit 1
 fi
-[ -n "$expected" ] || echo "warning: release carries no digest; installed without verification" >&2
+# A missing digest aborts too: the digest is the only corruption/asset-swap
+# guard (TLS covers the transport, not what GitHub stored). Override
+# explicitly with ALLOW_NO_DIGEST=1 if you must install an unverified asset.
+if [ -z "$expected" ]; then
+    if [ -z "${ALLOW_NO_DIGEST:-}" ]; then
+        echo "release carries no sha256 digest; refusing to install " \
+             "unverified (set ALLOW_NO_DIGEST=1 to override)" >&2
+        exit 1
+    fi
+    echo "warning: no digest published; installing unverified" >&2
+fi
 
 # The backup must live OUTSIDE the install: cp -a "$here/." "$here/..."
 # copies a directory into its own child, which GNU cp refuses (and, worse,

@@ -560,12 +560,17 @@ class Term:
         events = self.d.events
         if self._meta_seq > len(events):
             self._meta_seq = 0  # events were cleared externally
-        for e in events[self._meta_seq:]:
+        batch = events[self._meta_seq:]
+        for e in batch:
             if e.get("ev") == "url" and e.get("tab") == self.active:
                 self.url = e.get("url") or self.url
             elif e.get("ev") == "title" and e.get("tab") == self.active:
                 self.title = (e.get("title") or "")[:40]
-        self._meta_seq = len(events)
+        # Advance by what THIS call consumed. Re-reading len(events) after
+        # the loop would jump past anything the reader thread appended
+        # while we were iterating, and that url/title would never reach
+        # the status bar.
+        self._meta_seq += len(batch)
 
     def handle_key(self, ev):
         if ev["kind"] == "ctrl":
