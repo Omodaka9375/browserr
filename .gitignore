@@ -34,6 +34,7 @@ term/*.log
 term/native-frame.png
 
 # one-off smoke probes and binary captures (reusable harnesses are committed)
+.smoke/gh-logs/
 .smoke/*.bin
 .smoke/sixel_probe.sh
 .smoke/tmux_query_test.py
