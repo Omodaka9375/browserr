@@ -239,8 +239,7 @@ The one-liner (no download, no paths):
 ```
 
 Or, pointing the client at an unpacked archive. On Windows, use the bundled
-wrapper (Kai's MCP client and some others do not resolve bare `python`;
-cmd does):
+wrapper:
 
 ```json
 {
