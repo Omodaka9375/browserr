@@ -6,7 +6,7 @@ scheme is [SemVer](https://semver.org/). Releases are published by CI on
 tag push; asset archives and full diffs live on the
 [releases page](https://github.com/Omodaka9375/browserr/releases).
 
-## [Unreleased]
+## [0.7.0] - 2026-11-15
 
 ### Added
 
@@ -30,6 +30,16 @@ tag push; asset archives and full diffs live on the
   stream; the result carries `settled`, `error_page`, and a note instead of
   throwing. Only a stalled engine raises.
 - llms.txt served from the landing page root for agent consumption.
+- In-place updater shipped in the release archives: `update.ps1` /
+  `update.cmd` / `update.sh`. Resolves the latest GitHub release (or an
+  explicit `-Version` tag), verifies the asset's sha256 digest (refuses to
+  install unverified payloads; override with `-AllowNoDigest` /
+  `ALLOW_NO_DIGEST=1`), backs up the current install outside the tree,
+  copies the new payload, and confirms the replacement by `--version`.
+- Engine `--version`: prints `browserr <version>` and exits before any GL
+  or servo init, so it works on machines without a display. Engines older
+  than 0.7.0 ignore the flag and boot the browser instead, so the updater
+  always probes it under a timeout.
 
 ### Fixed
 
@@ -45,6 +55,13 @@ tag push; asset archives and full diffs live on the
   scans; the FRM2 header-size comment was wrong.
 - Engine: the frame command sent no END packet for an unknown tab, stalling
   the client until timeout.
+- Updater: the Linux/macOS digest extraction never matched GitHub's compact
+  release JSON (a nested uploader object sits between the asset name and
+  its digest), so updates installed unverified; the check now anchors on
+  digest -> download URL and fails closed when a digest is absent.
+- Tests: file:// fixture URLs were built as "file:///" + an absolute path,
+  which yields four slashes on POSIX; all sites now use
+  `pathlib.Path.as_uri()`.
 
 ### Changed
 
