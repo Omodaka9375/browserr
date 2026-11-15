@@ -60,8 +60,12 @@ TLS only covers the transport.
 Prefer to install ahead of time?
 
 ```sh
-uvx browserr-install
+uvx --from browserr-mcp browserr-install
 ```
+
+(`uvx` runs entry points from the package; the bare `--from` form is
+needed because `browserr-install` is an entry point of `browserr-mcp`,
+not a package name.)
 
 ## Links
 

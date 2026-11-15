@@ -44,7 +44,7 @@ import tempfile
 import urllib.request
 import zipfile
 
-__version__ = "0.7.1"
+__version__ = "0.7.2"
 
 REPO = "Omodaka9375/browserr"
 API = "https://api.github.com"
@@ -206,4 +206,5 @@ def install_main() -> None:
         return
     ensure_engine()
     print(f"browserr-install: v{tag} installed at {dest}")
-    print('MCP config: {"command": "browserr-mcp"}')
+    print("MCP config: uvx browserr-mcp (or pip install browserr-mcp "
+          "then command browserr-mcp)")
