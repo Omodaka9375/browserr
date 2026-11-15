@@ -193,7 +193,7 @@ Keys: `ctrl+l` URL bar, `ctrl+t` new tab, `ctrl+]/[` switch tabs,
 Inside tmux pass `--cell W:H` to match your font size (tmux cannot relay
 the terminal's pixel-cell query). Details: `term/README.md` in the repo.
 
-### Connect an MCP client (Kai, Claude Desktop, ...)
+### Connect an MCP client ([Kai](https://github.com/Omodaka9375/kai), Claude Desktop, ...)
 
 Add the Browserr server in your client's MCP settings:
 
@@ -370,6 +370,11 @@ evidence dir and action log; evidence shots, auto-auth and the submit
 confirm gate are on by default for MCP-started engines. Set
 `auto_auth: false` to use the manual auth tools. Navigation returns an
 `auth_required` challenge instead of waiting for a blocked page.
+
+A good match for driving it: [Kai](https://github.com/Omodaka9375/kai),
+an agentic developer terminal from the same author as Browserr. Kai
+speaks MCP natively, so all 42 tools show up first-class next to its
+editor and terminal - Browserr is the browser half of that stack.
 
 ### Upstream proxy
 
