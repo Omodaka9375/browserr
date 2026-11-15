@@ -74,6 +74,18 @@ if (-not $asset) {
 Write-Host "updating $engineVersion -> $tag"
 Write-Host "asset: $($asset.name) ($([math]::Round($asset.size / 1MB, 1)) MB)"
 
+# The download URL ships in the same API response as the digest, so it is
+# not a MITM defence (TLS is); pin scheme/host and a sane size ceiling so a
+# broken/odd response cannot send the download off-site or exhaust memory.
+$dl = [uri]$asset.browser_download_url
+if ($dl.Scheme -ne "https" -or $dl.Host -notin @("github.com", "objects.githubusercontent.com")) {
+    Write-Error "refusing non-GitHub download URL: $($asset.browser_download_url)"
+}
+if ($asset.size -gt 500MB) {
+    Write-Error ("refusing implausibly large asset " +
+                 "($([math]::Round($asset.size / 1MB, 1)) MB)")
+}
+
 if ($WhatIfPreference) { Write-Host "-WhatIf: stopping before download"; exit 0 }
 
 # --- download and verify ----------------------------------------------------
@@ -124,9 +136,12 @@ try {
     # --- verify --------------------------------------------------------------
     $newVersion = Get-EngineVersion $engine
     if ($newVersion -eq "unknown") {
-        Write-Warning ("new engine did not answer --version (engines older " +
-                       "than 0.7.0 ignore the flag); files copied, update " +
-                       "assumed complete")
+        # The binary we just installed is >= 0.7.0 and always answers
+        # --version (it returns before any GL/servo init). Silence here
+        # means the copied file is not the expected release: fail closed
+        # and keep the backup, matching update.sh.
+        Write-Error ("new engine did not answer --version; the copied " +
+                     "binary is not the expected release; backup is at $backup")
     } elseif ($newVersion -ne $tag) {
         Write-Error ("updated binary reports {0}, expected {1}; backup is " +
                      "at {2}" -f $newVersion, $tag, $backup)

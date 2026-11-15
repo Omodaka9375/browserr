@@ -548,8 +548,6 @@ class Driver:
                     return
             except TimeoutError:
                 pass
-            except TimeoutError:
-                pass
             time.sleep(0.2)
         raise TimeoutError("page never became ready")
 

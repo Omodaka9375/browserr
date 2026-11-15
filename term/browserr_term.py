@@ -234,6 +234,18 @@ class RawInput:
         return bytes(result)
 
 
+def _strip_ctl(s):
+    """Drop C0/DEL control characters from page-influenced text.
+
+    The status bar is the one place where a page-supplied url/title or an
+    error string reaches the terminal escape stream. The engine's URL
+    parser already strips control bytes, so this is defence in depth: an
+    embedded ESC here could otherwise smuggle a control sequence. Keep
+    printable (>= 0x20) and drop DEL (0x7f).
+    """
+    return "".join(c for c in (s or "") if c >= " " and c != "\x7f")
+
+
 def parse_keys(buf):
     """Split a stdin byte buffer into key events.
 
@@ -679,6 +691,13 @@ class Term:
             return
         px, py = self.to_page_xy(ev["x"], ev["y"])
         if ev["action"] == "press":
+            # press = a full click (down+up at the same point), the
+            # documented model: "click = page click, wheel = page scroll".
+            # A held-button drag is deliberately NOT mapped to down...move
+            # ...up: that would rely on receiving the release to lift the
+            # button, and a dropped release leaves the page stuck in
+            # mousedown - a worse failure than losing text-selection /
+            # HTML5 drag-drop, which are out of scope for 0.7.0.
             self.d.click(px, py, tab=self.active)
         elif ev["action"] == "drag":
             self.d.move(px, py, tab=self.active)
@@ -694,8 +713,11 @@ class Term:
 
     def draw_status(self):
         mode = "URL" if self.url_mode else "VIEW"
-        s = f" [{mode}] {self.url if not self.url_mode else self.url_buf + '_'}"
-        s += f" | tab {self.active} | {self.status} | {self.fps_now:.0f}fps"
+        # url/url_buf/status can carry page- or engine-supplied text; strip
+        # control chars so none of it can break out into an escape sequence.
+        cu, cub, cs = _strip_ctl(self.url), _strip_ctl(self.url_buf), _strip_ctl(self.status)
+        s = f" [{mode}] {cu if not self.url_mode else cub + '_'}"
+        s += f" | tab {self.active} | {cs} | {self.fps_now:.0f}fps"
         s += f" | frame:{self.last_frame_ms:.0f}ms"
         if self.renderer is not None:
             s += f" | {type(self.renderer).__name__} dirty:{self.dirty}"

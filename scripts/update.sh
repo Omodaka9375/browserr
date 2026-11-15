@@ -4,7 +4,7 @@
 # Runs from inside the unpack (the engine binary next to this script).
 # Downloads the platform asset, verifies it against the sha256 digest
 # GitHub reports for the asset, then extracts the payload over this
-# directory. Needs: curl (or wget), unzip or tar, sha256sum or shasum.
+# directory. Needs: curl (or wget), tar, sha256sum or shasum.
 #
 # Usage: ./update.sh [tag]     (default: latest release)
 set -eu
@@ -21,8 +21,6 @@ else echo "need curl or wget" >&2; exit 1; fi
 if command -v sha256sum >/dev/null 2>&1; then hash() { sha256sum "$1" | cut -d' ' -f1; }
 elif command -v shasum >/dev/null 2>&1; then hash() { shasum -a 256 "$1" | cut -d' ' -f1; }
 else echo "need sha256sum or shasum" >&2; exit 1; fi
-
-if [ -f "$here/unzip" ] || command -v unzip >/dev/null 2>&1; then UNZIP=1; fi
 
 version="$("$exe" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)"
 version="${version:-unknown}"  # pre-0.6 archives have no --version
@@ -46,6 +44,13 @@ case "$arch" in x86_64|amd64) arch=x64 ;; aarch64|arm64) arch=arm64 ;; esac
 asset="browserr-$tag-$os-$arch.tar.gz"
 url=$(printf '%s' "$release" | grep -o "\"browser_download_url\": *\"[^\"]*$asset\"" | head -1 | sed 's/.*"\(https[^"]*\)".*/\1/')
 [ -n "$url" ] || { echo "release $tag has no asset $asset" >&2; exit 1; }
+# The URL comes from the same API response as the digest, so this is not a
+# MITM defence (TLS is); it just pins the host so a broken/odd response
+# cannot send the download off-site. (The sed above already forces https.)
+case "$url" in
+    https://github.com/*|https://objects.githubusercontent.com/*) ;;
+    *) echo "refusing non-GitHub download URL: $url" >&2; exit 1 ;;
+esac
 
 echo "updating $version -> $tag"
 
