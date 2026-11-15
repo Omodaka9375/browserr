@@ -59,7 +59,14 @@ trap 'rm -rf "$tmp"' EXIT
 curl -fsSL -H "User-Agent: browserr-update" -o "$tmp/$asset" "$url" 2>/dev/null \
     || wget -qO "$tmp/$asset" --header="User-Agent: browserr-update" "$url"
 
-expected=$(printf '%s' "$release" | grep -o "\"name\": *\"$asset\"[^}]*\"digest\": *\"sha256:[0-9a-f]*\"" | head -1 | grep -o '[0-9a-f]\{64\}' || true)
+# Pull this asset's digest out of the release JSON with grep (no jq
+# dependency). Anchor on digest -> browser_download_url, NOT name ->
+# digest: the asset's nested "uploader":{...} object closes with a '}'
+# between the name and digest fields, so a "[^}]*" span starting at name
+# never reaches digest and always returns empty. Between digest and
+# browser_download_url there are only scalar fields, so [^}]* stays inside
+# one asset object and cannot leak into the next.
+expected=$(printf '%s' "$release" | grep -o "\"digest\": *\"sha256:[0-9a-f]*\"[^}]*\"browser_download_url\": *\"[^\"]*$asset\"" | head -1 | grep -o '[0-9a-f]\{64\}' || true)
 actual=$(hash "$tmp/$asset")
 if [ -n "$expected" ] && [ "$actual" != "$expected" ]; then
     echo "sha256 mismatch: expected $expected got $actual" >&2

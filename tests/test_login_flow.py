@@ -1,6 +1,7 @@
 """Login through the TUI code path: mouse-click fields, type, Enter."""
 import json
 import os
+import pathlib
 import sys
 import time
 
@@ -12,7 +13,7 @@ for p in (HERE, os.path.join(HERE, "..", "tools")):
 from driver import Driver
 from browserr_term import Term, parse_keys
 
-fixture = "file:///" + os.path.join(HERE, "login-fixture.html").replace("\\", "/")
+fixture = pathlib.Path(os.path.join(HERE, "login-fixture.html")).as_uri()
 d = Driver(ephemeral=True)
 t = Term(d, 100, 30)
 t.go(fixture)

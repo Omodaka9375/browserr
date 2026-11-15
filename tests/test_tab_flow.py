@@ -1,5 +1,6 @@
 """Multi-tab TUI behavior: switching repaints and the status follows the tab."""
 import os
+import pathlib
 import sys
 import time
 
@@ -11,7 +12,7 @@ for p in (HERE, os.path.join(HERE, "..", "tools")):
 from driver import Driver
 from browserr_term import Term
 
-fixture = "file:///" + os.path.join(HERE, "native-fixture.html").replace("\\", "/")
+fixture = pathlib.Path(os.path.join(HERE, "native-fixture.html")).as_uri()
 d = Driver(ephemeral=True)
 t = Term(d, 100, 30)
 
@@ -36,7 +37,7 @@ assert patches and patches[0][3] & 1, "tab 1 must begin with a full frame"
 
 # Navigate tab 1 to a real second document, then poll engine events like
 # the TUI does.
-fixture2 = "file:///" + os.path.join(HERE, "term-fixture.html").replace("\\", "/")
+fixture2 = pathlib.Path(os.path.join(HERE, "term-fixture.html")).as_uri()
 d.navigate(fixture2, tab=nid)
 d.wait_load(tab=nid)
 d.wait_ready(tab=nid)

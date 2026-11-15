@@ -1,5 +1,6 @@
 """Benchmark old raw BGRA versus native PNG/Sixel patches."""
 import os
+import pathlib
 import sys
 import time
 
@@ -7,7 +8,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 from driver import Driver
 
-url = sys.argv[1] if len(sys.argv) > 1 else "file:///" + os.path.join(HERE, "scroll-fixture.html").replace("\\", "/")
+url = sys.argv[1] if len(sys.argv) > 1 else pathlib.Path(os.path.join(HERE, "scroll-fixture.html")).as_uri()
 d = Driver(ephemeral=True, width=1200, height=760)
 d.navigate(url)
 d.wait_load()

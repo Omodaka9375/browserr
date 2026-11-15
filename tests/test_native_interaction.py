@@ -1,5 +1,6 @@
 """Native viewport, scrolling and tab frame-state integration checks."""
 import os
+import pathlib
 import sys
 import time
 
@@ -8,7 +9,7 @@ HERE = os.path.join(os.path.dirname(HERE), "term")
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 from driver import Driver
 
-url = "file:///" + os.path.join(HERE, "scroll-fixture.html").replace("\\", "/")
+url = pathlib.Path(os.path.join(HERE, "scroll-fixture.html")).as_uri()
 d = Driver(ephemeral=True, width=800, height=600)
 d.navigate(url)
 d.wait_load(contains="scroll-fixture")

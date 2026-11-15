@@ -2,6 +2,7 @@
 import io
 import re
 import os
+import pathlib
 import sys
 import time
 import numpy as np
@@ -13,7 +14,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 from driver import Driver
 
 d = Driver(ephemeral=True, width=800, height=600)
-d.navigate("file:///" + os.path.join(HERE, "native-fixture.html").replace("\\", "/"))
+d.navigate(pathlib.Path(os.path.join(HERE, "native-fixture.html")).as_uri())
 d.wait_load()
 d.wait_ready()
 time.sleep(0.5)

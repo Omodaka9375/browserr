@@ -1,5 +1,5 @@
 """Offline test for the TUI: Term handlers + dirty blit + synthetic input."""
-import sys, os, time, json, io
+import sys, os, time, json, io, pathlib
 HERE = os.path.dirname(os.path.abspath(__file__))
 HERE = os.path.join(os.path.dirname(HERE), "term")
 for p in (HERE, os.path.join(HERE, "..", "tools")):
@@ -55,7 +55,7 @@ if os.name == "nt":
 
 d = Driver(ephemeral=True)
 t = Term(d, 100, 30)
-t.go("file:///" + os.path.join(HERE, "term-fixture.html").replace("\\", "/"))
+t.go(pathlib.Path(os.path.join(HERE, "term-fixture.html")).as_uri())
 d.wait_load(); d.wait_ready(); time.sleep(0.5)
 
 # 1) dirty render path with real frames
@@ -105,11 +105,11 @@ print("click ok:", txt)
 # 6) URL bar flow
 t.handle_key({"kind": "ctrl", "c": "L"})
 assert t.url_mode
-for ch in "file:///" + os.path.join(HERE, "term-fixture.html").replace("\\", "/"):
+for ch in pathlib.Path(os.path.join(HERE, "term-fixture.html")).as_uri():
     t.handle_key({"kind": "text", "text": ch})
 t.handle_key({"kind": "key", "name": "Enter", "text": ""})
 d.wait_load()
-assert t.url == "file:///" + os.path.join(HERE, "term-fixture.html").replace("\\", "/"), t.url
+assert t.url == pathlib.Path(os.path.join(HERE, "term-fixture.html")).as_uri(), t.url
 print("urlbar ok")
 
 # 7) Backspace fires exactly once per press in both modes. The main key
