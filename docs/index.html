@@ -358,6 +358,16 @@
     }
     .os-meta b { color: var(--ink); font-weight: 600; }
 
+    /* one-command install card */
+    .onecmd { margin: 0 0 40px; }
+    .onecmd .os-card h4 { margin-bottom: 14px; }
+    .onecmd pre {
+      margin: 0 0 14px; padding: 14px 18px; overflow-x: auto;
+      background: var(--ink); color: var(--paper);
+      font-family: var(--mono); font-size: 0.82rem; line-height: 1.6;
+    }
+    .onecmd pre a { color: var(--paper); text-decoration: underline; }
+
     /* ————— terminal demo video ————— */
     .demo { margin: 44px 0 0; }
     .demo video { display: block; width: 100%; max-width: 880px; margin: 0 auto;
@@ -593,8 +603,22 @@
         </div>
         <h2>Get Browserr in seconds.</h2>
         <p class="lead">
-          One package per platform: the engine binary, Python SDK, and the MCP server.
+          One command for MCP clients; one package per platform for everything else.
         </p>
+        <div class="onecmd">
+          <div class="os-card">
+            <h4>Any MCP client</h4>
+            <p>No download, no paths. The engine is fetched and sha256-verified on
+               first run; later starts are instant.</p>
+            <pre>{
+  "mcpServers": {
+    "browserr": { "command": "uvx", "args": ["browserr-mcp"] }
+  }
+}</pre>
+            <p>Package: <a href="https://pypi.org/project/browserr-mcp/">browserr-mcp on PyPI</a>.
+               Or prefer an archive:</p>
+          </div>
+        </div>
         <div class="os-tabs" role="tablist" id="osTabs">
           <button class="os-tab" role="tab" data-os="windows" aria-selected="true">Windows</button>
           <button class="os-tab" role="tab" data-os="linux">Linux</button>

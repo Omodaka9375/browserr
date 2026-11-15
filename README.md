@@ -134,6 +134,27 @@ that follow from owning the whole stack:
 
 ## Install
 
+### MCP clients: one command
+
+The `browserr-mcp` package on PyPI installs the MCP server with a single
+config entry. The engine binary is downloaded from the official GitHub
+release and sha256-verified on first run (~46 MB, once); every later start
+is instant:
+
+```json
+{
+  "mcpServers": {
+    "browserr": { "command": "uvx", "args": ["browserr-mcp"] }
+  }
+}
+```
+
+([uv](https://docs.astral.sh/uv/) resolves the package; `pip install
+browserr-mcp` and command `browserr-mcp` work the same.) Pin a release
+with `BROWSERR_VERSION`, override the install dir with `BROWSERR_HOME`.
+
+### Manual: download the archive
+
 Download the archive for your platform from
 [releases](https://github.com/Omodaka9375/browserr/releases) and unpack it
 anywhere (no admin rights, no installer). You get:
@@ -201,21 +222,19 @@ the terminal's pixel-cell query). Details: `term/README.md` in the repo.
 
 ### Connect an MCP client ([Kai](https://github.com/Omodaka9375/kai), Claude Desktop, ...)
 
-Add the Browserr server in your client's MCP settings:
+The one-liner (no download, no paths):
 
 ```json
 {
   "mcpServers": {
-    "browserr": {
-      "command": "python",
-      "args": ["C:/path/to/browserr/browserr_mcp.py"],
-      "cwd": "C:/path/to/browserr"
-    }
+    "browserr": { "command": "uvx", "args": ["browserr-mcp"] }
   }
 }
 ```
 
-On Windows, you can also point the command at the bundled wrapper:
+Or, pointing the client at an unpacked archive. On Windows, use the bundled
+wrapper (Kai's MCP client and some others do not resolve bare `python`;
+cmd does):
 
 ```json
 {
@@ -228,8 +247,7 @@ On Windows, you can also point the command at the bundled wrapper:
 }
 ```
 
-The server spawns its own engine (ephemeral profile) on first tool use;
-`browser_stop` shuts it down. To share one engine across sessions, start
+To share one engine across sessions, start
 it yourself with a driver port and attach instead:
 
 ```powershell
