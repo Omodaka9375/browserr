@@ -1189,10 +1189,16 @@ class Driver:
                 o.checked = !!el.checked;
                 if (type === 'radio' && el.name) o.group = el.name;
             } else if (el.isContentEditable) {
-                o.value = txt(el, 200);
+                const t = ((el.textContent || '')).replace(/\\s+/g, ' ').trim();
+                o.value = t.slice(0, 200);
+                if (t.length > 200) o.value_clipped = t.length;
             } else {
-                o.value = String(el.value == null ? '' : el.value).slice(0, 200);
+                const v = String(el.value == null ? '' : el.value);
+                o.value = v.slice(0, 200);
+                if (v.length > 200) o.value_clipped = v.length;
             }
+            // JS numbers arrive as doubles through eval; keep the JSON int.
+            if (o.value_clipped !== undefined) o.value_clipped = Math.round(o.value_clipped);
             if (Object.keys(c).length) o.constraints = c;
             o.valid = reasons.length === 0;
             if (reasons.length) o.invalid = reasons;
