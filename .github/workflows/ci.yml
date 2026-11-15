@@ -99,6 +99,13 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install python test deps
+        # The full unix gate runs the terminal-client tests, which import
+        # numpy and PIL (frame decode/compare); the windows leg runs
+        # GPU-less mode and needs neither, but installing everywhere keeps
+        # the matrix uniform and future-proof.
+        run: python -m pip install --disable-pip-version-check numpy pillow
+
       - name: fmt + clippy + build + python test suite (windows)
         shell: pwsh
         env:
