@@ -75,3 +75,5 @@ not a package name.)
 
 Apache-2.0. Engine and Python tooling are stdlib-only; this bootstrap
 adds no third-party Python dependencies.
+
+<!-- mcp-name: io.github.Omodaka9375/browserr -->

@@ -1,9 +1,9 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.omodaka9375/browserr",
+  "name": "io.github.Omodaka9375/browserr",
   "title": "Browserr",
   "description": "Fail-closed browser for agents: navigate, extract, fill forms, human handoff, evidence. No Chromium.",
-  "version": "0.7.2",
+  "version": "0.7.4",
   "repository": {
     "url": "https://github.com/Omodaka9375/browserr",
     "source": "github"
@@ -13,7 +13,7 @@
     {
       "registryType": "pypi",
       "identifier": "browserr-mcp",
-      "version": "0.7.2",
+      "version": "0.7.4",
       "transport": {
         "type": "stdio"
       }

@@ -44,7 +44,7 @@ import tempfile
 import urllib.request
 import zipfile
 
-__version__ = "0.7.2"
+__version__ = "0.7.4"
 
 REPO = "Omodaka9375/browserr"
 API = "https://api.github.com"
