@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "browserr-mcp"
+version = "0.7.1"
+description = "MCP server for Browserr, the Servo-based agent browser. One command; the platform engine binary is downloaded and digest-verified on first run."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{ name = "Omodaka9375" }]
+keywords = [
+  "mcp",
+  "model-context-protocol",
+  "browser",
+  "browser-automation",
+  "servo",
+  "ai",
+  "agents",
+  "headless",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Rust",
+  "Topic :: Internet :: WWW/HTTP :: Browsers",
+  "Topic :: Software Development :: Testing",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://browserr.dev/"
+Repository = "https://github.com/Omodaka9375/browserr"
+Changelog = "https://github.com/Omodaka9375/browserr/blob/main/CHANGELOG.md"
+Issues = "https://github.com/Omodaka9375/browserr/issues"
+
+[project.scripts]
+browserr-mcp = "browserr_bootstrap:main"
+browserr-install = "browserr_bootstrap:install_main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/browserr_bootstrap"]
