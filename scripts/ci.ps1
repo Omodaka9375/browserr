@@ -60,7 +60,7 @@ if ($gpuless) {
 
 function Run-Test($t) {
     Write-Host "-- $t" -ForegroundColor Cyan
-    python "tools\$t.py" *> "$t.log"
+    python "tests\$t.py" *> "$t.log"
     if ($LASTEXITCODE -ne 0) {
         Get-Content "$t.log" -Tail 6 | Write-Host -ForegroundColor Red
         return $false
@@ -94,7 +94,7 @@ if (-not $gpuless) {
                     "test_frame_pixels", "test_tab_flow", "test_login_flow")
     foreach ($t in $term_tests) {
         Write-Host "-- term/$t" -ForegroundColor Cyan
-        python "term\$t.py" *> "term-$t.log"
+        python "tests\$t.py" *> "term-$t.log"
         if ($LASTEXITCODE -ne 0) {
             Get-Content "term-$t.log" -Tail 6 | Write-Host -ForegroundColor Red
             $failed += "term/$t"

@@ -46,7 +46,7 @@ run_test() {
     if [ -n "${XUVB_PREFIX:-}" ]; then
         $XUVB_PREFIX python "tools/$1.py" > "$1.log" 2>&1
     else
-        python "tools/$1.py" > "$1.log" 2>&1
+        python "tests/$1.py" > "$1.log" 2>&1
     fi
     if [ $? -ne 0 ]; then
         tail -6 "$1.log"
@@ -81,7 +81,7 @@ else
     # Terminal client tests: protocol-level, need frame capture.
     for t in $TERM_TESTS; do
         echo "-- term/$t"
-        ${XUVB_PREFIX:-} python "term/$t.py" > "term-$t.log" 2>&1
+        ${XUVB_PREFIX:-}         python "tests/$t.py" > "term-$t.log" 2>&1
         if [ $? -ne 0 ]; then
             tail -6 "term-$t.log"
             failed="$failed term/$t"

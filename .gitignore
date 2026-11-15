@@ -19,10 +19,15 @@ mcp-wrap.log
 tools/mcp-shots/
 tools/mcp-evidence/
 
-# icon tooling: kept out of git entirely (regenerable from docs/icon.svg)
-.iconbuild/
+# icon build artifacts: sources live in scripts/, outputs are regenerable
+scripts/node_modules/
+scripts/package-lock.json
+scripts/icon-*.png
+scripts/extracted-exe-icon.png
+scripts/ci-*.log
 
 # terminal test captures and caches
+tests/__pycache__/
 term/__pycache__/
 term/*.log
 term/native-frame.png

@@ -445,7 +445,7 @@ directory deleted on engine exit.
   reCAPTCHA's iframe mounts but its contents never load (SecurityError
   in the loader, then "reCAPTCHA Timeout", zero challenge-domain
   traffic). Verified live against all three (2026-11, see
-  tools/test_captcha.py). Solver chains cannot run against them and the
+  tests/test_captcha.py). Solver chains cannot run against them and the
   headed human handoff cannot solve them either - the iframe content
   never loads. Detection works: console SecurityErrors plus zero
   challenge-domain traffic in the net ring reliably distinguish a
@@ -469,7 +469,7 @@ directory deleted on engine exit.
 
 ## Tests
 
-`tools/test_*.py` exercise the engine as a raw protocol client or as an MCP
+`tests/test_*.py` exercise the engine as a raw protocol client or as an MCP
 client:
 
 ```text
