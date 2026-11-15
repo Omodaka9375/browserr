@@ -1,0 +1,26 @@
+# Browserr
+
+> A browser engine for AI agents. One Rust binary built on Servo: no CDP,
+> no Chromium, and a small protocol you can audit in an afternoon. The MCP
+> server exposes the engine to any MCP client; the engine fails closed, and
+> human handoff (passwords, captchas, payments) happens in an optional
+> native window, never through the agent.
+
+Browserr drives real pages - navigation, reading, forms, clicks, downloads,
+interception - with an evidence trail: every action is logged and every
+screenshot is written to disk before the result is returned. Version 0.6.x.
+
+## Docs
+
+- [Install](https://github.com/Omodaka9375/browserr#install): Prebuilt binaries for Windows x64, Linux x64/ARM64, macOS ARM64.
+- [Protocol](https://github.com/Omodaka9375/browserr#protocol): The 22-command JSON-lines-over-TCP protocol, every command and event documented.
+- [MCP server](https://github.com/Omodaka9375/browserr#mcp-server): The 42 tools; every tool accepts a named engine session.
+- [Profiles](https://github.com/Omodaka9375/browserr#profiles): Persistent profiles keep logins and storage across sessions.
+- [Security notes](https://github.com/Omodaka9375/browserr#security-notes): The trust model: evidence directory, action log, confirm gates for payments, fail-closed interception.
+- [Known limitations](https://github.com/Omodaka9375/browserr#known-limitations): What Browserr does not do yet.
+- [Tests](https://github.com/Omodaka9375/browserr#tests): The 42-test suite and how to run it.
+
+## Optional
+
+- [Terminal client](https://github.com/Omodaka9375/browserr/tree/main/term): Interactive TUI rendering native Sixel/Kitty frames from the same engine.
+- [Driver SDK](https://github.com/Omodaka9375/browserr/blob/main/tools/driver.py): The Python client the MCP server and the terminal client are built on.
