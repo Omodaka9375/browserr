@@ -6,6 +6,16 @@ scheme is [SemVer](https://semver.org/). Releases are published by CI on
 tag push; asset archives and full diffs live on the
 [releases page](https://github.com/Omodaka9375/browserr/releases).
 
+## [0.7.1] - 2026-11-15
+
+### Fixed
+
+- `read_structure` silently clipped reported field values to 200 chars,
+  so an agent verifying a long write through it could mistake the
+  preview for the stored value and retry writes that had already
+  succeeded. Fields now also report `value_clipped` with the true value
+  length whenever the preview applies.
+
 ## [0.7.0] - 2026-11-15
 
 ### Added
