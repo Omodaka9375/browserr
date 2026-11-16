@@ -147,9 +147,9 @@ that follow from owning the whole stack:
 
 The `browserr-mcp` package on PyPI installs the MCP server with a single
 config entry. The engine binary is downloaded from the official GitHub
-release and sha256-verified on first run (~46 MB, once); every later start
-is instant:
-
+release and sha256-verified on first run (~46 MB, once); later starts
+are instant and offline: the resolved release tag is cached for 24 h and
+an installed engine never depends on a live GitHub API call.
 ```json
 {
   "mcpServers": {

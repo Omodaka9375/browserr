@@ -46,8 +46,9 @@ evidence.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `BROWSERR_VERSION` | latest release | pin a release tag, e.g. `v0.7.1` |
+| `BROWSERR_VERSION` | latest release | pin a release tag, e.g. `v0.7.1`; if that version is already installed, starts fully offline |
 | `BROWSERR_HOME` | `~/.browserr/versions/<version>` | install dir; an existing unpack with the engine binary skips the download |
+| `BROWSERR_UPDATE` | check daily | `never` disables the release check entirely; the newest installed engine starts |
 
 ## First run
 

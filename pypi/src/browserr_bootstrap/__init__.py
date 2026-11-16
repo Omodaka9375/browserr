@@ -8,14 +8,26 @@ run.
 
 How it works (all stdlib):
 
-1. Resolve the install dir:
+1. Resolve the engine dir:
    - $BROWSERR_HOME if set (explicit override),
-   - else ~/.browserr/versions/<version> (per-version, atomic updates).
+   - a pinned $BROWSERR_VERSION,
+   - else the cached/latest release under ~/.browserr/versions/<tag>
+     (per-version dirs, atomic updates).
 2. If the engine binary is missing there, download the platform asset
    from the official GitHub release, verify its sha256 against the
    digest GitHub reports for the asset, and unpack it in place.
 3. Exec browserr_mcp.py from the unpack in-process (runpy): it speaks
    newline JSON-RPC on stdio and needs no third-party packages.
+
+Offline rules (an installed engine never depends on the GitHub API):
+- $BROWSERR_HOME or a pinned $BROWSERR_VERSION that is already on disk
+  starts with no network call at all.
+- Otherwise the resolved release tag is cached in
+  ~/.browserr/latest.json for CACHE_TTL seconds; a fresh cache starts
+  with no network call, and a stale cache triggers one best-effort
+  refresh per start that falls back to the newest installed engine
+  when the API is unreachable (rate limit, offline, bad response)
+  instead of dying. $BROWSERR_UPDATE=never disables the refresh.
 
 Fail-closed rules (the whole product is fail-closed; so is this):
 - No digest published for the asset -> refuse to install (the digest is
@@ -23,11 +35,6 @@ Fail-closed rules (the whole product is fail-closed; so is this):
 - Non-GitHub download URL -> refuse (a broken API response cannot send
   the download off-site).
 - Unreasonably large asset -> refuse.
-
-$BROWSERR_VERSION pins a release tag ("v0.7.1" or "0.7.1"); the default
-is the latest release. $BROWSERR_HOME points at an existing unpack or
-any directory to use as the install root (skips the download when the
-engine binary is already there, e.g. a manually unpacked archive).
 """
 
 from __future__ import annotations
@@ -41,15 +48,17 @@ import shutil
 import stat
 import sys
 import tempfile
+import time
 import urllib.request
 import zipfile
 
-__version__ = "0.7.4"
+__version__ = "0.7.5"
 
 REPO = "Omodaka9375/browserr"
 API = "https://api.github.com"
 MAX_ASSET_BYTES = 500 * 1024 * 1024  # sanity ceiling, matches update.ps1/sh
 ALLOWED_HOSTS = {"github.com", "objects.githubusercontent.com"}
+CACHE_TTL = 24 * 3600
 
 
 def _platform_asset(version: str) -> str:
@@ -93,17 +102,70 @@ def _resolve_release() -> tuple[str, dict]:
     return tag, rel
 
 
+def _versions_base() -> str:
+    return os.path.join(os.path.expanduser("~"), ".browserr", "versions")
+
+
 def _install_dir(version: str) -> str:
     home = os.environ.get("BROWSERR_HOME")
     if home:
         return os.path.abspath(home)
-    base = os.path.join(os.path.expanduser("~"), ".browserr", "versions")
-    return os.path.join(base, version)
+    return os.path.join(_versions_base(), version)
+
+
+def _cache_path() -> str:
+    return os.path.join(os.path.dirname(_versions_base()), "latest.json")
+
+
+def _read_cache() -> dict | None:
+    try:
+        with open(_cache_path(), encoding="utf-8") as f:
+            c = json.load(f)
+        tag, checked = c.get("tag"), c.get("checked")
+        if isinstance(tag, str) and tag and isinstance(checked, (int, float)):
+            return {"tag": tag.lstrip("v"), "checked": checked}
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _write_cache(tag: str) -> None:
+    path = _cache_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"tag": tag, "checked": time.time()}, f)
+    os.replace(tmp, path)
 
 
 def _engine_present(d: str) -> bool:
     exe = "engine.exe" if os.name == "nt" else "engine"
     return os.path.isfile(os.path.join(d, exe))
+
+
+def _newest_installed() -> str | None:
+    """Newest version dir under ~/.browserr/versions that holds an engine."""
+    def key(name: str):
+        parts = name.lstrip("v").split(".")
+        nums = []
+        for p in parts:
+            try:
+                nums.append(int(p))
+            except ValueError:
+                nums.append(0)
+        while len(nums) < 3:
+            nums.append(0)
+        return nums
+    best = None
+    try:
+        names = os.listdir(_versions_base())
+    except OSError:
+        return None
+    for name in names:
+        d = os.path.join(_versions_base(), name)
+        if _engine_present(d) and (best is None or key(name) > key(best)):
+            best = name
+    return best
 
 
 def _unpack(path: str, dest: str) -> None:
@@ -126,13 +188,8 @@ def _unpack(path: str, dest: str) -> None:
                         os.chmod(target, os.stat(target).st_mode | stat.S_IXUSR)
 
 
-def ensure_engine() -> str:
-    """Return the unpack dir; download+verify the engine if missing."""
-    tag, release = _resolve_release()
-    dest = _install_dir(tag)
-    if _engine_present(dest):
-        return dest
-
+def _download(tag: str, release: dict, dest: str) -> str:
+    """Download+verify the platform asset of `tag` into `dest`; return dest."""
     asset_name = _platform_asset(tag)
     asset = next((a for a in release.get("assets", [])
                   if a.get("name") == asset_name), None)
@@ -184,6 +241,65 @@ def ensure_engine() -> str:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def ensure_engine() -> str:
+    """Return the unpack dir; download+verify the engine if missing.
+
+    Disk first: an installed engine starts without touching the
+    network. $BROWSERR_HOME and a pinned $BROWSERR_VERSION are full
+    offline skips. The default path caches the resolved release tag for
+    CACHE_TTL seconds; a stale cache triggers one best-effort refresh
+    that falls back to the newest installed engine when the API is
+    unreachable (rate limit, offline) instead of dying.
+    """
+    home = os.environ.get("BROWSERR_HOME", "").strip()
+    if home:
+        dest = os.path.abspath(home)
+        if _engine_present(dest):
+            return dest
+        tag, release = _resolve_release()
+        return _download(tag, release, dest)
+
+    pin = os.environ.get("BROWSERR_VERSION", "").strip().lstrip("v")
+    if pin:
+        dest = os.path.join(_versions_base(), pin)
+        if _engine_present(dest):
+            return dest
+        tag, release = _resolve_release()
+        dest = os.path.join(_versions_base(), tag)
+        return dest if _engine_present(dest) else _download(tag, release, dest)
+
+    never = os.environ.get("BROWSERR_UPDATE", "").strip().lower() == "never"
+
+    cache = _read_cache()
+    cached_dir = None
+    if cache:
+        d = os.path.join(_versions_base(), cache["tag"])
+        cached_dir = d if _engine_present(d) else None
+
+    if cached_dir and (never or time.time() - cache["checked"] < CACHE_TTL):
+        return cached_dir
+
+    installed = _newest_installed()
+    if never and installed:
+        return os.path.join(_versions_base(), installed)
+
+    try:
+        tag, release = _resolve_release()
+    except Exception as e:
+        installed = installed if installed is not None else _newest_installed()
+        if installed:
+            print(f"browserr-mcp: release check failed ({e}); "
+                  "starting the installed engine", file=sys.stderr)
+            return os.path.join(_versions_base(), installed)
+        raise SystemExit(
+            "browserr-mcp: cannot resolve a release and no engine is "
+            f"installed ({e})")
+    _write_cache(tag)
+
+    dest = os.path.join(_versions_base(), tag)
+    return dest if _engine_present(dest) else _download(tag, release, dest)
+
+
 def main() -> None:
     """MCP server entry point: ensure the engine, then run browserr_mcp."""
     dest = ensure_engine()
@@ -199,12 +315,14 @@ def main() -> None:
 
 def install_main() -> None:
     """Standalone installer entry point: download + verify, then exit."""
-    tag, _ = _resolve_release()
+    tag, release = _resolve_release()
     dest = _install_dir(tag)
     if _engine_present(dest):
         print(f"browserr-install: v{tag} already present at {dest}")
-        return
-    ensure_engine()
-    print(f"browserr-install: v{tag} installed at {dest}")
+    else:
+        _download(tag, release, dest)
+        print(f"browserr-install: v{tag} installed at {dest}")
+    if not os.environ.get("BROWSERR_HOME"):
+        _write_cache(tag)
     print("MCP config: uvx browserr-mcp (or pip install browserr-mcp "
           "then command browserr-mcp)")
