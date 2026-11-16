@@ -208,7 +208,7 @@ Browserr Term renders real pages inside a terminal pane at native
 resolution, using Sixel or the Kitty graphics protocol with dirty-rectangle
 patches computed in the engine. It needs no installer step:
 
-https://github.com/user-attachments/assets/44773ac0-c758-4726-a90e-4809564101e3
+https://github.com/user-attachments/assets/fdc5c347-2cf3-4fb7-b458-501d8e24506d
 
 
 ```sh
