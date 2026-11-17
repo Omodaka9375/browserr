@@ -677,15 +677,19 @@ class Driver:
         """Embed a CSS selector as a JS string literal (json quoting)."""
         return json.dumps(selector)
 
-    def element_rect(self, selector, tab: int = 0, timeout=10.0):
-        """Scroll the first element matching a CSS selector into view and
-        return its viewport rect {x, y, w, h} (center = x+w/2, y+h/2),
-        or None while it does not exist yet."""
+    def element_rect(self, selector, tab: int = 0, timeout=10.0, scroll=True):
+        """Return the viewport rect {x, y, w, h} of the first element
+        matching a CSS selector, or None while it does not exist yet.
+        scroll=True also scrolls the element into view (click targeting);
+        polling callers pass scroll=False - scrollIntoView forces a full
+        layout, which on a large slow SPA both costs seconds per poll and
+        wedges the page's script thread (the Oracle 0.7.1 wedge)."""
         js = ("(function(){var s=" + self._js_selector(selector) + ";"
-              "var e=document.querySelector(s);if(!e){return null;}"
-              "e.scrollIntoView({block:'center',inline:'nearest'});"
-              "var r=e.getBoundingClientRect();"
-              "return {x:r.x,y:r.y,w:r.width,h:r.height};})()")
+          "var e=document.querySelector(s);if(!e){return null;}"
+          + ("e.scrollIntoView({block:'center',inline:'nearest'});"
+             if scroll else "")
+          + "var r=e.getBoundingClientRect();"
+          "return {x:r.x,y:r.y,w:r.width,h:r.height};})()")
         deadline = time.time() + timeout
         while True:
             try:
@@ -747,12 +751,39 @@ class Driver:
 
     def wait_for_selector(self, selector, tab: int = 0, timeout=15.0):
         """Wait until a CSS selector matches at least one visible element;
-        returns the rect (see element_rect) or raises TimeoutError."""
+        returns the rect (see element_rect) or raises TimeoutError.
+
+        Wedge-safe by design: never scrolls (no forced layouts) and keeps
+        AT MOST ONE eval outstanding. A new poll is only sent after the
+        previous one answered, so a slow or wedged page never accumulates
+        a backlog of queued evals that would keep its script thread busy
+        long after this call has given up (the Oracle SPA wedge).
+        """
         deadline = time.time() + timeout
+        js = ("(function(){var s=" + self._js_selector(selector) + ";"
+              "var e=document.querySelector(s);if(!e){return null;}"
+              "var r=e.getBoundingClientRect();"
+              "return {x:r.x,y:r.y,w:r.width,h:r.height};})()")
+        outstanding = None
         while True:
-            rect = self.element_rect(selector, tab, timeout=2.0)
-            if rect and rect["w"] > 0 and rect["h"] > 0:
-                return rect
+            if outstanding is None:
+                req = self._next_id
+                self._next_id += 1
+                self.cmd({"cmd": "eval", "tab": tab, "js": js, "id": req})
+                outstanding = req
+            try:
+                ev = self.wait_for(
+                    lambda e: (e.get("ev") == "evalresult"
+                                and e.get("id") == outstanding),
+                    timeout=1.0)
+                outstanding = None  # answered: safe to poll again
+                rect = ev.get("value")
+                if rect and rect.get("w", 0) > 0 and rect.get("h", 0) > 0:
+                    return rect
+            except TimeoutError:
+                # The eval is still outstanding on a slow page. Do NOT send
+                # another one; just re-check the overall deadline.
+                pass
             if time.time() >= deadline:
                 raise TimeoutError(f"no element matches {selector!r}")
             time.sleep(0.2)
