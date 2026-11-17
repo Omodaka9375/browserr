@@ -16,15 +16,21 @@ rustflags = [
 [target.armv7-linux-androideabi]
 linker = "C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/bin/armv7a-linux-androideabi29-clang.cmd"
 ar = "C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
-# -latomic: 32-bit ARM outsources some sync/atomic builtins (e.g.
-# __sync_val_compare_and_swap_4) to libatomic; the final link fails
-# without it.
 rustflags = [
   "-C", "link-arg=-landroid",
   # 32-bit ARM: mozjs references the legacy __sync_val_compare_and_swap_4
-  # builtin, which NDK r30's compiler-rt does not provide (no libatomic
-  # for armv7 either). .cargo/armv7_sync_shim.o defines it (arm asm).
+# builtin, which NDK r30's compiler-rt does not provide (no libatomic
+# for armv7 either). .cargo/armv7_sync_shim.o defines it (arm asm).
   "-C", "link-arg=D:/Code/2026/Browserr/.cargo/armv7_sync_shim.o",
+]
+
+[target.x86_64-linux-android]
+# Emulator target: x86_64 system images run this natively (no arm
+# translation flakiness). Same API 29 floor as the arm targets.
+linker = "C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/bin/x86_64-linux-android29-clang.cmd"
+ar = "C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
+rustflags = [
+  "-C", "link-arg=-landroid",
 ]
 
 [env]
@@ -40,10 +46,18 @@ CXX_armv7_linux_androideabi = "C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/
 CXXFLAGS_armv7_linux_androideabi = "--target=armv7a-linux-androideabi29 --sysroot=C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/sysroot"
 AR_armv7_linux_androideabi = "C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
 RANLIB_armv7_linux_androideabi = "C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ranlib.exe"
+CC_x86_64_linux_android = "C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/bin/clang.exe"
+CFLAGS_x86_64_linux_android = "--target=x86_64-linux-android29 --sysroot=C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/sysroot"
+CXX_x86_64_linux_android = "C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe"
+CXXFLAGS_x86_64_linux_android = "--target=x86_64-linux-android29 --sysroot=C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/sysroot"
+AR_x86_64_linux_android = "C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
+RANLIB_x86_64_linux_android = "C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ranlib.exe"
 
 # bindgen (mozangle) parses C++ headers via libclang and needs the Android
 # target + libc++ include path; it does not learn them from CXX.
 BINDGEN_EXTRA_CLANG_ARGS_aarch64-linux-android = "--target=aarch64-linux-android29 --sysroot=C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/sysroot -isystem C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/c++/v1"
 BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android = "--target=aarch64-linux-android29 --sysroot=C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/sysroot -isystem C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/c++/v1"
 BINDGEN_EXTRA_CLANG_ARGS_armv7-linux-androideabi = "--target=armv7a-linux-androideabi29 --sysroot=C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/sysroot -isystem C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/c++/v1"
+BINDGEN_EXTRA_CLANG_ARGS_x86_64-linux-android = "--target=x86_64-linux-android29 --sysroot=C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/sysroot -isystem C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/c++/v1"
+BINDGEN_EXTRA_CLANG_ARGS_x86_64_linux_android = "--target=x86_64-linux-android29 --sysroot=C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/sysroot -isystem C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/c++/v1"
 BINDGEN_EXTRA_CLANG_ARGS_armv7_linux_androideabi = "--target=armv7a-linux-androideabi29 --sysroot=C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/sysroot -isystem C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/include/c++/v1"

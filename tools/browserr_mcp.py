@@ -27,6 +27,8 @@ Tools:
 """
 import json
 import os
+import re
+import subprocess
 import sys
 import threading
 import time
@@ -39,6 +41,28 @@ from driver import Driver, save_png
 class McpError(Exception):
     def __init__(self, message):
         super().__init__(message)
+
+
+# Packaged MCP version (must match the release it ships in). The engine
+# binary is resolved independently, so a stale cached engine (older
+# unpack under ~/.browserr/versions) is DETECTED instead of silently
+# served: serverInfo reports both and startup logs the mismatch.
+MCP_VERSION = "0.8.1"
+
+
+def _engine_version(engine_path):
+    """Ask the engine binary its version. None when it cannot answer
+    (missing binary, pre-0.7.0 engines that ignore --version and boot)."""
+    try:
+        p = subprocess.run([engine_path, "--version"], capture_output=True,
+                           text=True, timeout=10)
+        if p.returncode == 0:
+            m = re.search(r"browserr\s+(\S+)", p.stdout or "")
+            if m:
+                return m.group(1)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return None
 
 
 class State:
@@ -184,6 +208,20 @@ def safe_name(s):
 
 
 STATE = State()
+
+# Resolve the engine binary version once at server startup: agents and
+# users can then see exactly which engine this server would spawn, and a
+# stale cached unpack (the 0.8.1 launch that served 0.8.0 from cache)
+# becomes visible instead of silent. Print to stderr (stdout is JSON-RPC).
+import driver as _driver
+ENGINE_PATH = os.environ.get("BROWSERR_ENGINE") or _driver.ENGINE_DEBUG
+ENGINE_VERSION = _engine_version(ENGINE_PATH)
+print(f"browserr-mcp: server {MCP_VERSION}, engine {ENGINE_VERSION or 'unknown'}"
+      f" at {ENGINE_PATH}", file=sys.stderr)
+if ENGINE_VERSION is not None and ENGINE_VERSION != MCP_VERSION:
+    print(f"browserr-mcp: WARNING engine version {ENGINE_VERSION} != "
+          f"packaged {MCP_VERSION}; a stale cached engine may be in use - "
+          "clear ~/.browserr/versions and restart", file=sys.stderr)
 TOOLS = [
     {
         "name": "browser_start",
@@ -986,7 +1024,9 @@ def handle(msg):
             return {"jsonrpc": "2.0", "id": msg_id, "result": {
                 "protocolVersion": requested or "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "browserr", "version": "0.8.1"}
+                "serverInfo": {"name": "browserr", "version": MCP_VERSION,
+                               "engineVersion": ENGINE_VERSION or "unknown",
+                               "enginePath": ENGINE_PATH}
             }}
         if method == "notifications/initialized":
             return None
