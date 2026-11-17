@@ -121,6 +121,8 @@ class _Batched:
 fake = _Batched()
 fake._cond = threading.Condition()
 fake._next_id = 500
+fake._id_lock = threading.Lock()
+fake._alloc_id = Driver._alloc_id.__get__(fake)
 fake.dead = False
 fake.native_frames = []
 

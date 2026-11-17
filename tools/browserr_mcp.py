@@ -27,6 +27,7 @@ Tools:
 """
 import json
 import os
+import queue
 import re
 import subprocess
 import sys
@@ -364,7 +365,10 @@ TOOLS = [
                        "behave). Scrolls into view first.",
         "inputSchema": {"type": "object", "properties": {
             "selector": {"type": "string"},
-            "timeout": {"type": "number"}}, "required": ["selector"]},
+            "timeout": {"type": "number",
+                        "description": "seconds (NOT ms); values over 1000 are "
+                                       "treated as milliseconds and capped at "
+                                       "120s"}}, "required": ["selector"]},
     },
     {
         "name": "browser_set_value",
@@ -374,7 +378,10 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {
             "selector": {"type": "string"},
             "value": {"type": "string"},
-            "timeout": {"type": "number"}}, "required": ["selector", "value"]},
+            "timeout": {"type": "number",
+                        "description": "seconds (NOT ms); values over 1000 are "
+                                       "treated as milliseconds and capped at "
+                                       "120s"}}, "required": ["selector", "value"]},
     },
     {
         "name": "browser_wait_for",
@@ -382,7 +389,11 @@ TOOLS = [
                        "element (SPA render); returns its viewport rect.",
         "inputSchema": {"type": "object", "properties": {
             "selector": {"type": "string"},
-            "timeout": {"type": "number"}}, "required": ["selector"]},
+            "timeout": {"type": "number",
+                        "description": "seconds (NOT ms); values over 1000 are "
+                                       "treated as milliseconds and capped at "
+                                       "120s - a 20000 means 20 seconds, not "
+                                       "5.5 hours"}}, "required": ["selector"]},
     },
     {
         "name": "browser_read_structure",
@@ -715,6 +726,22 @@ def _wait_for_user(timeout_seconds=30):
                     "check the visible browser, then resume when done."}
 
 
+def _timeout_arg(args, default=15.0):
+    """Coerce a timeout argument to seconds. The MCP schemas say seconds,
+    but agents used to wait_ms/settle_ms keep passing milliseconds; a bare
+    20000 then means 5.5 HOURS and wedges the request loop long after the
+    client stopped listening. Values over 1000 are almost certainly ms:
+    rescale to seconds, then cap everything at 120s so no single page-
+    scoped wait can outlive a client's patience."""
+    try:
+        t = float(args.get("timeout", default))
+    except (TypeError, ValueError):
+        return default
+    if t > 1000:
+        t = t / 1000.0
+    return max(0.0, min(t, 120.0))
+
+
 def call_tool(name, args):
     if name == "browser_start":
         return STATE.start(args.get("attach_port"), token=args.get("token"),
@@ -878,15 +905,16 @@ def call_tool(name, args):
             raise McpError(f"no visible link matching {args['text']!r}")
         return {"clicked": hit}
     if name == "browser_click_element":
-        d.click_element(args["selector"], timeout=args.get("timeout", 10.0))
+        d.click_element(args["selector"],
+                        timeout=_timeout_arg(args, 10.0))
         return {"clicked": args["selector"]}
     if name == "browser_set_value":
         d.set_value(args["selector"], args["value"],
-                    timeout=args.get("timeout", 10.0))
+                    timeout=_timeout_arg(args, 10.0))
         return {"set": args["selector"]}
     if name == "browser_wait_for":
         rect = d.wait_for_selector(args["selector"],
-                                    timeout=args.get("timeout", 15.0))
+                                    timeout=_timeout_arg(args, 15.0))
         return {"found": args["selector"], "rect": rect}
     if name == "browser_fill":
         if not d.fill(args["field"], args["value"]):
@@ -1062,13 +1090,41 @@ def handle(msg):
         }}
 
 
+# Tool dispatch: page-scoped tools serialize on one worker (one engine,
+# one driver), but the CONTROL PLANE (ping/stop) answers immediately on
+# the reader thread - a stuck wait_for must never wedge ping/stop at the
+# MCP layer, whatever the page is doing.
+_TOOL_Q = queue.Queue()      # (msg, response_dict_or_None)
+_CTRL_TOOLS = frozenset(("browser_ping", "browser_stop"))
+
+
+def _tool_worker():
+    while True:
+        msg = _TOOL_Q.get()
+        if msg is None:
+            return
+        _respond(handle(msg))
+
+
+def _respond(resp):
+    if resp is not None:
+        with _OUT_LOCK:
+            _OUT.write(json.dumps(resp) + "\n")
+            _OUT.flush()
+
+
+_OUT = sys.stdout  # single writer: worker thread + fast lane share it
+_OUT_LOCK = threading.Lock()
+
+
 def main():
     attach_port = None
     argv = sys.argv[1:]
     if "--port" in argv:
         attach_port = int(argv[argv.index("--port") + 1])
     STATE.attach_port = attach_port  # docs only; start decides
-    out = sys.stdout
+    worker = threading.Thread(target=_tool_worker, daemon=True)
+    worker.start()
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -1077,10 +1133,17 @@ def main():
             msg = json.loads(line)
         except json.JSONDecodeError:
             continue
-        resp = handle(msg)
-        if resp is not None:
-            out.write(json.dumps(resp) + "\n")
-            out.flush()
+        # Control plane answers on the reader thread even while a
+        # page-scoped tool (a stuck wait_for, a slow read) occupies the
+        # worker; everything else queues so one engine is never driven
+        # by two tools at once.
+        if (msg.get("method") == "tools/call"
+                and (msg.get("params") or {}).get("name") in _CTRL_TOOLS):
+            _respond(handle(msg))
+        else:
+            _TOOL_Q.put(msg)
+    _TOOL_Q.put(None)
+    worker.join(timeout=5)
     # stdin closed: session over, stop the engine if we own it
     STATE.stop()
 

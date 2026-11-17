@@ -261,8 +261,7 @@ class Driver:
                 # the command loop. A short timeout here closes the socket,
                 # which kills the engine (main-client disconnect) - seen as a
                 # first-test flake on Linux CI.
-                req = self._next_id
-                self._next_id += 1
+                req = self._alloc_id()
                 self.sock.sendall((json.dumps(
                     {"cmd": "ping", "tab": 0, "id": req}) + "\n").encode())
                 self.sock.settimeout(8)
@@ -329,6 +328,12 @@ class Driver:
                 payload += chunk
             return json.loads(payload)
 
+    def _alloc_id(self):
+        with self._id_lock:
+            n = self._next_id
+            self._next_id += 1
+            return n
+
     def _init_common(self, port, log=None):
         """Shared state for both modes (headless spawn vs attach)."""
         self.port = port
@@ -336,11 +341,16 @@ class Driver:
         self.shots = []             # (w, h, bgra) screenshots, newest last
         self.native_frames = []     # FRM2 patches: (id, rect, format, flags, data)
         self._next_id = 1
+        self._id_lock = threading.Lock()  # MCP fast-lane threads allocate
+        # eval/ping ids concurrently; a race could duplicate an id and make
+        # one caller receive the other's answer
         self._event_seq = 0         # driver-local ordering for event cursors
         self._answered_requests = set()
         self._answered_auth = set()
         self._answered_filepickers = set()
         self._cond = threading.Condition()
+        self._send_lock = threading.Lock()  # concurrent cmd() callers (MCP
+        # fast lane) must not interleave bytes on the engine socket
         self._stop = False
         self.proc = None
         self.sock = None
@@ -381,8 +391,7 @@ class Driver:
 
     def handoff_complete(self, timeout=2.0) -> bool:
         """Whether the human pressed Enter to finish this engine pause."""
-        req = self._next_id
-        self._next_id += 1
+        req = self._alloc_id()
         self.cmd({"cmd": "handoff", "tab": 0, "id": req})
         ev = self.wait_for(lambda e: e.get("ev") == "handoff_status"
                            and e.get("id") == req, timeout)
@@ -410,7 +419,9 @@ class Driver:
         if obj.get("cmd") in self._MUTATING_CMDS:
             self._guard_paused(obj["cmd"])
         try:
-            self.sock.sendall((json.dumps(obj) + "\n").encode())
+            data = (json.dumps(obj) + "\n").encode()
+            with self._send_lock:
+                self.sock.sendall(data)
         except OSError as e:
             self._mark_dead()
             raise EngineDeadError(f"send failed: {e}")
@@ -553,8 +564,7 @@ class Driver:
 
     def eval_js(self, js: str, tab: int = 0, timeout=10.0):
         """Evaluate JS in the page and return the (JSON-friendly) result."""
-        req = self._next_id
-        self._next_id += 1
+        req = self._alloc_id()
         self.cmd({"cmd": "eval", "tab": tab, "js": js, "id": req})
         ev = self.wait_for(
             lambda e: e.get("ev") == "evalresult" and e.get("id") == req, timeout)
@@ -585,8 +595,7 @@ class Driver:
         path for interactive renderers; screenshot() stays the SDK's lossless
         full-frame BGRA API.
         """
-        req = self._next_id
-        self._next_id += 1
+        req = self._alloc_id()
         self.cmd({"cmd": "frame", "tab": tab, "id": req, "format": format,
                   "stream": stream, "cell_w": cell_w, "cell_h": cell_h,
                   "force": force})
@@ -767,8 +776,7 @@ class Driver:
         outstanding = None
         while True:
             if outstanding is None:
-                req = self._next_id
-                self._next_id += 1
+                req = self._alloc_id()
                 self.cmd({"cmd": "eval", "tab": tab, "js": js, "id": req})
                 outstanding = req
             try:
@@ -797,8 +805,7 @@ class Driver:
     def ping(self, timeout=5.0):
         """Health check: returns {'tabs': N, 'active': A} or raises TimeoutError.
         Works in both modes (headless and attach)."""
-        req = self._next_id
-        self._next_id += 1
+        req = self._alloc_id()
         self.cmd({"cmd": "ping", "tab": 0, "id": req})
         ev = self.wait_for(lambda e: e.get("ev") == "pong" and e.get("id") == req, timeout)
         return {"tabs": ev.get("tabs"), "active": ev.get("active")}
@@ -929,8 +936,7 @@ class Driver:
         """The page's frame tree: {url, origin, children:[...]}.
         Same-origin frames are walked (title, nested children); cross-origin
         frames report their url only (servo 0.8 has no cross-frame JS)."""
-        req = self._next_id
-        self._next_id += 1
+        req = self._alloc_id()
         self.cmd({"cmd": "frames", "tab": tab, "id": req})
         ev = self.wait_for(
             lambda e: e.get("ev") == "evalresult" and e.get("id") == req, timeout)
@@ -943,8 +949,7 @@ class Driver:
         """Fetch a URL straight to a local path (agents fetch files; servo
         0.8 has no in-page download hook). No page cookies are sent, so only
         public URLs work. Returns the byte count."""
-        req = self._next_id
-        self._next_id += 1
+        req = self._alloc_id()
         args = {"cmd": "download", "tab": 0, "id": req, "url": url, "path": path}
         if max_bytes:
             args["max_bytes"] = max_bytes
