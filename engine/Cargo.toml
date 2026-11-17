@@ -75,3 +75,19 @@ android-activity = { version = "0.6", features = ["native-activity"] }
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+[patch.crates-io]
+# Vendor patches for WebGL stability (engine used to die with
+# "SurfaceImportFailed(BadAttribute)" on any page that draws a WebGL canvas
+# while the software renderer is in use):
+# 1. paint-api: create_texture() returns None instead of panicking on a
+#    failed surface import; new surfman_adapter() exposes the renderer's
+#    own D3D11 adapter to the WebGL thread.
+# 2. paint: uses the renderer's adapter (not a fresh hardware adapter) so
+#    WebGL surfaces and the renderer share one D3D11 device.
+# 3. webgl: swap_buffers failure is logged and the frame skipped, not
+#    unwrapped into an engine-killing panic.
+servo-paint-api = { path = "../vendor/servo-paint-api" }
+servo-paint = { path = "../vendor/servo-paint" }
+servo-webgl = { path = "../vendor/servo-webgl" }
+
