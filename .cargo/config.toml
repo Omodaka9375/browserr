@@ -16,8 +16,15 @@ rustflags = [
 [target.armv7-linux-androideabi]
 linker = "C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/bin/armv7a-linux-androideabi29-clang.cmd"
 ar = "C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
+# -latomic: 32-bit ARM outsources some sync/atomic builtins (e.g.
+# __sync_val_compare_and_swap_4) to libatomic; the final link fails
+# without it.
 rustflags = [
   "-C", "link-arg=-landroid",
+  # 32-bit ARM: mozjs references the legacy __sync_val_compare_and_swap_4
+  # builtin, which NDK r30's compiler-rt does not provide (no libatomic
+  # for armv7 either). .cargo/armv7_sync_shim.o defines it (arm asm).
+  "-C", "link-arg=D:/Code/2026/Browserr/.cargo/armv7_sync_shim.o",
 ]
 
 [env]

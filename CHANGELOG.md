@@ -6,6 +6,18 @@ scheme is [SemVer](https://semver.org/). Releases are published by CI on
 tag push; asset archives and full diffs live on the
 [releases page](https://github.com/Omodaka9375/browserr/releases).
 
+## [0.8.1] - 2026-11-17
+
+### Fixed
+
+- `browser_wait_for` could wedge the engine on large slow SPAs (the
+  Oracle careers site): the poll ran a forced layout (`scrollIntoView`)
+  per tick and stacked new evals while previous ones were still queued,
+  leaving the page's script thread grinding a backlog long after the
+  call had timed out. Polling is now scroll-free and keeps at most one
+  eval outstanding, so a slow page can never accumulate a queued-eval
+  backlog. `click_element` still scrolls its target into view.
+
 ## [0.8.0] - 2026-11-17
 
 ### Added
