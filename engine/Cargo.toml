@@ -63,6 +63,14 @@ winresource = "0.1"
 # packaging scripts ship them in the archive.
 servo = { version = "0.8.0", default-features = false, features = ["no-wgl"] }
 
+[target.'cfg(target_os = "android")'.dependencies]
+# winit/surfman pull android-activity but leave the activity-implementation
+# feature to the app: exactly one of game-activity/native-activity must be
+# enabled, or the crate compile_error!s. We own the APK entrypoint, so pick
+# NativeActivity (the plain, dependency-free one; GameActivity targets games).
+# Declaring it here unifies the feature onto the single graph copy.
+android-activity = { version = "0.6", features = ["native-activity"] }
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

@@ -94,8 +94,20 @@ fn hard_exit() -> ! {
     unsafe { _exit(0) }
 }
 
+/// EV event frame with an explicit event id (driver-thread fast path).
+fn driver_event(id: u64, json: &str) -> Vec<u8> {
+    let bytes = json.as_bytes();
+    let mut frame = Vec::with_capacity(20 + bytes.len());
+    frame.extend_from_slice(&EV_MAGIC.to_le_bytes());
+    frame.extend_from_slice(&id.to_le_bytes());
+    frame.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    frame.extend_from_slice(&0u32.to_le_bytes());
+    frame.extend_from_slice(bytes);
+    frame
+}
+
 /// Commands an attached driver may send; validated before queueing.
-const DRIVER_CMDS: [&str; 23] = [
+const DRIVER_CMDS: [&str; 24] = [
     "navigate",
     "back",
     "forward",
@@ -110,6 +122,7 @@ const DRIVER_CMDS: [&str; 23] = [
     "frame",
     "zoom",
     "ping",
+    "stop",
     "download",
     "intercept",
     "request",
@@ -135,6 +148,19 @@ struct DriverHub {
 /// Prefix marking a queued command as coming from an attached driver
 /// (the main loop strips it and answers via the driver broadcast only).
 const DRIVER_PREFIX: &str = "\u{1}drv:";
+
+/// Approximate open-tab count and active tab, mirrored by the main loop on
+/// every processed command. Read by the driver-thread ping fast path: when
+/// the servo main loop wedges (a page stuck in a long JS task), queued
+/// commands never drain, so the health check must not depend on it.
+/// Values may lag while wedged - acceptable for a liveness probe.
+static TAB_COUNT: AtomicU64 = AtomicU64::new(0);
+static ACTIVE_TAB: AtomicU64 = AtomicU64::new(0);
+/// Event ids for fast-path pongs (framing only; drivers match on the JSON id).
+static DRIVER_EVENT_SEQ: AtomicU64 = AtomicU64::new(1);
+/// Ephemeral profile path, captured at startup so the driver-thread stop
+/// fast path can clean it up while the main loop is wedged.
+static EPHEMERAL_DIR: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
 
 static HUB: std::sync::OnceLock<DriverHub> = std::sync::OnceLock::new();
 
@@ -204,6 +230,10 @@ fn start_driver_listener(port: u16, token: Option<String>) {
 /// allowed ones for the main loop. First line must authenticate when a
 /// token is set. Authenticated sockets are registered for broadcasts.
 fn driver_client_loop(stream: std::net::TcpStream, hub: &DriverHub, token: Option<String>) {
+    let mut writer = match stream.try_clone() {
+        Ok(w) => w,
+        Err(_) => return,
+    };
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
     let mut authed = token.is_none();
@@ -253,6 +283,31 @@ fn driver_client_loop(stream: std::net::TcpStream, hub: &DriverHub, token: Optio
             // No token required: register on the first command.
             registered = true;
             hub.add_client(reader.get_ref());
+        }
+        // Ping and stop are answered HERE, not through the queue: they are
+        // the recovery path when the servo main loop is wedged by a page
+        // (long JS task) and would otherwise never drain queued commands.
+        // pong reports the mirrored tab counters (may lag while wedged -
+        // this is a liveness probe, not a state query); stop force-exits
+        // the process (the ephemeral profile still gets cleaned up).
+        if cmd == "ping" {
+            let req = v["id"].as_u64().unwrap_or(0);
+            let seq = DRIVER_EVENT_SEQ.fetch_add(1, Ordering::SeqCst);
+            let json = format!(
+                "{{\"ev\":\"pong\",\"tab\":0,\"id\":{req},\"tabs\":{},\"active\":{}}}",
+                TAB_COUNT.load(Ordering::SeqCst),
+                ACTIVE_TAB.load(Ordering::SeqCst),
+            );
+            let _ = writer.write_all(&driver_event(seq, &json));
+            let _ = writer.flush();
+            continue;
+        }
+        if cmd == "stop" {
+            eprintln!("engine: driver stop; hard exit");
+            if let Some(dir) = EPHEMERAL_DIR.get().and_then(|d| d.as_ref()) {
+                cleanup_ephemeral(&Some(dir.clone()));
+            }
+            hard_exit();
         }
         if !DRIVER_CMDS.contains(&cmd) {
             eprintln!("engine: driver command rejected: {cmd}");
@@ -2085,6 +2140,7 @@ fn main() {
     } else {
         None
     };
+    let _ = EPHEMERAL_DIR.set(ephemeral_dir.clone());
 
     // Retry the bind: on an in-place engine restart the previous instance may
     // still be releasing port 7411 for a moment.
@@ -2458,6 +2514,10 @@ fn main() {
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
                         let tab_id = v["tab"].as_u64().unwrap_or(0);
                         let command = v["cmd"].as_str();
+                        // Mirror tab state for the driver-thread ping fast
+                        // path (refreshed whenever any command is processed).
+                        TAB_COUNT.store(tabs.len() as u64, Ordering::SeqCst);
+                        ACTIVE_TAB.store(shared.active.load(Ordering::SeqCst), Ordering::SeqCst);
                         if shared.paused.load(Ordering::SeqCst)
                             && matches!(
                                 command,

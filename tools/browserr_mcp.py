@@ -65,7 +65,9 @@ class State:
             key = self._safe_session(session)
             if key not in self.drivers:
                 raise McpError(f"browser session {key!r} not started; "
-                               "call browser_start first")
+                               "call browser_start first (running: "
+                               f"{sorted(self.drivers) or 'none'}; every "
+                               "browser_* call takes a session argument)")
             return self.drivers[key]
 
     def status(self, session=None, **fields):

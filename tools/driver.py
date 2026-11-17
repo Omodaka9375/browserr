@@ -948,25 +948,38 @@ class Driver:
     # -- SDK helpers (page extraction for agents) ---------------------------
 
     READ_JS = r"""(() => {
+        // Text extraction with Shadow DOM piercing (open roots): a host
+        // element's rendered content is its shadowRoot's children - light-DOM
+        // children only render through <slot>, which is expanded to its
+        // assigned nodes (fallback children when nothing is assigned).
+        // read_structure pierces shadows; read_page must see the same DOM.
         const pick = (el) => {
             // Skip invisible branches entirely.
             const st = getComputedStyle(el);
             if (st.display === 'none' || st.visibility === 'hidden') return [];
             const out = [];
-            for (const n of el.childNodes) {
-                if (n.nodeType === 3) {
-                    const t = n.textContent.replace(/\s+/g, ' ').trim();
-                    if (t) out.push(t);
-                } else if (n.nodeType === 1) {
-                    const tag = n.tagName;
-                    if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEMPLATE') continue;
-                    const inner = pick(n);
-                    if (tag === 'A' && inner.length) {
-                        out.push('[' + inner.join(' ') + '](' + n.href + ')');
-                    } else if ((tag === 'P' || tag === 'LI' || tag === 'H1' || tag === 'H2' || tag === 'H3' || tag === 'H4' || tag === 'BLOCKQUOTE') && inner.length) {
-                        out.push('\n\n' + inner.join(' '));
-                    } else {
-                        out.push(...inner);
+            const kids = el.shadowRoot ? el.shadowRoot.childNodes : el.childNodes;
+            for (const raw of kids) {
+                let nodes = [raw];
+                if (raw.nodeType === 1 && raw.tagName === 'SLOT') {
+                    const a = raw.assignedNodes ? raw.assignedNodes() : [];
+                    nodes = a.length ? a : Array.from(raw.childNodes);
+                }
+                for (const n of nodes) {
+                    if (n.nodeType === 3) {
+                        const t = n.textContent.replace(/\s+/g, ' ').trim();
+                        if (t) out.push(t);
+                    } else if (n.nodeType === 1) {
+                        const tag = n.tagName;
+                        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEMPLATE') continue;
+                        const inner = pick(n);
+                        if (tag === 'A' && inner.length) {
+                            out.push('[' + inner.join(' ') + '](' + n.href + ')');
+                        } else if ((tag === 'P' || tag === 'LI' || tag === 'H1' || tag === 'H2' || tag === 'H3' || tag === 'H4' || tag === 'BLOCKQUOTE') && inner.length) {
+                            out.push('\n\n' + inner.join(' '));
+                        } else {
+                            out.push(...inner);
+                        }
                     }
                 }
             }
