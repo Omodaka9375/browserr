@@ -3,7 +3,7 @@
   "name": "io.github.Omodaka9375/browserr",
   "title": "Browserr",
   "description": "Fail-closed browser for agents: navigate, extract, fill forms, human handoff, evidence. No Chromium.",
-  "version": "0.7.5",
+  "version": "0.8.0",
   "repository": {
     "url": "https://github.com/Omodaka9375/browserr",
     "source": "github"
@@ -13,7 +13,7 @@
     {
       "registryType": "pypi",
       "identifier": "browserr-mcp",
-      "version": "0.7.5",
+      "version": "0.8.0",
       "transport": {
         "type": "stdio"
       }

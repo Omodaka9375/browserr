@@ -6,6 +6,25 @@ scheme is [SemVer](https://semver.org/). Releases are published by CI on
 tag push; asset archives and full diffs live on the
 [releases page](https://github.com/Omodaka9375/browserr/releases).
 
+## [0.8.0] - 2026-11-17
+
+### Added
+
+- A driver-level `stop` command can terminate the engine even when a page
+  has stalled Servo's main loop. `browser_ping` is answered directly by
+  the driver connection, so health checks keep working during a stall.
+
+### Fixed
+
+- WebGL no longer kills the engine on the default software-rendering path.
+  WebGL and the renderer now share the renderer's D3D11 adapter; failed
+  surface imports or swaps skip the affected frame instead of panicking.
+- `browser_read` now pierces open shadow roots and expands `<slot>`
+  contents, so web-component pages expose the same application text as
+  `browser_read_structure`.
+- The "browser session not started" error lists running sessions and
+  notes that every browser tool accepts a `session` argument.
+
 ## [0.7.1] - 2026-11-15
 
 ### Fixed
