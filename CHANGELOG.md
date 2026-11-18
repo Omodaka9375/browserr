@@ -6,6 +6,22 @@ scheme is [SemVer](https://semver.org/). Releases are published by CI on
 tag push; asset archives and full diffs live on the
 [releases page](https://github.com/Omodaka9375/browserr/releases).
 
+## [0.9.2] - 2026-11-18
+
+### Fixed
+
+- CSP-strict sites (nonce-based script-src without unsafe-eval, e.g.
+  ashbyhq job boards) were completely broken on 0.9.1: the promise
+  adapter routed every eval through page-side eval(), which such sites
+  forbid, and the resulting error leaked as a raw dict that crashed
+  internal callers with unrelated messages ('dict' has no partition,
+  unpack ValueError) instead of a clear CSP error. eval_js now falls
+  back to the engine's own eval path when eval() is CSP-blocked - the
+  embedder-injected path is exempt from page CSP (0.8.2 semantics;
+  promise awaiting stays available on CSP-normal pages). All eval
+  failures now raise a typed EvalError instead of returning
+  {'__error': ...} dicts.
+
 ## [0.9.1] - 2026-11-18
 
 ### Fixed

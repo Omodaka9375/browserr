@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "browserr-mcp"
-version = "0.9.1"
+version = "0.9.2"
 description = "MCP server for Browserr, the Servo-based agent browser. One command; the platform engine binary is downloaded and digest-verified on first run."
 readme = "README.md"
 license = "Apache-2.0"
