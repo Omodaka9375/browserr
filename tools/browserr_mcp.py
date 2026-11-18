@@ -365,10 +365,9 @@ TOOLS = [
                        "behave). Scrolls into view first.",
         "inputSchema": {"type": "object", "properties": {
             "selector": {"type": "string"},
-            "timeout": {"type": "number",
-                        "description": "seconds (NOT ms); values over 1000 are "
-                                       "treated as milliseconds and capped at "
-                                       "120s"}}, "required": ["selector"]},
+            "timeout_ms": {"type": "integer",
+                           "description": "timeout in milliseconds; capped at "
+                                          "120000"}}, "required": ["selector"]},
     },
     {
         "name": "browser_set_value",
@@ -378,10 +377,9 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {
             "selector": {"type": "string"},
             "value": {"type": "string"},
-            "timeout": {"type": "number",
-                        "description": "seconds (NOT ms); values over 1000 are "
-                                       "treated as milliseconds and capped at "
-                                       "120s"}}, "required": ["selector", "value"]},
+            "timeout_ms": {"type": "integer",
+                           "description": "timeout in milliseconds; capped at "
+                                          "120000"}}, "required": ["selector", "value"]},
     },
     {
         "name": "browser_wait_for",
@@ -389,11 +387,10 @@ TOOLS = [
                        "element (SPA render); returns its viewport rect.",
         "inputSchema": {"type": "object", "properties": {
             "selector": {"type": "string"},
-            "timeout": {"type": "number",
-                        "description": "seconds (NOT ms); values over 1000 are "
-                                       "treated as milliseconds and capped at "
-                                       "120s - a 20000 means 20 seconds, not "
-                                       "5.5 hours"}}, "required": ["selector"]},
+            "timeout_ms": {"type": "integer",
+                           "description": "timeout in milliseconds "
+                                          "(e.g. 20000 = 20 seconds); capped "
+                                          "at 120000"}}, "required": ["selector"]},
     },
     {
         "name": "browser_read_structure",
@@ -628,7 +625,7 @@ TOOLS = [
                        "false to handle challenges with browser_auth_answer.",
         "inputSchema": {"type": "object", "properties": {
             "tab": {"type": "integer"},
-            "timeout_seconds": {"type": "number"}}, "required": []},
+            "timeout_ms": {"type": "integer"}}, "required": []},
     },
     {
         "name": "browser_auth_answer",
@@ -646,7 +643,7 @@ TOOLS = [
                        "browser_files_answer.",
         "inputSchema": {"type": "object", "properties": {
             "tab": {"type": "integer"},
-            "timeout_seconds": {"type": "number"}}, "required": []},
+            "timeout_ms": {"type": "integer"}}, "required": []},
     },
     {
         "name": "browser_files_answer",
@@ -667,12 +664,12 @@ TOOLS = [
                        "to confirm completion. Returns done:false on timeout; "
                        "call again to keep watching.",
         "inputSchema": {"type": "object", "properties": {
-            "timeout_seconds": {"type": "number"}}, "required": []},
+            "timeout_ms": {"type": "integer"}}, "required": []},
     },
 ]
 
 
-def _wait_for_user(timeout_seconds=30):
+def _wait_for_user(timeout=30.0):
     """Watch a paused page without treating a clean first scan as success.
 
     Completion requires navigation or a true-to-false handoff transition
@@ -682,7 +679,7 @@ def _wait_for_user(timeout_seconds=30):
     d = STATE.d()
     if d.paused is None:
         raise McpError("call browser_pause before browser_wait_for_user")
-    timeout = max(0.0, min(float(timeout_seconds), 120))
+    timeout = max(0.0, min(float(timeout), 120))
     start = time.time()
     # Remember a detected gate across polling calls for the same pause.
     seen_handoff = getattr(d, "_handoff_seen", False)
@@ -727,19 +724,16 @@ def _wait_for_user(timeout_seconds=30):
 
 
 def _timeout_arg(args, default=15.0):
-    """Coerce a timeout argument to seconds. The MCP schemas say seconds,
-    but agents used to wait_ms/settle_ms keep passing milliseconds; a bare
-    20000 then means 5.5 HOURS and wedges the request loop long after the
-    client stopped listening. Values over 1000 are almost certainly ms:
-    rescale to seconds, then cap everything at 120s so no single page-
-    scoped wait can outlive a client's patience."""
+    """Resolve a tool timeout to seconds. The one canonical agent-facing
+    name is timeout_ms (milliseconds, matching wait_ms/settle_ms on
+    navigate): the unit lives in the name, so no agent has to guess and
+    no coercion heuristics are needed. Capped at 120s so no page-scoped
+    wait can outlive a client's patience."""
     try:
-        t = float(args.get("timeout", default))
+        return max(0.0, min(float(args.get("timeout_ms", default * 1000.0))
+                            / 1000.0, 120.0))
     except (TypeError, ValueError):
         return default
-    if t > 1000:
-        t = t / 1000.0
-    return max(0.0, min(t, 120.0))
 
 
 def call_tool(name, args):
@@ -991,7 +985,7 @@ def call_tool(name, args):
         return STATE.status(**d.action_log(limit=args.get("limit", 100)))
     if name == "browser_wait_auth":
         ev = d.wait_auth(tab=args.get("tab"),
-                         timeout=args.get("timeout_seconds", 10.0))
+                         timeout=_timeout_arg(args, 10.0))
         return {"id": ev.get("id"), "tab": ev.get("tab"),
                 "url": ev.get("url"), "proxy": ev.get("proxy")}
     if name == "browser_auth_answer":
@@ -1001,7 +995,7 @@ def call_tool(name, args):
             user is not None and password is not None)}
     if name == "browser_wait_filepicker":
         ev = d.wait_filepicker(tab=args.get("tab"),
-                               timeout=args.get("timeout_seconds", 60.0))
+                               timeout=_timeout_arg(args, 60.0))
         return {"id": ev.get("id"), "tab": ev.get("tab"),
                 "multiple": ev.get("multiple")}
     if name == "browser_files_answer":
@@ -1035,7 +1029,7 @@ def call_tool(name, args):
     if name == "browser_detect_handoff":
         return d.detect_handoff()
     if name == "browser_wait_for_user":
-        return _wait_for_user(args.get("timeout_seconds", 30))
+        return _wait_for_user(_timeout_arg(args, 30.0))
     raise McpError(f"unknown tool {name}")
 
 

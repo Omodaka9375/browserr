@@ -47,7 +47,7 @@ def wait_with(fake, timeout=0.01):
     browserr_mcp.time.sleep = lambda seconds: clock.__setitem__(
         0, clock[0] + seconds)
     try:
-        return browserr_mcp._wait_for_user(timeout_seconds=timeout)
+        return browserr_mcp._wait_for_user(timeout=timeout)
     finally:
         browserr_mcp.STATE = old
         browserr_mcp.time.sleep = old_sleep
