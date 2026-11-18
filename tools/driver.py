@@ -43,9 +43,11 @@ ENGINE_RELEASE = (_ENGINE_BUNDLED if _os.path.exists(_ENGINE_BUNDLED)
                   else ROOT + "/engine/target/release/engine" + EXE_SUFFIX)
 import json
 import re
+import signal
 import socket
 import struct
 import subprocess
+import sys
 import threading
 import time
 import zlib
@@ -55,6 +57,84 @@ FRM1 = 0x46524D31
 EVT1 = 0x45565431
 SHT1 = 0x53485431
 FRM2 = 0x46524D32
+
+
+def _bind_child_to_parent_lifetime(proc):
+    """Orphan-proofing: make the OS kill the engine child when THIS
+    process dies, however it dies (crash, kill, KAI tool timeout). The
+    engine's own shutdown paths (client disconnect, driver stop) run on
+    the servo main loop and never fire while a page wedges it - a killed
+    MCP server then leaked a wedged engine forever, holding port 7411
+    and its ephemeral profile (the "orphaned active instances" seen in
+    the field).
+
+    Windows: assign the child to a Job with
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE; the OS closes the job handle at
+    our death, terminating the engine even mid-wedge. Returns the job
+    handle (the caller must keep it open until death or close()).
+    Linux: returns a preexec_fn setting PR_SET_PDEATHSIG=SIGKILL.
+    macOS: no equivalent; socket-EOF covers the graceful case only.
+
+    Windows call form: _bind_child_to_parent_lifetime(proc) -> handle.
+    Linux call form: _bind_child_to_parent_lifetime(None) -> preexec_fn.
+    """
+    if _os.name == "nt":
+        if proc is None:
+            return None  # windows: called WITH the proc after Popen
+        import ctypes
+        from ctypes import wintypes
+
+        class _IO_COUNTERS(ctypes.Structure):
+            _fields_ = [(f, ctypes.c_ulonglong) for f in
+                        ("ReadOperationCount", "WriteOperationCount",
+                         "OtherOperationCount", "ReadTransferCount",
+                         "WriteTransferCount", "OtherTransferCount")]
+
+        class _BASIC_LIMITS(ctypes.Structure):
+            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_longlong),
+                        ("PerJobUserTimeLimit", ctypes.c_longlong),
+                        ("LimitFlags", wintypes.DWORD),
+                        ("MinimumWorkingSetSize", ctypes.c_size_t),
+                        ("MaximumWorkingSetSize", ctypes.c_size_t),
+                        ("ActiveProcessLimit", wintypes.DWORD),
+                        ("Affinity", ctypes.POINTER(wintypes.ULONG)),
+                        ("PriorityClass", wintypes.DWORD),
+                        ("SchedulingClass", wintypes.DWORD)]
+
+        class _EXT_LIMITS(ctypes.Structure):
+            _fields_ = [("BasicLimitInformation", _BASIC_LIMITS),
+                        ("IOInfo", _IO_COUNTERS),
+                        ("ProcessMemoryLimit", ctypes.c_size_t),
+                        ("JobMemoryLimit", ctypes.c_size_t),
+                        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                        ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+        JobObjectExtendedLimitInformation = 9
+        kernel32 = ctypes.windll.kernel32
+        h = kernel32.CreateJobObjectW(None, None)
+        if not h:
+            return None
+        info = _EXT_LIMITS()
+        info.BasicLimitInformation.LimitFlags = \
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not kernel32.SetInformationJobObject(
+                h, JobObjectExtendedLimitInformation,
+                ctypes.byref(info), ctypes.sizeof(info)):
+            kernel32.CloseHandle(h)
+            return None
+        if not kernel32.AssignProcessToJobObject(h, proc._handle):
+            kernel32.CloseHandle(h)
+            return None
+        return h  # keep open for our lifetime; the OS closes it on death
+    if sys.platform.startswith("linux") and proc is None:
+        import ctypes
+
+        def _pdeathsig():
+            libc = ctypes.CDLL("libc.so.6", use_errno=True)
+            libc.prctl(1, signal.SIGKILL)  # PR_SET_PDEATHSIG
+        return _pdeathsig
+    return None
 
 
 class EngineDeadError(ConnectionError):
@@ -242,9 +322,19 @@ class Driver:
         # stdout MUST be devnull: in an MCP server the engine would inherit
         # the JSON-RPC stdout pipe and corrupt it (chrome does the same:
         # Stdio::null()). The engine never legitimately writes to stdout.
+        # Orphan guard: the engine must die with THIS process even when
+        # a wedged page keeps it from noticing the socket close. Windows:
+        # job handle (kept on self, closed by the OS at our death).
+        # Linux: PDEATHSIG preexec_fn.
+        if _os.name == "nt":
+            preexec = None
+        else:
+            preexec = _bind_child_to_parent_lifetime(None)
         self.proc = subprocess.Popen(args, stdin=subprocess.DEVNULL,
                                     stdout=subprocess.DEVNULL,
-                                    stderr=self._log or subprocess.DEVNULL)
+                                    stderr=self._log or subprocess.DEVNULL,
+                                    preexec_fn=preexec)
+        self._parent_guard = _bind_child_to_parent_lifetime(self.proc)
 
         last = None
         deadline = time.time() + 20.0
@@ -978,6 +1068,10 @@ class Driver:
                 self.proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+                try:
+                    self.proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass  # the OS-level guard (job handle) still reaps it
         if self._log:
             self._log.close()
 
