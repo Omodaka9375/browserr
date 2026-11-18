@@ -75,6 +75,9 @@ def _platform_asset(version: str) -> str:
         if os.path.isdir("/data/data/com.termux/files/usr"):
             system = "android"
     elif system == "darwin":
+        # Release assets are labeled macos-* (not darwin-*); platform.system()
+        # says "darwin" on a Mac, so map it or the asset name never matches.
+        system = "macos"
         arch = "arm64" if machine == "arm64" else "x64"
         ext = "tar.gz"
     else:
