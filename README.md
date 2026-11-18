@@ -185,6 +185,19 @@ README.md, LICENSE
 Requirements: Python 3.10+ on PATH. `driver.py` finds the engine binary
 next to itself; override with `BROWSERR_ENGINE=/path/to/engine`.
 
+**Linux runtime packages** (all distros, headless included): the engine
+creates its GL context through EGL even for CPU (llvmpipe) rendering -
+EGL is the context-creation API, not the GPU. On a server/VPS without
+a GPU install:
+
+```sh
+sudo apt install libegl1 libgl1 libgbm1 libgl1-mesa-dri
+```
+
+(`libegl1` + `libgbm1` create the headless context,
+`libgl1-mesa-dri` ships llvmpipe, the software rasterizer. X11/xvfb is
+only needed for `--headed`; headless needs none of it.)
+
 ### Update an existing unpack
 
 Re-download the archive, or run the updater shipped inside it. It queries
