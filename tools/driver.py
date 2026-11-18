@@ -42,6 +42,7 @@ ENGINE_DEBUG = (_ENGINE_BUNDLED if _os.path.exists(_ENGINE_BUNDLED)
 ENGINE_RELEASE = (_ENGINE_BUNDLED if _os.path.exists(_ENGINE_BUNDLED)
                   else ROOT + "/engine/target/release/engine" + EXE_SUFFIX)
 import json
+import random
 import re
 import signal
 import socket
@@ -670,12 +671,58 @@ class Driver:
         raise TimeoutError("page never became ready")
 
     def eval_js(self, js: str, tab: int = 0, timeout=10.0):
-        """Evaluate JS in the page and return the (JSON-friendly) result."""
+        """Evaluate JS in the page and return the (JSON-friendly) result.
+
+        Servo's evaluate_javascript does NOT await promises - a bare
+        async IIFE resolves to the Promise object, which serializes as {}.
+        The script is therefore run through a page-side adapter: if the
+        completion value is a thenable, it is parked in a window slot and
+        polled until it settles; the resolved value (or the error string)
+        is returned instead of {}. Page-side eval() keeps completion-value
+        semantics, so statement scripts behave exactly as before. Promises
+        should resolve to plain JSON values; complex objects still
+        serialize only their enumerable properties."""
+        slot = self._alloc_id()
+        adapter = (
+            "(function(){var __r=eval(" + json.dumps(js) + ");"
+            "if(__r&&typeof __r.then==='function'){"
+            "window.__browserr_evals=window.__browserr_evals||{};"
+            "var s={p:1,v:null,e:null};"
+            "window.__browserr_evals[" + str(slot) + "]=s;"
+            "__r.then(function(v){s.p=0;s.v=v;},"
+            "function(e){s.p=0;s.e=String(e);});"
+            "return {__pending:" + str(slot) + "};}"
+            "return __r;})()")
         req = self._alloc_id()
-        self.cmd({"cmd": "eval", "tab": tab, "js": js, "id": req})
+        self.cmd({"cmd": "eval", "tab": tab, "js": adapter, "id": req})
         ev = self.wait_for(
             lambda e: e.get("ev") == "evalresult" and e.get("id") == req, timeout)
-        return ev.get("value")
+        value = ev.get("value")
+        if not (isinstance(value, dict) and "__pending" in value):
+            return value
+        # The script returned a promise: poll its parking slot until it
+        # settles (each poll is a tiny sync eval).
+        poll = ("(function(){var s=(window.__browserr_evals||{})["
+                + str(slot) + "];"
+                "if(!s||s.p){return null;}"
+                "delete window.__browserr_evals[" + str(slot) + "];"
+                "return s.e!==null?{__error:s.e}:s.v;})()")
+        deadline = time.time() + timeout
+        while True:
+            req = self._alloc_id()
+            self.cmd({"cmd": "eval", "tab": tab, "js": poll, "id": req})
+            try:
+                ev = self.wait_for(
+                    lambda e: (e.get("ev") == "evalresult"
+                               and e.get("id") == req), 2.0)
+            except TimeoutError:
+                pass  # page busy; keep polling until the deadline
+            else:
+                r = ev.get("value")
+                if r is not None:
+                    return r
+            if time.time() >= deadline:
+                raise TimeoutError("eval promise did not settle in time")
 
     def screenshot(self, tab: int = 0, timeout=10.0):
         """Paint the tab and return (w, h, bgra bytes)."""
@@ -818,19 +865,38 @@ class Driver:
                 return None
             time.sleep(0.2)
 
+    def _humanized_click(self, rect, tab: int = 0):
+        """Click inside an element the way a person does: a few pointer
+        moves toward a jittered point inside the element (never exactly
+        the center, never a perfectly straight path), small pauses, then
+        down/up. Keeps sites that flag instant center-clicks from
+        noticing automation; deliberately simple - no bezier curves."""
+        w, h = max(rect["w"], 1.0), max(rect["h"], 1.0)
+        # Jitter inside the central 60% of the element.
+        jx = w * (0.2 + 0.6 * random.random()) - w / 2
+        jy = h * (0.2 + 0.6 * random.random()) - h / 2
+        tx, ty = rect["x"] + w / 2 + jx, rect["y"] + h / 2 + jy
+        # Approach from a short offset: 2 intermediate moves, not a jump.
+        ox, oy = random.uniform(-30, 30), random.uniform(-25, 25)
+        self.move(tx + ox, ty + oy, tab=tab)
+        time.sleep(random.uniform(0.03, 0.09))
+        self.move(tx + ox * 0.4, ty + oy * 0.4, tab=tab)
+        time.sleep(random.uniform(0.03, 0.08))
+        self.move(tx, ty, tab=tab)
+        time.sleep(random.uniform(0.05, 0.12))
+        self.click(tx, ty, tab=tab)
+        return (tx, ty)
+
     def click_element(self, selector, tab: int = 0, timeout=10.0):
-        """Click the center of the first element matching a CSS selector with
-        a real pointer event (down+up at coordinates, so hover/focus behave).
+        """Click the first element matching a CSS selector with a real
+        pointer event (down+up at coordinates, so hover/focus behave),
+        humanized: jittered target point, small approach moves and pauses.
         Returns (x, y); raises TimeoutError if the element never appears."""
         deadline = time.time() + timeout
         while True:
             rect = self.element_rect(selector, tab, timeout=2.0)
             if rect:
-                x = rect["x"] + rect["w"] / 2
-                y = rect["y"] + rect["h"] / 2
-                self.move(x, y, tab=tab)
-                self.click(x, y, tab=tab)
-                return (x, y)
+                return self._humanized_click(rect, tab=tab)
             if time.time() >= deadline:
                 raise TimeoutError(f"no element matches {selector!r}")
             time.sleep(0.2)
@@ -1547,11 +1613,22 @@ class Driver:
         if not pt or not isinstance(pt, dict):
             raise StaleRefError(
                 f"stale ref {ref!r}: run read_structure again for fresh refs")
-        # hover first: servo resolves the click target from the pointer
-        # position, so a move before down/up is what makes hover/focus behave.
-        self.move(pt["x"], pt["y"], tab=tab)
-        self.click(pt["x"], pt["y"], tab=tab)
+        # Humanized like click_element: jittered point, approach moves,
+        # small pauses. Hover comes free from the moves before down/up.
+        # _humanized_click wants a TOP-LEFT rect; REF_RECT_JS reports the
+        # element CENTER, so normalize before jittering (otherwise the
+        # click point lands around center + w/2, past the right edge).
+        # The resolved rect is returned (unchanged API shape).
+        if "w" in pt and "h" in pt:
+            rect = {"x": pt["x"] - pt["w"] / 2,
+                    "y": pt["y"] - pt["h"] / 2,
+                    "w": pt["w"], "h": pt["h"]}
+            self._humanized_click(rect, tab=tab)
+        else:  # older rect shape without size: plain hover+click
+            self.move(pt["x"], pt["y"], tab=tab)
+            self.click(pt["x"], pt["y"], tab=tab)
         self._log_action("click_ref", ref=ref)
+        return pt
         return pt
 
     def set_field(self, ref_or_selector, value, tab: int = 0, timeout=10.0):

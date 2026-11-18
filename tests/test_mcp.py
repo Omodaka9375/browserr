@@ -256,7 +256,7 @@ try:
     r = call("browser_read_structure")
     picker = next(i for i in r["inputs"] if i["id"] == "pick")
     call("browser_click_ref", {"ref": picker["ref"]})
-    picker_event = call("browser_wait_filepicker", {"timeout_seconds": 10})
+    picker_event = call("browser_wait_filepicker", {"timeout_ms": 10000})
     assert picker_event["id"] >= 1, picker_event
     call("browser_files_answer", {"id": picker_event["id"],
                                   "paths": [PICKER_PATH]})
