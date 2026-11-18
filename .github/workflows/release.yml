@@ -24,6 +24,12 @@ jobs:
           - os: macos-latest
             platform: macos-arm64
             gpuless: ""
+          # Android (Termux): cross-build on linux-x64 with the NDK; no
+          # test suite (host legs cover the python side; the engine gets
+          # a device test before 0.9.0 ships).
+          - os: ubuntu-24.04
+            platform: android-arm64
+            gpuless: ""
     runs-on: ${{ matrix.os }}
     # ARM64 runners are slower (Servo debug build + tests + release build
     # in one job), so the cap is higher than the fast legs need.
@@ -47,6 +53,21 @@ jobs:
             libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxinerama-dev \
             xvfb
 
+      # Android leg: cross-build only (no test suite - Android needs a
+      # device/emulator; the same tests run on the three host legs).
+      - name: Install NDK r30 (android leg)
+        if: matrix.platform == 'android-arm64'
+        run: |
+          curl -fsSL -o /tmp/ndk.zip \
+            https://dl.google.com/android/repository/android-ndk-r30-linux.zip
+          sudo unzip -q /tmp/ndk.zip -d /opt
+          sudo mv /opt/android-ndk-r30 /opt/ndk
+          echo "ANDROID_NDK_HOME=/opt/ndk" >> "$GITHUB_ENV"
+
+      - name: Package android tarball
+        if: matrix.platform == 'android-arm64'
+        run: bash scripts/package_android.sh
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -63,6 +84,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+        if: matrix.platform != 'android-arm64'
+        if: matrix.platform != 'android-arm64'
 
       - name: Install python test deps
         # The full unix gate runs the terminal-client tests, which import
@@ -70,6 +93,7 @@ jobs:
         # GPU-less mode and needs neither, but installing everywhere keeps
         # the matrix uniform and future-proof.
         run: python -m pip install --disable-pip-version-check numpy pillow
+        if: matrix.platform != 'android-arm64'
 
       - name: Gate (fmt + clippy + build + test suite, windows)
         shell: pwsh
@@ -81,7 +105,7 @@ jobs:
       - name: Gate (fmt + clippy + build + test suite, unix)
         shell: bash
         run: bash scripts/ci.sh
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && matrix.platform != 'android-arm64'
 
       - name: Package release zip (windows)
         shell: pwsh
@@ -95,7 +119,7 @@ jobs:
         env:
           RELEASE_VERSION: ${{ github.ref_name }}
         run: bash scripts/package.sh
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && matrix.platform != 'android-arm64'
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
@@ -105,6 +129,7 @@ jobs:
             browserr-*-linux-x64.tar.gz
             browserr-*-linux-arm64.tar.gz
             browserr-*-macos-*.tar.gz
+            browserr-*-android-arm64.tar.gz
           generate_release_notes: true
           draft: false
           prerelease: false

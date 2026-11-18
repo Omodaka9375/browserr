@@ -70,6 +70,10 @@ def _platform_asset(version: str) -> str:
     elif system == "linux":
         arch = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64"}.get(machine)
         ext = "tar.gz"
+        # Termux (Android): Python runs under Linux/aarch64 but the engine
+        # asset is the android build. $PREFIX ends in /com.termux/files/usr.
+        if os.path.isdir("/data/data/com.termux/files/usr"):
+            system = "android"
     elif system == "darwin":
         arch = "arm64" if machine == "arm64" else "x64"
         ext = "tar.gz"

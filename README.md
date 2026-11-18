@@ -202,6 +202,54 @@ update.cmd                     # Windows (double-clickable)
 powershell -File update.ps1 -WhatIf   # report without touching anything
 ```
 
+### Android (Termux)
+
+Browserr runs headless on Android inside [Termux](https://termux.dev):
+the engine is an android-arm64 binary (API 29+ / Android 10+, 64-bit
+userland), and the MCP server and Python SDK run unmodified under
+Termux's Python 3. No APK, no root, no emulator needed - the same
+`browserr-mcp` package auto-detects Termux and downloads the android
+engine asset on first run.
+
+```sh
+pkg install python            # Python 3.12 from the Termux repo
+pip install browserr-mcp      # server + SDK + engine bootstrap
+browserr-mcp                  # first run downloads the android engine
+```
+
+Or drive it as a library, same as on a desktop:
+
+```python
+import sys; sys.path.insert(0, "...")
+from driver import Driver
+d = Driver(ephemeral=True)
+d.navigate("https://example.com/")
+print(d.read_page()[:200])
+```
+
+Headless only: no headed mode and no audio on Android. 32-bit ARM and
+x86 devices are not supported (no assets). Screenshot, eval, forms,
+network inspection - the full headless toolset works.
+
+To test-drive a build manually (e.g. from an emulator or a rooted
+device) without pip, push the engine and drive it from the PC over
+`adb forward`:
+
+```sh
+adb push engine /data/local/tmp/engine
+adb shell chmod +x /data/local/tmp/engine
+adb shell /data/local/tmp/engine --ephemeral --driver-port=7412
+adb forward tcp:7412 tcp:7412
+```
+
+```python
+# from the PC, with the repo's tools/ on sys.path:
+from driver import Driver
+d = Driver.attach(7412)
+d.navigate("https://example.com/")
+print(d.read_page()[:200])
+```
+
 ### Browse in your terminal
 
 Browserr Term renders real pages inside a terminal pane at native
