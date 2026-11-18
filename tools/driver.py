@@ -153,6 +153,13 @@ class EngineDeadError(ConnectionError):
     """
 
 
+class EvalError(RuntimeError):
+    """A page script evaluation failed (JS exception, CSP block, or a
+    rejected promise). Carries the engine's error text; never silently
+    returned as a result dict.
+    """
+
+
 class PausedError(RuntimeError):
     """The driver is paused: a human has taken over.
 
@@ -665,7 +672,9 @@ class Driver:
                 if (ready == "complete"
                         and (href != "about:blank" or target == "about:blank")):
                     return
-            except TimeoutError:
+            except (TimeoutError, EvalError):
+                # dropped evals (early) and mid-replacement document
+                # errors are both transient while the page loads
                 pass
             time.sleep(0.2)
         raise TimeoutError("page never became ready")
@@ -698,6 +707,16 @@ class Driver:
         ev = self.wait_for(
             lambda e: e.get("ev") == "evalresult" and e.get("id") == req, timeout)
         value = ev.get("value")
+        if isinstance(value, dict) and "__error" in value:
+            err = str(value["__error"])
+            # Page-side eval() is forbidden by strict CSP (nonce-based
+            # script-src, no unsafe-eval). The engine's own eval path is
+            # embedder-injected and NOT subject to page CSP: fall back to
+            # it (0.8.2 semantics - promises serialize as {} instead of
+            # being awaited) rather than breaking every eval on the site.
+            if "blocked by CSP" in err or "unsafe-eval" in err:
+                return self._eval_direct(js, tab, timeout)
+            raise EvalError(err)
         if not (isinstance(value, dict) and "__pending" in value):
             return value
         # The script returned a promise: poll its parking slot until it
@@ -719,10 +738,31 @@ class Driver:
                 pass  # page busy; keep polling until the deadline
             else:
                 r = ev.get("value")
+                if isinstance(r, dict) and "__error" in r:
+                    # the parked promise rejected
+                    raise EvalError(str(r["__error"]))
                 if r is not None:
                     return r
             if time.time() >= deadline:
                 raise TimeoutError("eval promise did not settle in time")
+
+    def _eval_direct(self, js: str, tab: int, timeout: float):
+        """Evaluate via the engine's own path with no page-side adapter.
+
+        Embedder-injected scripts bypass page CSP, so this works on
+        CSP-strict sites where eval() is forbidden. Servo does not
+        await promises on this path: a thenable result serializes as {}
+        (0.8.2 semantics). Used as the CSP fallback by eval_js.
+        """
+        req = self._alloc_id()
+        self.cmd({"cmd": "eval", "tab": tab, "js": js, "id": req})
+        ev = self.wait_for(
+            lambda e: e.get("ev") == "evalresult" and e.get("id") == req,
+            timeout)
+        value = ev.get("value")
+        if isinstance(value, dict) and "__error" in value:
+            raise EvalError(str(value["__error"]))
+        return value
 
     def screenshot(self, tab: int = 0, timeout=10.0):
         """Paint the tab and return (w, h, bgra bytes)."""
