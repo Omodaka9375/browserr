@@ -1459,6 +1459,43 @@ fn load_adblock(path: &std::path::Path) -> Option<std::rc::Rc<adblock::engine::E
     ))
 }
 
+/// Linux: the GL context is created through EGL even for CPU (llvmpipe)
+/// rendering - EGL is the context-creation API, not the GPU. A missing
+/// libEGL/libGBM makes surfman PANIC ("Unable to load the libEGL shared
+/// object") inside Device::new, or surface as an Err from context
+/// creation. Print the fix instead of raw debug noise.
+fn looks_like_missing_gl(s: &str) -> bool {
+    cfg!(target_os = "linux") && (s.contains("EGL") || s.contains("dlopen") || s.contains("GL"))
+}
+
+fn egl_hint(e: &dyn std::fmt::Debug) {
+    if looks_like_missing_gl(&format!("{e:?}")) {
+        eprintln!(
+            "engine hint: this looks like missing GL/EGL libraries. \
+             Headless rendering needs EGL even on CPU (llvmpipe). Install: \
+             sudo apt install libegl1 libgl1 libgbm1 libgl1-mesa-dri \
+             (or the equivalent packages for your distro)"
+        );
+    }
+}
+
+fn context_panic_hint(p: &Box<dyn std::any::Any + Send>) {
+    // catch_unwind payload: &str or String (panics format their message).
+    let msg = p
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| p.downcast_ref::<String>().cloned())
+        .unwrap_or_default();
+    if looks_like_missing_gl(&msg) {
+        eprintln!(
+            "engine hint: this looks like missing GL/EGL libraries. \
+             Headless rendering needs EGL even on CPU (llvmpipe). Install: \
+             sudo apt install libegl1 libgl1 libgbm1 libgl1-mesa-dri \
+             (or the equivalent packages for your distro)"
+        );
+    }
+}
+
 fn make_context(
     size: dpi::PhysicalSize<u32>,
     prefer_gpu: bool,
@@ -1469,13 +1506,25 @@ fn make_context(
     // 3 attempts, fall back to software so a missing driver never wedges
     // startup.
     if !prefer_gpu {
-        return match servo::SoftwareRenderingContext::new(size) {
-            Ok(c) => {
+        // surfman PANICS (not Err) when libEGL cannot be dlopened - a
+        // common state on GPU-less servers/VPSes with no mesa packages.
+        // Catch it so the hint below prints instead of a raw panic.
+        let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            servo::SoftwareRenderingContext::new(size)
+        }));
+        return match attempt {
+            Ok(Ok(c)) => {
                 eprintln!("engine: software rendering context (default)");
                 Some(std::rc::Rc::new(c))
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 eprintln!("engine: no rendering context: {e:?}");
+                egl_hint(&e);
+                None
+            }
+            Err(p) => {
+                eprintln!("engine: rendering context creation panicked");
+                context_panic_hint(&p);
                 None
             }
         };
@@ -1498,13 +1547,22 @@ fn make_context(
             }
         }
     }
-    match servo::SoftwareRenderingContext::new(size) {
-        Ok(c) => {
+    let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        servo::SoftwareRenderingContext::new(size)
+    }));
+    match attempt {
+        Ok(Ok(c)) => {
             eprintln!("engine: software rendering context (GPU fallback)");
             Some(std::rc::Rc::new(c))
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             eprintln!("engine: no rendering context: {e:?}");
+            egl_hint(&e);
+            None
+        }
+        Err(p) => {
+            eprintln!("engine: rendering context creation panicked");
+            context_panic_hint(&p);
             None
         }
     }
