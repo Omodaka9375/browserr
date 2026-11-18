@@ -51,6 +51,48 @@ class McpError(Exception):
 MCP_VERSION = "0.8.1"
 
 
+# Built-in User-Agent profiles (current stable strings, Nov 2026).
+# browser_start accepts a profile NAME in user_agent ("chrome", "firefox",
+# ...) or a full custom string; an unknown short name is an error (never a
+# silent default), a string containing "Mozilla" passes through as-is.
+UA_PROFILES = {
+    "chrome": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+               "AppleWebKit/537.36 (KHTML, like Gecko) "
+               "Chrome/157.0.0.0 Safari/537.36"),
+    "chrome_mac": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/157.0.0.0 Safari/537.36"),
+    "chrome_linux": ("Mozilla/5.0 (X11; Linux x86_64) "
+                     "AppleWebKit/537.36 (KHTML, like Gecko) "
+                     "Chrome/157.0.0.0 Safari/537.36"),
+    "edge": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+             "AppleWebKit/537.36 (KHTML, like Gecko) "
+             "Chrome/157.0.0.0 Safari/537.36 Edg/157.0.0.0"),
+    "firefox": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:160.0) "
+                "Gecko/20100101 Firefox/160.0"),
+    "safari": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 15_8_3) "
+               "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+               "Version/27.0 Safari/605.1.15"),
+    "android": ("Mozilla/5.0 (Linux; Android 10; K) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/157.0.8103.80 Mobile Safari/537.36"),
+    "iphone": ("Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) "
+               "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+               "CriOS/158.0.8127.35 Mobile/15E148 Safari/604.1"),
+}
+
+
+def _resolve_ua(user_agent):
+    """A KNOWN profile name resolves to its full UA string; anything else
+    passes through verbatim (custom strings, however short). Only exact
+    profile names are special-cased, so nothing an agent legitimately
+    sends is rejected."""
+    if not user_agent:
+        return None
+    ua = user_agent.strip()
+    return UA_PROFILES.get(ua.lower(), ua)
+
+
 def _engine_version(engine_path):
     """Ask the engine binary its version. None when it cannot answer
     (missing binary, pre-0.7.0 engines that ignore --version and boot)."""
@@ -129,8 +171,9 @@ class State:
             if attach_port and user_agent:
                 raise McpError("user_agent cannot change an attached engine; "
                                "start that engine with --user-agent= instead")
-            # The UA string rides in engine argv (spawn only); it is NOT
-            # written to the action log (engine_args are not logged).
+            # Profile names resolve here; the final string rides in engine
+            # argv (spawn only) and is NOT written to the action log.
+            user_agent = _resolve_ua(user_agent)
             ua_args = ["--user-agent=" + user_agent] if user_agent else []
             # Proxy flags go straight to the engine's argv (spawn only);
             # basic auth rides inside the URL (user:pass@host:port) and is
@@ -258,10 +301,13 @@ TOOLS = [
                          "description": "comma-separated hosts exempt from "
                                          "the proxy (spawn only)"},
             "user_agent": {"type": "string",
-                           "description": "custom HTTP User-Agent for all "
-                                           "requests (spawn only), e.g. a "
-                                           "desktop Chrome UA to avoid "
-                                           "mobile/blocked variants"},
+                           "description": "HTTP User-Agent for all requests "
+                                          "(spawn only). Built-in profiles: "
+                                          "chrome, chrome_mac, chrome_linux, "
+                                          "edge, firefox, safari, android, "
+                                          "iphone; or a full User-Agent "
+                                          "string. Use a desktop profile to "
+                                           "avoid mobile/blocked variants."},
             "session": {"type": "string",
                         "description": "named engine session; proxy and "
                                         "user_agent are engine properties, "
