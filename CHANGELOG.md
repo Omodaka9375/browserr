@@ -6,6 +6,63 @@ scheme is [SemVer](https://semver.org/). Releases are published by CI on
 tag push; asset archives and full diffs live on the
 [releases page](https://github.com/Omodaka9375/browserr/releases).
 
+## [0.9.0] - 2026-11-18
+
+### Added
+
+- **Android (Termux) support.** The engine ships as an android-arm64
+  release asset; inside Termux, `pip install browserr-mcp` detects the
+  environment and downloads it automatically. Requirements: Android 10+
+  (API 29), 64-bit userland; headless only. The MCP server and Python
+  SDK run unmodified under Termux Python.
+- eval now awaits promises: async IIFEs and fetch/await scripts return
+  the resolved value instead of an empty object. Sync scripts keep
+  completion-value semantics.
+- Humanized clicks: click_element and click_ref click a jittered point
+  inside the element with short approach moves and small pauses,
+  instead of an instant exact-center click.
+
+### Fixed
+
+- Linux servers without mesa packages failed at startup with a raw
+  surfman panic ("Unable to load the libEGL shared object"). The engine
+  now catches it and prints the packages to install
+  (libegl1 libgl1 libgbm1 libgl1-mesa-dri). EGL is required even for
+  CPU (llvmpipe) rendering - it is the context-creation API.
+
+## [0.8.2] - 2026-11-18
+
+### Added
+
+- Built-in User-Agent profiles on `browser_start`: pass `user_agent:
+  "chrome"` (also `chrome_mac`, `chrome_linux`, `edge`, `firefox`,
+  `safari`, `android`, `iphone`) instead of pasting a UA string; any
+  other value passes through verbatim.
+- The MCP server verifies and reports the engine binary version at
+  startup: `serverInfo` carries `engineVersion` and `enginePath`, and a
+  stale cached engine triggers a loud warning with the fix-it steps.
+
+### Fixed
+
+- The control plane can no longer be wedged by a stuck page tool:
+  `browser_ping` and `browser_stop` are answered immediately while
+  other tools run serialized on a single worker thread.
+- Orphaned engines: a killed MCP server used to leave a wedged engine
+  alive forever (holding port 7411). The engine is now bound to its
+  parent's lifetime at the OS level - Job Object `KILL_ON_JOB_CLOSE`
+  on Windows, `PDEATHSIG` on Linux - so it dies with the server however
+  the server dies.
+
+### Changed
+
+- **Breaking:** timeout parameters on `browser_wait_for`,
+  `browser_click_element`, `browser_set_value`, `browser_wait_auth`,
+  `browser_wait_filepicker` and `browser_wait_for_user` are now
+  `timeout_ms` (milliseconds, capped at 120000), matching
+  `wait_ms`/`settle_ms` on `browser_navigate`. The old ambiguous names
+  (`timeout`, `timeout_seconds`) are removed - the unit now lives in
+  the name, so a `20000` means 20 seconds and not 5.5 hours.
+
 ## [0.8.1] - 2026-11-17
 
 ### Fixed

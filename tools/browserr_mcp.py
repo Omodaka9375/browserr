@@ -48,7 +48,7 @@ class McpError(Exception):
 # binary is resolved independently, so a stale cached engine (older
 # unpack under ~/.browserr/versions) is DETECTED instead of silently
 # served: serverInfo reports both and startup logs the mismatch.
-MCP_VERSION = "0.8.2"
+MCP_VERSION = "0.9.0"
 
 
 # Built-in User-Agent profiles (current stable strings, Nov 2026).
