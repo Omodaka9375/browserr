@@ -16,11 +16,17 @@ edition = "2024"
 # -> pkcs1 0.8.0-rc.5 -> der ^0.8.2) pins a der release that was never
 # published to crates.io, so resolution fails. crypto.subtle.digest is
 # covered by a JS shim instead (engine/src/main.rs CRYPTO_SHIM_JS).
+# NO webgl in the COMMON list: servo-script's webgl feature pulls
+# mozangle on every non-iOS target, and mozangle's build script cannot
+# cross-compile (bindgen/cc run on ANGLE headers without the NDK's
+# C++ includes). WebGL is added per-target below: everywhere EXCEPT
+# android (headless-only Termux leg; WebGL there would be llvmpipe
+# anyway and the build cannot complete with mozangle in the graph).
 # no-wgl is WINDOWS-ONLY (below): it enables mozangle/egl, whose build
 # script panics on non-Windows targets, so it must never enter the
 # Linux/macOS graphs. Resolver v2/v3 (edition 2024) keeps target-specific
 # features isolated instead of unioning them.
-servo = { version = "0.8.0", default-features = false, features = ["bundled", "js_jit", "webgl", "clipboard", "brotli-compression-stream"] }
+servo = { version = "0.8.0", default-features = false, features = ["bundled", "js_jit", "clipboard", "brotli-compression-stream"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
 rustls-platform-verifier = "0.7"
 rustls-pki-types = "1"
@@ -70,6 +76,11 @@ servo = { version = "0.8.0", default-features = false, features = ["no-wgl"] }
 # NativeActivity (the plain, dependency-free one; GameActivity targets games).
 # Declaring it here unifies the feature onto the single graph copy.
 android-activity = { version = "0.6", features = ["native-activity"] }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+# WebGL everywhere except android (see the common servo comment): windows
+# stacks this with no-wgl (ANGLE on D3D11), linux/macos get software GL.
+servo = { version = "0.8.0", default-features = false, features = ["webgl"] }
 
 [profile.release]
 lto = "thin"
