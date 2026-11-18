@@ -5,6 +5,11 @@
 # API level 29 (Android 10): Bionic exposes stdout/stderr symbols only from 23,
 # posix_madvise and AHardwareBuffer_* from 26, and mozjs uses fortified fread.
 # -landroid: surfman's hardware-buffer path references AHardwareBuffer_*.
+# DEVICE TEST FINDING (2026-11-18, x86_64 emulator): the engine needs
+# libc++_shared.so next to it (CANNOT LINK EXECUTABLE without it) - the
+# packaging scripts must ship it and users must set
+# LD_LIBRARY_PATH=<engine dir>. Bionic does not search the binary's own
+# directory.
 
 [target.aarch64-linux-android]
 linker = "C:/Temp/android-ndk-r30/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android29-clang.cmd"

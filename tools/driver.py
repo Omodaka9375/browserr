@@ -59,6 +59,13 @@ SHT1 = 0x53485431
 FRM2 = 0x46524D32
 
 
+def _is_android():
+    """True inside Termux (Android): the engine needs its libc++_shared.so
+    on LD_LIBRARY_PATH and the ephemeral profile dir must live under
+    $PREFIX/tmp (Bionic has no /tmp)."""
+    return os.path.isdir("/data/data/com.termux/files/usr")
+
+
 def _bind_child_to_parent_lifetime(proc):
     """Orphan-proofing: make the OS kill the engine child when THIS
     process dies, however it dies (crash, kill, KAI tool timeout). The
@@ -330,10 +337,20 @@ class Driver:
             preexec = None
         else:
             preexec = _bind_child_to_parent_lifetime(None)
+        # Android (Termux): Bionic does not search the binary's own
+        # directory for libc++_shared.so, so put the engine dir on
+        # LD_LIBRARY_PATH before spawning.
+        env = None
+        if _is_android():
+            libdir = os.path.dirname(os.path.abspath(engine_path))
+            env = dict(os.environ)
+            existing = env.get("LD_LIBRARY_PATH", "")
+            env["LD_LIBRARY_PATH"] = (libdir + os.pathsep + existing
+                                      if existing else libdir)
         self.proc = subprocess.Popen(args, stdin=subprocess.DEVNULL,
                                     stdout=subprocess.DEVNULL,
                                     stderr=self._log or subprocess.DEVNULL,
-                                    preexec_fn=preexec)
+                                    preexec_fn=preexec, env=env)
         self._parent_guard = _bind_child_to_parent_lifetime(self.proc)
 
         last = None

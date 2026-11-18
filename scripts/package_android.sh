@@ -56,6 +56,7 @@ out="browserr-$version-$platform.tar.gz"
 rm -f "$out"
 stage="$(mktemp -d)"
 cp "$root/engine/target/$target/release/engine" \
+   "$toolchain/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" \
    "$root/tools/driver.py" \
    "$root/tools/browserr_mcp.py" \
    "$root/README.md" \
