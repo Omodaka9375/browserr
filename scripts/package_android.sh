@@ -3,9 +3,13 @@
 # the Android NDK r30: cross-builds the engine for aarch64 (API 29),
 # then archives the flat payload exactly like package.sh (engine at the
 # archive root next to driver.py etc). NDK location comes from
-# ANDROID_NDK_HOME (CI sets it); there is no host dependency on the
-# paths hardcoded in .cargo/config.toml because [env] values lose to
-# real environment variables.
+# ANDROID_NDK_HOME (CI sets it).
+#
+# The committed .cargo/config.toml carries Windows-local NDK paths (the
+# dev box), so every toolchain setting is overridden here via --config,
+# which outranks project config files. Real environment variables also
+# outrank the config's [env] table, so the CC/CXX exports below win.
+#
 # Output: browserr-<version>-android-arm64.tar.gz
 #   - one engine binary for every Android device: ARM64 with 64-bit
 #     userland; 32-bit ARM and x86 devices are not supported.
@@ -20,10 +24,6 @@ toolchain="$ndk/toolchains/llvm/prebuilt/linux-x86_64"
 export ANDROID_NDK_HOME="$ndk"
 export PATH="$toolchain/bin:$PATH"
 
-# Cross-build (release). .cargo/config.toml sets linker/ar per target,
-# but with Linux toolchain paths (its committed values point at the
-# Windows dev box); the [env] CC/CXX blocks lose to real env vars, so
-# we set the full toolchain environment here.
 export CC_aarch64_linux_android="$toolchain/bin/clang"
 export CXX_aarch64_linux_android="$toolchain/bin/clang++"
 export AR_aarch64_linux_android="$toolchain/bin/llvm-ar"
@@ -31,20 +31,13 @@ export RANLIB_aarch64_linux_android="$toolchain/bin/llvm-ranlib"
 export CFLAGS_aarch64_linux_android="--target=aarch64-linux-android29 --sysroot=$toolchain/sysroot"
 export CXXFLAGS_aarch64_linux_android="--target=aarch64-linux-android29 --sysroot=$toolchain/sysroot"
 export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="--target=aarch64-linux-android29 --sysroot=$toolchain/sysroot -isystem $toolchain/sysroot/usr/include/c++/v1"
-# .cargo/config.toml linkers point at windows-x86_64 NDK paths; override
-# with the linux toolchain through cargo config on the command line.
-mkdir -p .cargo-android
-cat > .cargo-android/config.toml <<EOF
-[target.aarch64-linux-android]
-linker = "$toolchain/bin/aarch64-linux-android29-clang"
-ar = "$toolchain/bin/llvm-ar"
-rustflags = ["-C", "link-arg=-landroid"]
-EOF
 
 cargo build --release --manifest-path engine/Cargo.toml \
     --locked --target "$target" \
     --config "build.target-dir=\"$root/engine/target\"" \
-    --config ".cargo=\"$root/.cargo-android\""
+    --config "target.aarch64-linux-android.linker=\"$toolchain/bin/aarch64-linux-android29-clang\"" \
+    --config "target.aarch64-linux-android.ar=\"$toolchain/bin/llvm-ar\"" \
+    --config 'target.aarch64-linux-android.rustflags=["-C", "link-arg=-landroid"]'
 
 if [ -n "${RELEASE_VERSION:-}" ]; then
     version="${RELEASE_VERSION#v}"
