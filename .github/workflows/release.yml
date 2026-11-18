@@ -85,7 +85,6 @@ jobs:
         with:
           python-version: "3.12"
         if: matrix.platform != 'android-arm64'
-        if: matrix.platform != 'android-arm64'
 
       - name: Install python test deps
         # The full unix gate runs the terminal-client tests, which import
