@@ -1503,7 +1503,7 @@ dependencies = [
 
 [[package]]
 name = "engine"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "adblock",
  "android-activity",

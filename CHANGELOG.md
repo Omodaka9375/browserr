@@ -6,6 +6,18 @@ scheme is [SemVer](https://semver.org/). Releases are published by CI on
 tag push; asset archives and full diffs live on the
 [releases page](https://github.com/Omodaka9375/browserr/releases).
 
+## [0.9.1] - 2026-11-18
+
+### Fixed
+
+- macOS engine download never worked through the PyPI wrapper: the
+  bootstrap built the asset name from `platform.system()` ("darwin"),
+  while release assets are labeled `macos-*`, so every wrapper version
+  failed with "release vX has no asset browserr-v-darwin-arm64.tar.gz".
+  Present since v0.2.1; the engine download now maps darwin -> macos
+  (reported by a macOS user; verified against the published names for
+  all six platform mappings).
+
 ## [0.9.0] - 2026-11-18
 
 ### Added

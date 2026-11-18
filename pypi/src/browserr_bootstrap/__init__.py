@@ -52,7 +52,7 @@ import time
 import urllib.request
 import zipfile
 
-__version__ = "0.9.0"
+__version__ = "0.9.1"
 
 REPO = "Omodaka9375/browserr"
 API = "https://api.github.com"
