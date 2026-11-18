@@ -24,6 +24,10 @@ toolchain="$ndk/toolchains/llvm/prebuilt/linux-x86_64"
 export ANDROID_NDK_HOME="$ndk"
 export PATH="$toolchain/bin:$PATH"
 
+# The cross target must be installed in THIS toolchain (CI's setup step
+# only installs the host target).
+rustup target add "$target" 2>/dev/null || true
+
 export CC_aarch64_linux_android="$toolchain/bin/clang"
 export CXX_aarch64_linux_android="$toolchain/bin/clang++"
 export AR_aarch64_linux_android="$toolchain/bin/llvm-ar"
