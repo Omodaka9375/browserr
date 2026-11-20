@@ -327,7 +327,8 @@ STRUCTURE_JS = r"""(() => {
         const r = a.getBoundingClientRect();
         if (!r.width || !r.height) continue;
         const text = a.innerText.replace(/\s+/g, ' ').trim() || a.href;
-        out.links.push({text: text.slice(0, 80), href: a.href,
+        out.links.push({ref: ref(a), text: text.slice(0, 80), href: a.href,
+                        selector: sel(a),
                         x: r.x, y: r.y, w: r.width, h: r.height});
     }
     for (const im of document.images) {

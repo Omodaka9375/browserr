@@ -817,7 +817,7 @@ class Driver:
         buf = bytearray(bgra)
         items = []
         drawn = 0
-        for group in ("buttons", "inputs", "selects"):
+        for group in ("buttons", "inputs", "selects", "links"):
             for el in (r.get(group) or []):
                 ref = str(el.get("ref") or "")
                 if not ref[1:].isdigit():

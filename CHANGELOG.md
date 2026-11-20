@@ -32,6 +32,13 @@ tag push; asset archives and full diffs live on the
   asset name against the release workflow globs, and `tests/test_csp.py`
   exercises `eval_js`, `wait_ready`, and page readers on strict
   nonce-CSP pages.
+- `tests/test_install.py` unpacks a release archive the way a user would
+  and drives the SHIPPED MCP server from that unpack: payload check,
+  version agreement, tool count, and one live session (navigate, scroll,
+  click by ref, evidence). A stale archive fails loudly.
+- Links now carry stable refs: `read_structure()` assigns `e7`-style refs
+  to links (previously only buttons/inputs/selects), so `click_ref` can
+  target them, and annotated screenshots box and number them too.
 
 ### Fixed
 

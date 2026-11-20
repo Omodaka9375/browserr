@@ -52,6 +52,7 @@ PAGE = """<!doctype html><html><head><title>Annotate</title></head><body>
 <option value="us">United States</option></select>
 <button type="button" id="b1">Save</button>
 <button type="button" id="b2">Cancel</button>
+<a href="#docs">Docs</a>
 </body></html>"""
 
 with open(TOOLS_DIR + "/annotate-test.html", "w") as f:
@@ -70,7 +71,7 @@ try:
 
     r = d.read_structure()
     want = {i["ref"] for i in r["inputs"]} | {s["ref"] for s in r["selects"]} \
-        | {b["ref"] for b in r["buttons"]}
+        | {b["ref"] for b in r["buttons"]} | {l["ref"] for l in r["links"]}
     assert want, "page has no interactive elements"
 
     res = d.screenshot_annotated(OUT)
@@ -82,8 +83,13 @@ try:
 
     # Every item carries a label an agent can quote to a human.
     labels = {i["label"] for i in res["items"]}
-    assert {"Search", "Number", "Country", "Save", "Cancel"} <= labels, labels
+    assert {"Search", "Number", "Country", "Save", "Cancel",
+            "Docs"} <= labels, labels
     print("labels OK:", sorted(labels))
+
+    # Links carry refs and get boxes too (they did not before 1.0.0).
+    link_refs = {l["ref"] for l in r["links"]}
+    assert link_refs <= got, f"link boxes missing: {sorted(link_refs - got)}"
 
     # Pixels were actually written, and the PNG exists with real content.
     assert res["pixels_drawn"] > 500, res["pixels_drawn"]

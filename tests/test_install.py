@@ -133,6 +133,7 @@ import browserr_mcp as m
 
 PAGE = (b"<html><head><title>InstallCheck</title></head>"
         b"<body style='height:2000px'>"
+        b"<a id=l href='#x'>LINK-ONE</a>"
         b"<button id=b onclick=\\"document.title='CLICKED'\\">GO</button>"
         b"</body></html>")
 
@@ -158,6 +159,14 @@ after = d.eval_js("window.scrollY")
 assert after > before, (before, after)
 st = d.read_structure()
 refs = [e.get("ref") for e in (st.get("buttons") or []) if e.get("ref")]
+assert refs, st
+# Links carry stable refs too (1.0.0 regression guard: they did not before).
+lrefs = [e.get("ref") for e in (st.get("links") or []) if e.get("ref")]
+assert lrefs, st
+lref = lrefs[0]
+m.call_tool("browser_click_ref", {{"ref": lref}})
+time.sleep(0.3)
+assert d.eval_js("location.hash") == "#x", d.eval_js("location.href")
 assert refs, st
 m.call_tool("browser_click_ref", {{"ref": refs[0]}})
 time.sleep(0.3)
