@@ -40,16 +40,16 @@ $sdk_tests = @(
     "test_flow", "test_annotate", "test_handoff", "test_trust",
     "test_software_render", "test_compat", "test_proxy",
     "test_sessions", "test_useragent", "test_useragent_mcp",
-    "test_navigate_quirk"
+    "test_navigate_quirk", "test_csp", "test_improvements"
 )
 if (-not $gpuless -and $env:CI -ne "true") { $sdk_tests += "test_headed" }
-# Always run the render-free MCP handoff regression tests.
-$sdk_tests += "test_mcp_logic"
+# Always run the render-free regression tests.
+$sdk_tests += @("test_mcp_logic", "test_bootstrap")
 # Render-free tests: raw socket protocol, no webview pixels needed.
 # test_mcp_logic is pure logic (FakeDriver, no engine) so it must run in
 # GPU-less mode too - otherwise the wipe of $sdk_tests below drops it and
 # the Windows release leg never exercises it.
-$gpuless_tests = @("test_bind", "test_mcp_logic")
+$gpuless_tests = @("test_bind", "test_mcp_logic", "test_bootstrap")
 
 if ($gpuless) {
     $sdk_tests = @()

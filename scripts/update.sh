@@ -98,7 +98,8 @@ tar -xzf "$tmp/$asset" -C "$tmp"
 # Flat archive layout (see package.sh): every payload file sits at the
 # archive root. Copy the known manifest only - never the whole extraction
 # tree, which also holds the downloaded asset itself.
-for f in engine driver.py browserr_mcp.py browserr_term.py \
+for f in engine driver.py driver_js.py annotate.py browserr_mcp.py \
+         browserr_term.py \
          browserr-term update.sh README.md LICENSE; do
     if [ -f "$tmp/$f" ]; then cp -a "$tmp/$f" "$here/"; fi
 done

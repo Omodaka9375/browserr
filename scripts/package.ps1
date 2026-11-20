@@ -29,6 +29,8 @@ $payload = @(
     (Join-Path $dist "libEGL.dll"),
     (Join-Path $dist "libGLESv2.dll"),
     (Join-Path $root "tools\driver.py"),
+    (Join-Path $root "tools\driver_js.py"),
+    (Join-Path $root "tools\annotate.py"),
     (Join-Path $root "tools\browserr_mcp.py"),
     (Join-Path $root "tools\mcp_wrap.cmd"),
     (Join-Path $root "term\browserr_term.py"),

@@ -14,7 +14,8 @@ Tools:
     browser_start / browser_stop / browser_ping
     browser_navigate / browser_read / browser_links / browser_forms
     browser_click / browser_click_text / browser_fill / browser_key
-    browser_screenshot / browser_tabs
+    browser_screenshot / browser_tabs / browser_scroll / browser_resize
+    browser_history
     browser_intercept / browser_pending_requests / browser_intercept_answer
     browser_net / browser_frames
     browser_set_field / browser_fill_form / browser_submit_form
@@ -456,6 +457,34 @@ TOOLS = [
             "tab": {"type": "integer"}}, "required": ["action"]},
     },
     {
+        "name": "browser_scroll",
+        "description": "Wheel-scroll the page (positive dy scrolls down; dx "
+                       "horizontal). x/y default to a point inside the "
+                       "viewport so the scroll lands on the page.",
+        "inputSchema": {"type": "object", "properties": {
+            "dx": {"type": "integer"}, "dy": {"type": "integer"},
+            "x": {"type": "integer"}, "y": {"type": "integer"}},
+            "required": []},
+    },
+    {
+        "name": "browser_resize",
+        "description": "Resize the viewport (width/height in px). Affects the "
+                       "active tab; other tabs adopt it on activate.",
+        "inputSchema": {"type": "object", "properties": {
+            "w": {"type": "integer", "minimum": 1},
+            "h": {"type": "integer", "minimum": 1}},
+            "required": ["w", "h"]},
+    },
+    {
+        "name": "browser_history",
+        "description": "Move the active tab through its per-tab history: "
+                       "action 'back' or 'forward'. Waits for the resulting "
+                       "document to be ready.",
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["back", "forward"]}},
+            "required": ["action"]},
+    },
+    {
         "name": "browser_console",
         "description": "Page console messages collected so far, newest last: "
                        "{tab, level, message}. Network and TLS load errors also "
@@ -465,11 +494,17 @@ TOOLS = [
     },
     {
         "name": "browser_download",
-        "description": "Fetch a URL straight to a local path (no page cookies "
-                       "are sent; use for public files). Returns the byte count.",
+        "description": "Fetch a URL straight to a local path. Default: no page "
+                       "cookies are sent (public files only). With "
+                       "use_session:true the fetch runs INSIDE the active tab "
+                       "with its cookies, so logged-in portals work; same-origin "
+                       "targets need no CORS, cross-origin ones need the server "
+                       "to allow the tab's origin. Returns the byte count.",
         "inputSchema": {"type": "object", "properties": {
             "url": {"type": "string"}, "path": {"type": "string"},
-            "max_bytes": {"type": "integer"}}, "required": ["url", "path"]},
+            "max_bytes": {"type": "integer"},
+            "use_session": {"type": "boolean"}},
+            "required": ["url", "path"]},
     },
     {
         "name": "browser_intercept",
@@ -987,12 +1022,33 @@ def call_tool(name, args):
             d.activate(args["tab"])
             return {"active": args["tab"]}
         return d.ping()
+    if name == "browser_scroll":
+        d.scroll(dx=args.get("dx", 0), dy=args.get("dy", 0),
+                 x=args.get("x", 10), y=args.get("y", 10))
+        return {"dx": args.get("dx", 0), "dy": args.get("dy", 0)}
+    if name == "browser_resize":
+        d.resize(args["w"], args["h"])
+        return {"w": args["w"], "h": args["h"]}
+    if name == "browser_history":
+        action = args["action"]
+        if action == "back":
+            d.back()
+        elif action == "forward":
+            d.forward()
+        else:
+            raise McpError(f"unknown history action {action!r}")
+        d.wait_ready()
+        return {"action": action, "url": d.eval_js("location.href")}
     if name == "browser_console":
         msgs = d.console(level=args.get("level"))
         return {"messages": msgs[-200:]}
     if name == "browser_download":
-        n = d.download(args["url"], args["path"],
-                       max_bytes=args.get("max_bytes"))
+        if args.get("use_session"):
+            n = d.download_session(args["url"], args["path"],
+                                   max_bytes=args.get("max_bytes"))
+        else:
+            n = d.download(args["url"], args["path"],
+                           max_bytes=args.get("max_bytes"))
         return {"path": args["path"], "bytes": n}
     if name == "browser_intercept":
         d.intercept(args["on"])

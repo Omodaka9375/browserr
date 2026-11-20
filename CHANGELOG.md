@@ -6,6 +6,36 @@ scheme is [SemVer](https://semver.org/). Releases are published by CI on
 tag push; asset archives and full diffs live on the
 [releases page](https://github.com/Omodaka9375/browserr/releases).
 
+## [Unreleased]
+
+### Added
+
+- MCP tools `browser_scroll`, `browser_resize`, and `browser_history`
+  (back/forward), wired to the existing engine commands and matching
+  `Driver.scroll()`, `Driver.resize()`, `Driver.back()`, and
+  `Driver.forward()`.
+- Authenticated downloads via `use_session: true` on `browser_download`
+  (and `Driver.download_session()`): runs the fetch inside the active tab
+  with its cookies so logged-in portals work; the cookieless engine
+  download stays the default.
+- Regression tests: `tests/test_bootstrap.py` verifies every platform
+  asset name against the release workflow globs, and `tests/test_csp.py`
+  exercises `eval_js`, `wait_ready`, and page readers on strict
+  nonce-CSP pages.
+
+### Fixed
+
+- `wait_ready()` navigation race: `navigate()`, `back()`, and `forward()`
+  now stamp the outgoing document with a per-tab generation marker so
+  `wait_ready()` never returns ready on the document being left behind.
+- Attached drivers on `--driver-port` can now send `resize` commands.
+
+### Changed
+
+- Split `engine/src/main.rs` into focused modules (`hub.rs`, `net.rs`,
+  `adblock.rs`) and split `tools/driver.py` page scripts and screenshot
+  annotation helpers into `tools/driver_js.py` and `tools/annotate.py`.
+
 ## [0.9.2] - 2026-11-18
 
 ### Fixed

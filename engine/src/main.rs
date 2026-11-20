@@ -52,18 +52,27 @@
 use servo::RenderingContext;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 
+mod adblock;
 mod headed;
+mod hub;
 mod hw;
+mod net;
+use adblock::{ServoAdblockDelegate, adblock_matches, ensure_filter_list, load_adblock};
 use headed::{Headed, NativeEvent};
+use hub::{
+    ACTIVE_TAB, DRIVER_PREFIX, DriverHub, EPHEMERAL_DIR, INTERCEPT_ID, TAB_COUNT,
+    cleanup_ephemeral, hard_exit, start_driver_listener,
+};
 use hw::HardwareRenderingContext;
+use net::{fetch_favicon, http_get};
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 const PORT: u16 = 7411;
-const EV_MAGIC: u32 = 0x45_56_54_31; // EVT1
+pub(crate) const EV_MAGIC: u32 = 0x45_56_54_31; // EVT1
 const SHOT_MAGIC: u32 = 0x53_48_54_31; // SHT1 (screenshot)
 const FRAME_MAGIC: u32 = 0x46_52_4d_32_u32; // FRM2 (native compressed frame patches)
 
@@ -79,243 +88,6 @@ struct FrameState {
     width: u32,
     height: u32,
     rgba: Vec<u8>,
-}
-
-/// Terminate the process immediately, skipping libc atexit handlers and
-/// static destructors. std::process::exit runs them; on Linux servo/mozglue
-/// teardown deadlocks there (pthread_mutex_destroy on mutexes owned by
-/// still-running threads), which stalled engine exit for the full client
-/// timeout. Destructors must not run for live tabs anyway (surfman surface
-/// assertion noise).
-fn hard_exit() -> ! {
-    unsafe extern "C" {
-        fn _exit(status: i32) -> !;
-    }
-    unsafe { _exit(0) }
-}
-
-/// EV event frame with an explicit event id (driver-thread fast path).
-fn driver_event(id: u64, json: &str) -> Vec<u8> {
-    let bytes = json.as_bytes();
-    let mut frame = Vec::with_capacity(20 + bytes.len());
-    frame.extend_from_slice(&EV_MAGIC.to_le_bytes());
-    frame.extend_from_slice(&id.to_le_bytes());
-    frame.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-    frame.extend_from_slice(&0u32.to_le_bytes());
-    frame.extend_from_slice(bytes);
-    frame
-}
-
-/// Commands an attached driver may send; validated before queueing.
-const DRIVER_CMDS: [&str; 24] = [
-    "navigate",
-    "back",
-    "forward",
-    "new_tab",
-    "activate",
-    "close_tab",
-    "input",
-    "wheel",
-    "key",
-    "eval",
-    "screenshot",
-    "frame",
-    "zoom",
-    "ping",
-    "stop",
-    "download",
-    "intercept",
-    "request",
-    "auth",
-    "files",
-    "frames",
-    "pause",
-    "resume",
-    "handoff",
-];
-
-/// Attached-driver hub (computer-use mode: `--driver-port=N`). Driver
-/// command lines are validated, queued, and drained by the main loop
-/// (which owns servo); engine events and SHT1 screenshot answers are
-/// mirrored to every attached driver. Optional `--driver-token=T`:
-/// drivers must send {"cmd":"auth","token":T} as their first line or
-/// the socket is dropped without receiving anything.
-struct DriverHub {
-    clients: std::sync::Mutex<Vec<std::net::TcpStream>>,
-    queue: std::sync::Mutex<std::collections::VecDeque<String>>,
-}
-
-/// Prefix marking a queued command as coming from an attached driver
-/// (the main loop strips it and answers via the driver broadcast only).
-const DRIVER_PREFIX: &str = "\u{1}drv:";
-
-/// Approximate open-tab count and active tab, mirrored by the main loop on
-/// every processed command. Read by the driver-thread ping fast path: when
-/// the servo main loop wedges (a page stuck in a long JS task), queued
-/// commands never drain, so the health check must not depend on it.
-/// Values may lag while wedged - acceptable for a liveness probe.
-static TAB_COUNT: AtomicU64 = AtomicU64::new(0);
-static ACTIVE_TAB: AtomicU64 = AtomicU64::new(0);
-/// Event ids for fast-path pongs (framing only; drivers match on the JSON id).
-static DRIVER_EVENT_SEQ: AtomicU64 = AtomicU64::new(1);
-/// Ephemeral profile path, captured at startup so the driver-thread stop
-/// fast path can clean it up while the main loop is wedged.
-static EPHEMERAL_DIR: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
-
-static HUB: std::sync::OnceLock<DriverHub> = std::sync::OnceLock::new();
-
-/// Monotonic id for held interception requests.
-static INTERCEPT_ID: AtomicU64 = AtomicU64::new(1);
-
-impl DriverHub {
-    fn global() -> &'static DriverHub {
-        HUB.get_or_init(|| DriverHub {
-            clients: std::sync::Mutex::new(Vec::new()),
-            queue: std::sync::Mutex::new(std::collections::VecDeque::new()),
-        })
-    }
-
-    /// Queue a validated driver command line for the main loop to drain.
-    fn push(&self, line: &str) {
-        self.queue
-            .lock()
-            .unwrap()
-            .push_back(format!("{DRIVER_PREFIX}{line}"));
-    }
-
-    fn add_client(&self, stream: &std::net::TcpStream) {
-        if let Ok(clone) = stream.try_clone() {
-            let mut clients = self.clients.lock().unwrap();
-            clients.push(clone);
-            eprintln!("engine: driver attached ({} open)", clients.len());
-        }
-    }
-
-    /// Mirror framed bytes (EVT1/SHT1) to every attached driver; sockets
-    /// that went away are pruned. A 2s write timeout (set on accept)
-    /// bounds a wedged driver.
-    fn broadcast(&self, bytes: &[u8]) {
-        let mut clients = self.clients.lock().unwrap();
-        clients.retain_mut(|c| c.write_all(bytes).is_ok() && c.flush().is_ok());
-    }
-
-    fn has_clients(&self) -> bool {
-        !self.clients.lock().unwrap().is_empty()
-    }
-}
-
-/// Accept driver connections on 127.0.0.1:port; validate + queue their
-/// commands; drop unauthenticated sockets when a token is required.
-fn start_driver_listener(port: u16, token: Option<String>) {
-    std::thread::spawn(move || {
-        let listener = match std::net::TcpListener::bind(("127.0.0.1", port)) {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("engine: driver port bind failed: {e}");
-                return;
-            }
-        };
-        eprintln!("engine: driver port listening on 127.0.0.1:{port}");
-        for client in listener.incoming() {
-            let Ok(stream) = client else { return };
-            let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(2)));
-            let hub = DriverHub::global();
-            let token = token.clone();
-            std::thread::spawn(move || driver_client_loop(stream, hub, token));
-        }
-    });
-}
-
-/// Read JSON command lines from one driver, validate, and queue the
-/// allowed ones for the main loop. First line must authenticate when a
-/// token is set. Authenticated sockets are registered for broadcasts.
-fn driver_client_loop(stream: std::net::TcpStream, hub: &DriverHub, token: Option<String>) {
-    let mut writer = match stream.try_clone() {
-        Ok(w) => w,
-        Err(_) => return,
-    };
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    let mut authed = token.is_none();
-    let mut registered = false;
-    loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
-        }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if trimmed.len() > 8 << 20 {
-            eprintln!(
-                "engine: driver sent oversized line ({} bytes), dropping",
-                trimmed.len()
-            );
-            break;
-        }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else {
-            continue;
-        };
-        let Some(cmd) = v["cmd"].as_str() else {
-            continue;
-        };
-        if !authed {
-            let ok = cmd == "auth"
-                && v["token"]
-                    .as_str()
-                    .map(|t| t == token.as_deref().unwrap_or(""))
-                    .unwrap_or(false);
-            if ok {
-                authed = true;
-                registered = true;
-                eprintln!("engine: driver authenticated");
-                // Register for broadcasts only now: an unauthed socket gets
-                // no engine events or screenshot answers.
-                hub.add_client(reader.get_ref());
-                continue;
-            }
-            eprintln!("engine: driver failed auth, dropping connection");
-            break;
-        }
-        if !registered {
-            // No token required: register on the first command.
-            registered = true;
-            hub.add_client(reader.get_ref());
-        }
-        // Ping and stop are answered HERE, not through the queue: they are
-        // the recovery path when the servo main loop is wedged by a page
-        // (long JS task) and would otherwise never drain queued commands.
-        // pong reports the mirrored tab counters (may lag while wedged -
-        // this is a liveness probe, not a state query); stop force-exits
-        // the process (the ephemeral profile still gets cleaned up).
-        if cmd == "ping" {
-            let req = v["id"].as_u64().unwrap_or(0);
-            let seq = DRIVER_EVENT_SEQ.fetch_add(1, Ordering::SeqCst);
-            let json = format!(
-                "{{\"ev\":\"pong\",\"tab\":0,\"id\":{req},\"tabs\":{},\"active\":{}}}",
-                TAB_COUNT.load(Ordering::SeqCst),
-                ACTIVE_TAB.load(Ordering::SeqCst),
-            );
-            let _ = writer.write_all(&driver_event(seq, &json));
-            let _ = writer.flush();
-            continue;
-        }
-        if cmd == "stop" {
-            eprintln!("engine: driver stop; hard exit");
-            if let Some(dir) = EPHEMERAL_DIR.get().and_then(|d| d.as_ref()) {
-                cleanup_ephemeral(&Some(dir.clone()));
-            }
-            hard_exit();
-        }
-        if !DRIVER_CMDS.contains(&cmd) {
-            eprintln!("engine: driver command rejected: {cmd}");
-            continue;
-        }
-        hub.push(trimmed);
-    }
-    eprintln!("engine: driver detached");
 }
 
 #[derive(Clone)]
@@ -783,46 +555,10 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
-struct ServoAdblockDelegate {
-    adblock: Option<std::rc::Rc<adblock::engine::Engine>>,
-}
-
-impl servo::ServoDelegate for ServoAdblockDelegate {
-    fn load_web_resource(&self, load: servo::WebResourceLoad) {
-        // Requests with a target webview go to the WebViewDelegate; this
-        // catches the rest (no target webview known at the net layer).
-        if let Some(engine) = &self.adblock
-            && adblock_matches(engine, &load)
-        {
-            eprintln!("engine: adblock blocked {}", load.request().url);
-            let response_url = load.request().url.clone().into_url();
-            load.intercept(servo::WebResourceResponse::new(response_url))
-                .cancel();
-        }
-    }
-}
-
-/// Whether the filter list matches this request (metadata only; the load
-/// is not consumed here).
-fn adblock_matches(engine: &adblock::engine::Engine, load: &servo::WebResourceLoad) -> bool {
-    // Main-frame documents are never blocked: a cancelled document response
-    // wedges the pipeline for later navigations on that tab.
-    if load.request().is_for_main_frame {
-        return false;
-    }
-    let url = load.request().url.to_string();
-    let req_type = format!("{:?}", load.request().destination).to_lowercase();
-    let method = load.request().method.as_str();
-    let Ok(req) = adblock::request::Request::new(&url, "", &req_type, method) else {
-        return false;
-    };
-    engine.check_network_request(&req).should_block()
-}
-
 struct FrameDelegate {
     tab: u64,
     shared: Arc<Shared>,
-    adblock: Option<std::rc::Rc<adblock::engine::Engine>>,
+    adblock: Option<std::rc::Rc<::adblock::engine::Engine>>,
 }
 
 impl FrameDelegate {
@@ -913,20 +649,6 @@ impl FrameDelegate {
             });
         });
     }
-}
-
-/// Fetch and decode an icon into 16x16 RGBA. Any failure returns None.
-fn fetch_favicon(url: &str) -> Option<(Vec<u8>, u32, u32)> {
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        return None;
-    }
-    let bytes = http_get(url, 1 << 20).ok()?;
-    let img = image::load_from_memory(&bytes).ok()?;
-    let rgba = img
-        .resize_exact(16, 16, image::imageops::FilterType::Lanczos3)
-        .into_rgba8()
-        .into_raw();
-    Some((rgba, 16, 16))
 }
 
 impl servo::WebViewDelegate for FrameDelegate {
@@ -1219,10 +941,6 @@ struct Tab {
     last_cursor: Option<String>,
 }
 
-const EASYLIST_URL: &str = "https://easylist.to/easylist/easylist.txt";
-/// Re-download after a week.
-const FILTER_LIST_MAX_AGE_SECS: u64 = 7 * 24 * 3600;
-
 /// Serialize a servo JS evaluation result to JSON for the automation driver.
 fn jsvalue_to_json(
     result: Result<servo::JSValue, servo::JavaScriptEvaluationError>,
@@ -1254,209 +972,6 @@ fn jsvalue_to_json(
         Ok(v) => conv(v),
         Err(e) => serde_json::json!({ "__error": format!("{e:?}") }),
     }
-}
-
-/// Minimal HTTP/HTTPS GET client (rustls + the platform cert verifier; the
-/// aws-lc-rs provider installed at startup). Replaces ureq so the binary
-/// ships exactly one crypto stack - servo-net already pins aws-lc-rs, and
-/// ureq would have dragged in ring as a second one.
-/// Follows up to 5 redirects; caps the body at `max_bytes`.
-fn http_get(url: &str, max_bytes: u64) -> Result<Vec<u8>, String> {
-    let mut current = url::Url::parse(url).map_err(|e| e.to_string())?;
-    for _ in 0..6 {
-        let host = current.host_str().ok_or("no host")?.to_string();
-        let mut path = current.path().to_string();
-        if path.is_empty() {
-            path = "/".into();
-        }
-        if let Some(q) = current.query() {
-            path.push('?');
-            path.push_str(q);
-        }
-        let secure = current.scheme() == "https";
-        let port = current
-            .port_or_known_default()
-            .unwrap_or(if secure { 443 } else { 80 });
-
-        let tcp = std::net::TcpStream::connect((host.as_str(), port))
-            .map_err(|e| format!("connect {host}:{port}: {e}"))?;
-        tcp.set_read_timeout(Some(std::time::Duration::from_secs(15)))
-            .ok();
-        tcp.set_write_timeout(Some(std::time::Duration::from_secs(15)))
-            .ok();
-
-        let stream: Box<dyn std::io::Read> = if secure {
-            let verifier = rustls_platform_verifier::Verifier::new(Arc::new(
-                rustls::crypto::aws_lc_rs::default_provider(),
-            ))
-            .map_err(|e| format!("platform verifier: {e}"))?;
-            let config = rustls::ClientConfig::builder()
-                .dangerous()
-                .with_custom_certificate_verifier(std::sync::Arc::new(verifier))
-                .with_no_client_auth();
-            let name = rustls_pki_types::ServerName::try_from(host.clone())
-                .map_err(|_| format!("bad server name: {host}"))?;
-            let conn = rustls::ClientConnection::new(std::sync::Arc::new(config), name)
-                .map_err(|e| format!("tls setup: {e}"))?;
-            let mut tls = rustls::StreamOwned::new(conn, tcp);
-            let req = format!(
-                "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: BrowserrEngine/0.1\r\nAccept: */*\r\nConnection: close\r\n\r\n"
-            );
-            tls.write_all(req.as_bytes())
-                .map_err(|e| format!("send: {e}"))?;
-            Box::new(tls)
-        } else {
-            let mut tcp = tcp;
-            let req = format!(
-                "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: BrowserrEngine/0.1\r\nAccept: */*\r\nConnection: close\r\n\r\n"
-            );
-            tcp.write_all(req.as_bytes())
-                .map_err(|e| format!("send: {e}"))?;
-            Box::new(tcp)
-        };
-
-        let (status, location, body) = read_response(stream, max_bytes)?;
-        if (301..=308).contains(&status) && status != 306 {
-            let loc = location.ok_or("redirect without Location")?;
-            current = current
-                .join(&loc)
-                .map_err(|e| format!("bad redirect {loc}: {e}"))?;
-            continue;
-        }
-        if status != 200 {
-            return Err(format!("HTTP {status}"));
-        }
-        return Ok(body);
-    }
-    Err("too many redirects".into())
-}
-
-/// Read one HTTP response off `stream`: status line + headers, then the body
-/// (Content-Length, chunked, or read-to-end), capped at `max_bytes`.
-fn read_response(
-    mut stream: Box<dyn std::io::Read>,
-    max_bytes: u64,
-) -> Result<(u16, Option<String>, Vec<u8>), String> {
-    let mut reader = std::io::BufReader::new(&mut stream);
-    let mut status = 0u16;
-    let mut location = None;
-    let mut content_len: Option<u64> = None;
-    let mut chunked = false;
-
-    // Header section: read line by line until the empty line.
-    let mut first = true;
-    loop {
-        let mut line = Vec::new();
-        reader
-            .read_until(b'\n', &mut line)
-            .map_err(|e| format!("header read: {e}"))?;
-        if line.is_empty() {
-            return Err("connection closed in headers".into());
-        }
-        let trimmed = String::from_utf8_lossy(&line);
-        let trimmed = trimmed.trim_end();
-        if trimmed.is_empty() {
-            break; // end of headers
-        }
-        if first {
-            // "HTTP/1.1 200 OK"
-            status = trimmed
-                .split_whitespace()
-                .nth(1)
-                .and_then(|s| s.parse().ok())
-                .ok_or(format!("bad status line: {trimmed}"))?;
-            first = false;
-            continue;
-        }
-        let lower = trimmed.to_ascii_lowercase();
-        if let Some(v) = lower.strip_prefix("location:") {
-            // Keep the original-case value (the header bytes, not lowered).
-            location = Some(trimmed[trimmed.len() - v.trim().len()..].to_string());
-        } else if let Some(v) = lower.strip_prefix("content-length:") {
-            content_len = v.trim().parse().ok();
-        } else if lower.starts_with("transfer-encoding:") && lower.contains("chunked") {
-            chunked = true;
-        }
-        if line.len() > (64 << 10) {
-            return Err("headers too large".into());
-        }
-    }
-
-    let mut body = Vec::new();
-    if chunked {
-        loop {
-            let mut size_line = Vec::new();
-            reader
-                .read_until(b'\n', &mut size_line)
-                .map_err(|e| format!("chunk size read: {e}"))?;
-            let size_str = String::from_utf8_lossy(&size_line);
-            let size = u64::from_str_radix(size_str.trim().split(';').next().unwrap_or(""), 16)
-                .map_err(|_| format!("bad chunk size: {size_str:?}"))?;
-            if size == 0 {
-                break;
-            }
-            if body.len() as u64 + size > max_bytes {
-                return Err("body too large".into());
-            }
-            let start = body.len();
-            body.resize(start + size as usize, 0);
-            reader
-                .read_exact(&mut body[start..])
-                .map_err(|e| e.to_string())?;
-            let mut crlf = [0u8; 2];
-            let _ = reader.read_exact(&mut crlf); // chunk trailer
-        }
-    } else if let Some(n) = content_len {
-        let n = n.min(max_bytes);
-        let mut chunk = vec![0u8; n as usize];
-        reader.read_exact(&mut chunk).map_err(|e| e.to_string())?;
-        body = chunk;
-    } else {
-        reader
-            .take(max_bytes)
-            .read_to_end(&mut body)
-            .map_err(|e| e.to_string())?;
-    }
-    Ok((status, location, body))
-}
-
-/// Download the EasyList-format filter file if missing or stale. Best effort:
-/// a failed download keeps any existing file and just logs.
-fn ensure_filter_list(path: &std::path::Path) {
-    let stale = match std::fs::metadata(path) {
-        Ok(m) => m
-            .modified()
-            .ok()
-            .and_then(|t| t.elapsed().ok())
-            .map(|e| e.as_secs() > FILTER_LIST_MAX_AGE_SECS)
-            .unwrap_or(true),
-        Err(_) => true,
-    };
-    if !stale {
-        return;
-    }
-    eprintln!(
-        "engine: downloading adblock filter list -> {}",
-        path.display()
-    );
-    if let Ok(dir) = path.parent().ok_or(()) {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    match http_get(EASYLIST_URL, 32 << 20) {
-        Ok(body) => {
-            let _ = std::fs::write(path, body);
-            eprintln!("engine: filter list saved");
-        }
-        Err(e) => eprintln!("engine: filter list download failed: {e}"),
-    }
-}
-
-fn load_adblock(path: &std::path::Path) -> Option<std::rc::Rc<adblock::engine::Engine>> {
-    let text = std::fs::read_to_string(path).ok()?;
-    eprintln!("engine: adblock enabled");
-    Some(std::rc::Rc::new(
-        adblock::engine::Engine::new_with_list_text(text),
-    ))
 }
 
 /// Linux: the GL context is created through EGL even for CPU (llvmpipe)
@@ -1644,36 +1159,6 @@ fn map_key(name: &str, text: &str, mods: u8, down: bool) -> Option<servo::InputE
     };
     ev.modifiers = modifiers;
     Some(servo::InputEvent::Keyboard(servo::KeyboardEvent::new(ev)))
-}
-
-/// Remove the ephemeral profile dir (best effort) before an engine exit.
-/// Servo's background threads still hold SQLite handles (clientstorage) while
-/// the process lives, so the in-process delete can race and fail. Belt and
-/// braces: try now, and leave a one-shot scheduled task that waits for our
-/// pid to exit and deletes afterwards.
-fn cleanup_ephemeral(dir: &Option<std::path::PathBuf>) {
-    if let Some(d) = dir {
-        let _ = std::fs::remove_dir_all(d);
-        // Windows only: servo's background threads still hold SQLite handles
-        // (clientstorage) while the process lives, so the in-process delete can
-        // silently fail. A detached helper waits for THIS pid to die, then
-        // deletes. On Unix the plain delete above succeeds (open handles do
-        // not block unlink).
-        #[cfg(windows)]
-        {
-            let pid = std::process::id();
-            let script = format!(
-                "$p = Get-Process -Id {pid} -ErrorAction SilentlyContinue; \
-                 if ($p) {{ Wait-Process -Id {pid} -ErrorAction SilentlyContinue }}; \
-                 Remove-Item -LiteralPath '{}' -Recurse -Force -ErrorAction SilentlyContinue",
-                d.display()
-            );
-            let _ = std::process::Command::new("powershell")
-                .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
-                .spawn();
-        }
-        eprintln!("engine: ephemeral profile removed ({})", d.display());
-    }
 }
 
 fn send_event(out: &mut impl Write, id: u64, json: &str) {

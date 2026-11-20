@@ -27,7 +27,7 @@ sha256-verified on first run:
 }
 ```
 
-42 tools: navigate, token-cheap reads, structured inventories with
+45 tools: navigate, token-cheap reads, structured inventories with
 stable element refs, type-aware form filling, fail-closed interception,
 evidence capture, and human handoff. Python SDK and manual install:
 [Install](#install).
@@ -54,7 +54,7 @@ that follow from owning the whole stack:
 - **Runs where Chromium cannot.** CPU rendering by default: instant start
   on GPU-less machines, containers, CI runners and a Raspberry Pi 4/5
   (ARM64 builds included).
-- **MCP-native, not wrapper-native.** All 42 tools surface directly to any
+- **MCP-native, not wrapper-native.** All 45 tools surface directly to any
   MCP-capable agent. No CDP quirks, no driver downloads, no version drift.
 - **SPA-ready.** Modern JS syntax, fetch/WebSockets/Workers, custom
   elements, shadow DOM, React 18 + Vue 3 verified rendering, plus
@@ -84,7 +84,8 @@ that follow from owning the whole stack:
 - JavaScript evaluation with results returned as JSON
 - On-demand screenshots of the active tab; the SDK saves them as PNG
 - Console capture: page messages plus network and TLS load errors
-- Downloads fetched straight to disk, without page cookies
+- Downloads fetched straight to disk; an opt-in `use_session` mode
+  fetches inside the active tab with its cookies (logged-in portals)
 - EasyList-based adblock, refreshed weekly
 
 ### Reading pages
@@ -440,12 +441,13 @@ Timing rules worth knowing:
 ## MCP server
 
 `tools/browserr_mcp.py` is a Model Context Protocol server (standard
-library only, newline JSON-RPC on stdio) exposing 42 tools:
+library only, newline JSON-RPC on stdio) exposing 45 tools:
 
 - session: start (with optional persistent `profile`), stop, ping
 - page: navigate, read, read_structure, links, forms
 - interaction: click, click_text, click_element, click_ref, fill,
   set_field, fill_form, key, set_value, submit_form, read_outcome
+- viewport and history: scroll, resize, history (back/forward)
 - capture: screenshot, screenshot_annotated, wait_for, tabs, console,
   evidence, download
 - network: intercept, pending_requests, intercept_answer, net, frames,
@@ -463,7 +465,7 @@ confirm gate are on by default for MCP-started engines. Set
 
 A good match for driving it: [Kai](https://github.com/Omodaka9375/kai),
 an agentic developer terminal from the same author as Browserr. Kai
-speaks MCP natively, so all 42 tools show up first-class next to its
+speaks MCP natively, so all 45 tools show up first-class next to its
 editor and terminal - Browserr is the browser half of that stack.
 
 ### Upstream proxy
@@ -615,6 +617,9 @@ test_mcp_logic.py        handoff transition and answered-event regressions
 test_input.py            raw-socket input forwarding
 test_cursor_zoom.py      cursor events + zoom via devicePixelRatio
 test_close.py            tab close must not kill the engine
+test_csp.py              strict-CSP pages: eval fallback, typed errors
+test_bootstrap.py        engine asset names match the release globs
+test_improvements.py     scroll/resize/history, session downloads, nav race
 test_https.py            engine TLS client against the real EasyList endpoint
 test_thin.py             release build smoke test
 ```

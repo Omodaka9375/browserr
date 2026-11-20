@@ -39,6 +39,8 @@ rm -f "$out"
 stage="$(mktemp -d)"
 cp "$root/dist/engine" \
    "$root/tools/driver.py" \
+   "$root/tools/driver_js.py" \
+   "$root/tools/annotate.py" \
    "$root/tools/browserr_mcp.py" \
    "$root/term/browserr_term.py" \
    "$root/term/browserr-term" \
