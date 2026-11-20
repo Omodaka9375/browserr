@@ -11,6 +11,10 @@ $cargo = Get-Command cargo -ErrorAction SilentlyContinue
 if (-not $cargo) { $cargo = "$env:USERPROFILE\.cargo\bin\cargo.exe" }
 else { $cargo = $cargo.Source }
 
+Write-Host "== version carriers ==" -ForegroundColor Cyan
+python scripts\bump.py --check
+if ($LASTEXITCODE -ne 0) { Write-Host "version drift FAILED (run scripts/bump.py <version>)" -ForegroundColor Red; exit 1 }
+
 Write-Host "== fmt + clippy gate ==" -ForegroundColor Cyan
 & $cargo fmt --manifest-path engine\Cargo.toml -- --check *> fmt.log
 if ($LASTEXITCODE -ne 0) { Get-Content fmt.log -Tail 10; Write-Host "engine fmt FAILED" -ForegroundColor Red; exit 1 }

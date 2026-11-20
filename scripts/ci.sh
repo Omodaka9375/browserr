@@ -18,6 +18,10 @@ GPULESS_TESTS="test_bind test_mcp_logic test_bootstrap test_release"
 # GPU-less mode).
 TERM_TESTS="test_term test_native_frame test_native_interaction test_frame_pixels test_tab_flow test_login_flow"
 
+echo "== version carriers =="
+python scripts/bump.py --check \
+    || { echo "version drift FAILED (run scripts/bump.py <version>)"; exit 1; }
+
 echo "== fmt + clippy gate =="
 cargo fmt --manifest-path engine/Cargo.toml -- --check > fmt.log 2>&1 \
     || { tail -10 fmt.log; echo "engine fmt FAILED"; exit 1; }

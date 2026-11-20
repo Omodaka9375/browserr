@@ -10,6 +10,16 @@ tag push; asset archives and full diffs live on the
 
 ### Added
 
+- `scripts/bump.py` owns the six version carriers: `bump.py 1.0.0`
+  rewrites all of them (every replacement is count-asserted and line
+  endings are preserved), `bump.py --check` fails on drift and can require
+  a matching git tag. `--check` runs in the CI gate, so a half-finished
+  bump can no longer be released.
+- `.github/workflows/pypi.yml` publishes the wheel on every version tag
+  over PyPI Trusted Publishing (OIDC, no token in the repo), verifies the
+  wheel contents, then confirms the version is installable before the job
+  goes green. Publishing is separate from the asset matrix, so a PyPI
+  hiccup no longer reds the engine release and vice versa.
 - MCP tools `browser_scroll`, `browser_resize`, and `browser_history`
   (back/forward), wired to the existing engine commands and matching
   `Driver.scroll()`, `Driver.resize()`, `Driver.back()`, and

@@ -1,0 +1,80 @@
+name: pypi
+
+# Publish browserr-mcp to PyPI when a version tag is pushed. Runs on its own
+# so a PyPI hiccup cannot fail the engine release matrix (and vice versa):
+# the assets come from release.yml, the wheel comes from here.
+#
+# Auth: PyPI Trusted Publishing (OIDC), no token in the repo. One-time setup
+# on PyPI: project browserr-mcp -> Publishing -> add a GitHub publisher for
+# Omodaka9375/browserr, workflow "pypi.yml", environment "pypi".
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. v1.0.0)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    environment: pypi
+    permissions:
+      id-token: write   # OIDC for Trusted Publishing
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify versions agree with the tag
+        run: python scripts/bump.py --check --tag "${{ github.event.inputs.tag || github.ref_name }}"
+
+      - name: Build wheel and sdist
+        run: |
+          python -m pip install --disable-pip-version-check build
+          python -m build --outdir dist pypi
+
+      - name: Check the wheel actually contains the engine scripts
+        run: |
+          python - <<'PY'
+          import glob, sys, zipfile
+          wheel = glob.glob("dist/*.whl")
+          assert len(wheel) == 1, f"expected one wheel, got {wheel}"
+          names = zipfile.ZipFile(wheel[0]).namelist()
+          need = ["browserr_bootstrap/__init__.py"]
+          missing = [n for n in need if n not in names]
+          assert not missing, f"wheel is missing {missing}"
+          print(f"{wheel[0]}: {len(names)} files OK")
+          PY
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+
+      - name: Verify the release is installable from PyPI
+        # PyPI's index is eventually consistent; retry briefly instead of
+        # turning a propagation delay into a red build.
+        run: |
+          version="$(python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pypi/pyproject.toml').read_text())['project']['version'])")"
+          for i in 1 2 3 4 5 6; do
+            if python -m pip download --no-deps --dest /tmp/probe \
+                 "browserr-mcp==${version}" 2>/dev/null; then
+              echo "browserr-mcp ${version} is live on PyPI"
+              exit 0
+            fi
+            echo "waiting for PyPI to serve ${version} (attempt ${i})"
+            sleep 20
+          done
+          echo "browserr-mcp ${version} is not on PyPI yet" >&2
+          exit 1
