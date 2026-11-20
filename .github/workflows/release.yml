@@ -9,7 +9,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          # windows-2022, NOT windows-latest: the latest image's MSVC 14.52
+          # STL hard-requires Clang 22+ (STL1000) and kills the C++ build
+          # scripts (mozangle). 2022's MSVC matches our toolchain clang.
+          - os: windows-2022
             platform: windows-x64
             gpuless: "1"
           # ubuntu-24.04, NOT ubuntu-latest: mozangle's bindgen (webgl

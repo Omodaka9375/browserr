@@ -20,13 +20,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          - os: windows-2022
             platform: windows-x64
-            # GitHub windows-latest runners are GPU-less; servo's WGL backend
-            # needs WGL_NV_DX_interop + a real D3D11 device, so render tests
-            # cannot pass there. GPU-less mode runs fmt + clippy + build +
-            # the render-free protocol tests. The full 25-test suite runs on
-            # Linux x64/ARM64 (llvmpipe), macOS (real GPU) and local GPU machines.
+            # GitHub windows-2022, NOT windows-latest: the latest image
+            # rolled to VS 18 / MSVC 14.52 whose STL hard-requires Clang
+            # 22+ ("error STL1000: Unexpected compiler version") and kills
+            # the cc/bindgen C++ build scripts (mozangle). 2022's MSVC
+            # matches our toolchain's clang. GitHub windows runners are
+            # GPU-less; servo's WGL backend needs WGL_NV_DX_interop + a
+            # real D3D11 device, so render tests cannot pass there.
+            # GPU-less mode runs fmt + clippy + build + the render-free
+            # protocol tests. The full test suite runs on Linux
+            # x64/ARM64 (llvmpipe), macOS (real GPU) and local GPUs.
             gpuless: "1"
           # ubuntu-24.04, NOT ubuntu-latest: the webgl feature pulls mozangle
           # whose build script runs bindgen against the system libclang. On
