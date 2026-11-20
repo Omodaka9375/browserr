@@ -61,6 +61,10 @@ jobs:
         with:
           packages-dir: dist
           password: ${{ secrets.PYPI_TOKEN }}
+          # Attestation needs an OIDC exchange (id-token: write); with token
+          # auth and no OIDC permission the action dies here. The previous
+          # manual uploads were never attested either, so nothing is lost.
+          attestations: false
 
       - name: Verify the release is installable from PyPI
         # PyPI's index is eventually consistent; retry briefly instead of
