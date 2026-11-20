@@ -35,6 +35,14 @@ tag push; asset archives and full diffs live on the
 - Split `engine/src/main.rs` into focused modules (`hub.rs`, `net.rs`,
   `adblock.rs`) and split `tools/driver.py` page scripts and screenshot
   annotation helpers into `tools/driver_js.py` and `tools/annotate.py`.
+- Docs overhaul: the landing page groups the flat feature table into four
+  labelled sections, moves the paper/ink switch into the top bar, gives
+  install blocks copy buttons and sharp corners, scrolls the comparison
+  table sideways on phones instead of stacking it, and demos stable refs
+  plus evidence in the hero animation. The README gains a jump bar, the
+  terminal demo, a platform support matrix, a grouped MCP tools table,
+  GitHub callouts, and collapsible deep-reference sections (protocol,
+  tests); stale counts (42 tools, 22 commands, v0.7.1) are corrected.
 
 ## [0.9.2] - 2026-11-18
 

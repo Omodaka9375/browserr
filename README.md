@@ -13,6 +13,11 @@ blocks ads, and exposes a small loopback protocol built around three
 commitments: **block when unsure, hand the page to a human when a human
 is needed, and leave evidence for everything it did.**
 
+**Jump to:** [Quickstart](#quickstart) · [Why Browserr](#why-browserr) ·
+[Features](#features) · [Install](#install) · [Platforms](#platforms) ·
+[MCP tools](#mcp-tools) · [Protocol](#protocol) ·
+[Limits](#known-limitations)
+
 ## Quickstart
 
 Add it to any MCP-capable client (Claude Desktop, [Kai](https://github.com/Omodaka9375/kai),
@@ -31,6 +36,11 @@ sha256-verified on first run:
 stable element refs, type-aware form filling, fail-closed interception,
 evidence capture, and human handoff. Python SDK and manual install:
 [Install](#install).
+
+An agent driving it end to end - navigate, read structure, click a stable
+ref, save evidence:
+
+https://github.com/user-attachments/assets/fdc5c347-2cf3-4fb7-b458-501d8e24506d
 
 ## Why Browserr
 
@@ -151,17 +161,11 @@ config entry. The engine binary is downloaded from the official GitHub
 release and sha256-verified on first run (~46 MB, once); later starts
 are instant and offline: the resolved release tag is cached for 24 h and
 an installed engine never depends on a live GitHub API call.
-```json
-{
-  "mcpServers": {
-    "browserr": { "command": "uvx", "args": ["browserr-mcp"] }
-  }
-}
-```
 
-([uv](https://docs.astral.sh/uv/) resolves the package; `pip install
-browserr-mcp` and command `browserr-mcp` work the same.) Pin a release
-with `BROWSERR_VERSION`, override the install dir with `BROWSERR_HOME`.
+Same config entry as [Quickstart](#quickstart); `pip install browserr-mcp`
+plus the `browserr-mcp` command works the same way as
+[uv](https://docs.astral.sh/uv/). Pin a release with `BROWSERR_VERSION`,
+override the install dir with `BROWSERR_HOME`.
 
 ### Manual: download the archive
 
@@ -169,35 +173,34 @@ Download the archive for your platform from
 [releases](https://github.com/Omodaka9375/browserr/releases) and unpack it
 anywhere (no admin rights, no installer). You get:
 
-```text
-engine(.exe)      the headless browser engine
-libEGL.dll        ANGLE GL for WebGL (Windows archives only)
-libGLESv2.dll     must stay next to engine.exe
-driver.py         Python SDK (stdlib only)
-browserr_mcp.py   MCP server (stdlib only)
-mcp_wrap.cmd      Windows MCP launcher (cmd wrapper)
-browserr-term     terminal browser launcher (shell)
-browserr-term.cmd terminal browser launcher (Windows)
-browserr_term.py  terminal browser UI (stdlib; numpy improves the fallback)
-update(.sh/.ps1/.cmd) in-place updater (see below)
-README.md, LICENSE
-```
+| File | What it is |
+| --- | --- |
+| `engine(.exe)` | the headless browser engine |
+| `libEGL.dll`, `libGLESv2.dll` | ANGLE GL for WebGL (Windows archives); must stay next to `engine.exe` |
+| `driver.py` | Python SDK (stdlib only) |
+| `driver_js.py` | page-side scripts the SDK evaluates (pure data) |
+| `annotate.py` | screenshot annotation helpers (PNG, boxes, numbers) |
+| `browserr_mcp.py` | MCP server (stdlib only) |
+| `mcp_wrap.cmd` | Windows MCP launcher (cmd wrapper) |
+| `browserr-term`, `browserr-term.cmd` | terminal browser launchers |
+| `browserr_term.py` | terminal browser UI (stdlib; numpy improves the fallback) |
+| `update.sh` / `update.ps1` / `update.cmd` | in-place updater (see below) |
+| `README.md`, `LICENSE` | docs |
 
 Requirements: Python 3.10+ on PATH. `driver.py` finds the engine binary
 next to itself; override with `BROWSERR_ENGINE=/path/to/engine`.
 
-**Linux runtime packages** (all distros, headless included): the engine
-creates its GL context through EGL even for CPU (llvmpipe) rendering -
-EGL is the context-creation API, not the GPU. On a server/VPS without
-a GPU install:
-
-```sh
-sudo apt install libegl1 libgl1 libgbm1 libgl1-mesa-dri
-```
-
-(`libegl1` + `libgbm1` create the headless context,
-`libgl1-mesa-dri` ships llvmpipe, the software rasterizer. X11/xvfb is
-only needed for `--headed`; headless needs none of it.)
+> [!IMPORTANT]
+> **Linux runtime packages.** The engine creates its GL context through
+> EGL even for CPU (llvmpipe) rendering - EGL is the context-creation
+> API, not the GPU. On a server or VPS without a GPU install:
+>
+> ```sh
+> sudo apt install libegl1 libgl1 libgbm1 libgl1-mesa-dri
+> ```
+>
+> `libegl1` and `libgbm1` create the headless context, `libgl1-mesa-dri`
+> ships llvmpipe. X11/xvfb is only needed for `--headed`.
 
 ### Update an existing unpack
 
@@ -245,9 +248,11 @@ Headless only: no headed mode and no audio on Android. 32-bit ARM and
 x86 devices are not supported (no assets). Screenshot, eval, forms,
 network inspection - the full headless toolset works.
 
-To test-drive a build manually (e.g. from an emulator or a rooted
-device) without pip, push the engine and drive it from the PC over
-`adb forward`:
+<details>
+<summary>Manual device test over adb (no pip)</summary>
+
+To test-drive a build from an emulator or a rooted device, push the
+engine and drive it from the PC over `adb forward`:
 
 ```sh
 adb push engine /data/local/tmp/engine
@@ -264,14 +269,13 @@ d.navigate("https://example.com/")
 print(d.read_page()[:200])
 ```
 
+</details>
+
 ### Browse in your terminal
 
 Browserr Term renders real pages inside a terminal pane at native
 resolution, using Sixel or the Kitty graphics protocol with dirty-rectangle
 patches computed in the engine. It needs no installer step:
-
-https://github.com/user-attachments/assets/fdc5c347-2cf3-4fb7-b458-501d8e24506d
-
 
 ```sh
 ./browserr-term https://browserr.dev/        # macOS / Linux
@@ -288,20 +292,24 @@ Keys: `ctrl+l` URL bar, `ctrl+t` new tab, `ctrl+]/[` switch tabs,
 Inside tmux pass `--cell W:H` to match your font size (tmux cannot relay
 the terminal's pixel-cell query). Details: `term/README.md` in the repo.
 
+### Platforms
+
+| Platform | Asset | Headless | Native window | Notes |
+| --- | --- | --- | --- | --- |
+| Windows x64 | `.zip` | yes | yes | ANGLE DLLs ship in the archive |
+| Linux x64 | `.tar.gz` | yes | yes | needs `libegl1 libgl1 libgbm1 libgl1-mesa-dri` |
+| Linux ARM64 | `.tar.gz` | yes | yes | Raspberry Pi 4/5 |
+| macOS ARM64 | `.tar.gz` | yes | yes | macOS 13+ |
+| Android ARM64 | `.tar.gz` | yes | no | Termux, Android 10+ (API 29), 64-bit userland |
+
+Python 3.10+ is needed everywhere for the SDK and MCP server; the engine
+binary itself is standalone.
+
 ### Connect an MCP client ([Kai](https://github.com/Omodaka9375/kai), Claude Desktop, ...)
 
-The one-liner (no download, no paths):
-
-```json
-{
-  "mcpServers": {
-    "browserr": { "command": "uvx", "args": ["browserr-mcp"] }
-  }
-}
-```
-
-Or, pointing the client at an unpacked archive. On Windows, use the bundled
-wrapper:
+Same one-command config as [Quickstart](#quickstart). If you prefer an
+unpacked archive instead, point the client at the bundled launcher. On
+Windows, use the wrapper:
 
 ```json
 {
@@ -373,11 +381,19 @@ powershell -File scripts\package.ps1
 engine/   Servo webviews (one per tab), CPU-default rendering (--gpu for
           hardware GL), request interception (adblock), automation
           protocol, driver port.
-tools/    driver.py (Python SDK), browserr_mcp.py (MCP server), tests.
+            main.rs    render loop, tabs, command dispatch
+            hub.rs     attached-driver hub, ping/stop fast paths
+            net.rs     minimal HTTPS client, favicons
+            adblock.rs EasyList delegate, filter-list loading
+tools/    driver.py (Python SDK) plus driver_js.py (page scripts) and
+          annotate.py (screenshot marking); browserr_mcp.py (MCP server).
 scripts/  dist/package/ci for Windows (ps1) and Linux (sh).
 ```
 
 ## Protocol
+
+<details>
+<summary>The full 24-command wire format</summary>
 
 Commands are newline-delimited JSON, tab-addressed, over a loopback socket
 (127.0.0.1:7411) that accepts a single client - the automation host:
@@ -438,22 +454,26 @@ Timing rules worth knowing:
 - The bare engine accepts exactly one main-connection, so headless mode
   always spawns its own engine.
 
-## MCP server
+</details>
+
+## MCP tools
 
 `tools/browserr_mcp.py` is a Model Context Protocol server (standard
-library only, newline JSON-RPC on stdio) exposing 45 tools:
+library only, newline JSON-RPC on stdio) exposing 45 tools. Every tool
+accepts a named engine `session`, so several browsers can run side by side
+(the default session keeps single-engine behavior).
 
-- session: start (with optional persistent `profile`), stop, ping
-- page: navigate, read, read_structure, links, forms
-- interaction: click, click_text, click_element, click_ref, fill,
-  set_field, fill_form, key, set_value, submit_form, read_outcome
-- viewport and history: scroll, resize, history (back/forward)
-- capture: screenshot, screenshot_annotated, wait_for, tabs, console,
-  evidence, download
-- network: intercept, pending_requests, intercept_answer, net, frames,
-  document_status
-- trust: pause, resume, detect_handoff, wait_for_user, set_credentials
-- events: wait_auth, auth_answer, wait_filepicker, files_answer
+| Group | Tools |
+| --- | --- |
+| session | `browser_start` (profile, proxy, user_agent, headed), `browser_stop`, `browser_ping` |
+| page | `browser_navigate`, `browser_read`, `browser_read_structure`, `browser_links`, `browser_forms`, `browser_frames` |
+| interaction | `browser_click`, `browser_click_text`, `browser_click_element`, `browser_click_ref`, `browser_fill`, `browser_set_value`, `browser_set_field`, `browser_fill_form`, `browser_key`, `browser_wait_for` |
+| forms | `browser_submit_form`, `browser_read_outcome` |
+| viewport | `browser_scroll`, `browser_resize`, `browser_history` (back / forward), `browser_tabs` |
+| capture | `browser_screenshot`, `browser_screenshot_annotated`, `browser_evidence`, `browser_console`, `browser_download` (opt-in `use_session`) |
+| network | `browser_intercept`, `browser_pending_requests`, `browser_intercept_answer`, `browser_net`, `browser_document_status` |
+| trust | `browser_pause`, `browser_resume`, `browser_detect_handoff`, `browser_wait_for_user`, `browser_set_credentials`, `browser_action_log` |
+| events | `browser_wait_auth`, `browser_auth_answer`, `browser_wait_filepicker`, `browser_files_answer` |
 
 It runs headless with an ephemeral profile by default; `--port N`
 attaches to a running engine's driver port. `browser_start(profile=...)`
@@ -498,8 +518,7 @@ served normally, 404 means the URL is either genuinely dead or blocked
 network-level failure. The probe also lands in the `browser_net` ring as
 a `document-probe` entry.
 
-For human handoff, start with `{headed: true}`. This is a real browser
-window with no separate tab bar; MCP tab switching controls its contents.
+For human handoff, start with `{headed: true}`. That is a real browser
 window, not a screenshot viewer: the user can click and type directly,
 including inside cross-origin CAPTCHA frames when the provider supports
 Servo. `browser_pause` blocks MCP mutations, not native window input.
@@ -585,7 +604,10 @@ directory deleted on engine exit.
 ## Tests
 
 `tests/test_*.py` exercise the engine as a raw protocol client or as an MCP
-client:
+client. The full list:
+
+<details>
+<summary>45 test files (what each covers)</summary>
 
 ```text
 test_driver.py           SDK: eval results, click, typing, screenshot pixels
@@ -620,9 +642,22 @@ test_close.py            tab close must not kill the engine
 test_csp.py              strict-CSP pages: eval fallback, typed errors
 test_bootstrap.py        engine asset names match the release globs
 test_improvements.py     scroll/resize/history, session downloads, nav race
+test_navigate_quirk.py   navigate fail-last: redirects, slow commits, error pages
+test_proxy.py            upstream CONNECT proxy, basic auth, no-proxy list
+test_sessions.py         named engine sessions, per-session profiles
+test_useragent.py        UA profiles and the custom-string passthrough
+test_useragent_mcp.py    UA profile resolution through browser_start
+test_tab_flow.py         tab open/switch/close through the driver
+test_term.py             terminal client render path (Sixel/Kitty + fallback)
+test_native_frame.py     native compressed frame patches (FRM2)
+test_frame_pixels.py     frame pixel correctness against the page
+test_native_interaction.py native pointer/keyboard forwarding
+test_login_flow.py       login form flow with password capture
 test_https.py            engine TLS client against the real EasyList endpoint
 test_thin.py             release build smoke test
 ```
+
+</details>
 
 Run the suite (fmt + clippy gate, build, tests):
 

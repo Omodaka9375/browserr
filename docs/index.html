@@ -21,7 +21,7 @@
   <meta property="og:url" content="https://browserr.dev/" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Browserr — browser engine for AI agents" />
-  <meta name="twitter:description" content="A Servo-based browser engine for AI agents. MCP-native, 45 tools, optional native window, 22-command protocol." />
+  <meta name="twitter:description" content="A Servo-based browser engine for AI agents. MCP-native, 45 tools, optional native window, 24-command protocol." />
   <meta name="twitter:image" content="https://browserr.dev/og.png" />
 
   <link rel="icon" type="image/svg+xml" href="icon.svg" />
@@ -120,6 +120,13 @@
     .topbar .brand { color: var(--ink); font-weight: 700; }
     .topbar .brand img { display: inline-block; width: 13px; height: 13px; vertical-align: -2px; margin-right: 6px; }
     .topbar-links { display: flex; gap: 14px; }
+    .topbar-right { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+    .topbar-modes { display: inline-flex; align-items: center; gap: 0; }
+    .topbar .modebtn {
+      font-size: 0.58rem; padding: 3px 9px; letter-spacing: 0.1em;
+      border-color: var(--ink-4);
+    }
+    .topbar .modebtn + .modebtn { border-left: 0; }
 
     /* ————— masthead ————— */
     .masthead {  }
@@ -223,9 +230,18 @@
     table.blocks td { color: var(--ink-2); }
     table.blocks td b { color: var(--ink); font-weight: 600; }
     @media (max-width: 720px) {
-      table.blocks, table.blocks tbody, table.blocks tr, table.blocks td, table.blocks th { display: block; width: 100%; }
-      table.blocks th { display: none; }
-      table.blocks td:first-child { padding: 16px 0 4px; white-space: normal; }
+      /* Stacked rows read well for the feature lists; the comparison grid
+         keeps its columns and scrolls sideways instead (no headers would
+         make it unreadable once stacked). */
+      table.blocks:not(.compare),
+      table.blocks:not(.compare) tbody,
+      table.blocks:not(.compare) tr,
+      table.blocks:not(.compare) td,
+      table.blocks:not(.compare) th { display: block; width: 100%; }
+      table.blocks:not(.compare) th { display: none; }
+      table.blocks:not(.compare) td:first-child { padding: 16px 0 4px; white-space: normal; }
+      table.blocks.compare td, table.blocks.compare th { padding: 14px 14px 14px 0; }
+      table.blocks.compare td:first-child { padding-right: 24px; }
     }
 
     /* ————— hero layout: copy left, terminal right ----- */
@@ -288,8 +304,6 @@
     @keyframes dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '…'; } }
 
     /* ————— mode switcher (paper / ink) ————— */
-    .modebar { display: flex; align-items: center; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
-    .modebar > span { font-family: var(--mono); font-size: 0.62rem; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-4); }
     .modebtn {
       font-family: var(--mono); font-size: 0.62rem; font-weight: 700;
       letter-spacing: 0.14em; text-transform: uppercase;
@@ -315,6 +329,37 @@
       transition: border-color 0.2s, color 0.2s;
     }
     .chip:hover { border-color: var(--ink); color: var(--ink); }
+
+    /* ————— grouped feature rows ————— */
+    table.blocks tr.group td {
+      font-family: var(--mono); font-size: 0.66rem; font-weight: 700;
+      letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink);
+      border-bottom: 2px solid var(--rule-dark);
+      padding: 34px 0 10px;
+    }
+    table.blocks tr.group:first-child td { padding-top: 4px; }
+
+    /* ————— code blocks with copy ————— */
+    .codebox { position: relative; margin: 0 0 14px; }
+    .codebox pre {
+      margin: 0; padding: 14px 18px; overflow-x: auto;
+      background: var(--ink); color: var(--paper);
+      font-family: var(--mono); font-size: 0.82rem; line-height: 1.6;
+    }
+    .codebox .copy {
+      position: absolute; top: 6px; right: 6px;
+      font-family: var(--mono); font-size: 0.58rem; font-weight: 700;
+      letter-spacing: 0.12em; text-transform: uppercase;
+      background: transparent; color: var(--paper);
+      border: 1px solid currentColor; padding: 4px 8px;
+      cursor: pointer; opacity: 0.5;
+    }
+    .codebox .copy:hover, .codebox .copy:focus-visible { opacity: 1; }
+    .codebox .copy[data-done="1"] { background: var(--paper); color: var(--ink); opacity: 1; }
+
+    /* ————— wide tables scroll instead of squeezing ————— */
+    .tscroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .tscroll table.blocks { min-width: 700px; }
 
     /* ————— stats strip ————— */
     .stats dd { font-size: 1.5rem; letter-spacing: -0.02em; }
@@ -371,7 +416,7 @@
     /* ————— terminal demo video ————— */
     .demo { margin: 44px 0 0; }
     .demo video { display: block; width: 100%; max-width: 880px; margin: 0 auto;
-      border: 1px solid var(--rule); border-radius: 6px; background: #0a0a0a; }
+      border: 1px solid var(--rule-dark); background: #0a0a0a; }
     .demo figcaption { font-family: var(--mono); font-size: 0.72rem; line-height: 1.6;
       color: var(--ink-3); text-align: center; margin: 12px auto 0; max-width: 60ch; }
 
@@ -417,7 +462,13 @@
         <a href="https://github.com/Omodaka9375/browserr">GitHub</a>
         <a href="/llms.txt">llms.txt</a>
       </span>
-      <span><span id="heroVersion">v0.7.1</span> · <b id="heroStars">★ open source</b></span>
+      <span class="topbar-right">
+        <span><span id="heroVersion">v0.9.2</span> · <b id="heroStars">★ open source</b></span>
+        <span class="topbar-modes" role="group" aria-label="Colour mode">
+          <button class="modebtn" type="button" data-mode="light" aria-pressed="false">Paper</button>
+          <button class="modebtn" type="button" data-mode="dark" aria-pressed="false">Ink</button>
+        </span>
+      </span>
     </div>
   </div>
 
@@ -455,15 +506,9 @@
         <div><dt>Platform</dt><dd>Windows · Linux · macOS · Android</dd></div>
         <div><dt>Engine</dt><dd>Servo + SpiderMonkey</dd></div>
         <div><dt>MCP tools</dt><dd>45</dd></div>
-        <div><dt>Protocol</dt><dd>22 commands</dd></div>
+        <div><dt>Protocol</dt><dd>24 commands</dd></div>
       </dl>
 
-      <!-- Mode switcher -->
-      <div class="modebar">
-        <span>Mode</span>
-        <button class="modebtn" type="button" data-mode="light" aria-pressed="false">Paper</button>
-        <button class="modebtn" type="button" data-mode="dark" aria-pressed="false">Ink</button>
-      </div>
     </div>
   </header>
 
@@ -484,29 +529,35 @@
           for everything it did.
         </p>
         <table class="blocks">
-          <thead><tr><th>Command</th><th>Covers</th></tr></thead>
+          <thead><tr><th>Capability</th><th>Covers</th></tr></thead>
           <tbody>
-            <tr><td>read</td><td><b>Structured page reads.</b> Prose via read_page(), or read_structure(): every element with its rect and selector; fields carry label, constraints, state and validity.</td></tr>
-            <tr><td>act</td><td><b>Selector interaction.</b> click_element() and set_value() — real pointer events, React/Vue-safe writes.</td></tr>
+            <tr class="group"><td colspan="2">Read and act</td></tr>
+            <tr><td>read</td><td><b>Structured reads.</b> Prose via read_page(), or read_structure(): every element with its rect, selector and a stable ref; fields carry label, constraints and validity.</td></tr>
+            <tr><td>act</td><td><b>Real interaction.</b> Selector or ref clicks with a real pointer, and React/Vue-safe value writes.</td></tr>
             <tr><td>wait</td><td><b>SPA-aware timing.</b> Wait for selectors and readiness — no sleeps, no flaky scripts.</td></tr>
-            <tr><td>observe</td><td><b>Console capture.</b> Page messages and network errors arrive as events.</td></tr>
-            <tr><td>files</td><td><b>Downloads.</b> Fetched straight to disk, without page cookies.</td></tr>
-            <tr><td>survive</td><td><b>Fast failure, not hangs.</b> A dead engine surfaces instantly; ephemeral profiles give every run a clean slate.</td></tr>
-            <tr><td>block</td><td><b>Adblock built in.</b> EasyList-based, refreshed weekly.</td></tr>
-            <tr><td>gpu</td><td><b>Rendering.</b> CPU by default — starts anywhere; --gpu opts into hardware. Screenshots on demand, per tab.</td></tr>
-            <tr><td>compat</td><td><b>SPA-ready.</b> React 18 and Vue 3 render and react; IntersectionObserver, IndexedDB, Web Animations, WebGL and WebGL2 (via ANGLE, no GPU needed), clipboard, DecompressionStream; requestIdleCallback and crypto.subtle digests via built-in shims where Servo omits them.</td></tr>
-            <tr><td>secure</td><td><b>Token-gated attach.</b> Unauthenticated sockets get nothing — not even events.</td></tr>
-            <tr><td>intercept</td><td><b>Fail-closed interception.</b> Requests held for an allow / deny / respond decision; unanswered means denied after 5 s.</td></tr>
-            <tr><td>auth</td><td><b>Challenges surfaced, not swallowed.</b> Auth and file-picker events; missing credentials fail closed.</td></tr>
+            <tr><td>fill</td><td><b>Forms in one round trip.</b> A whole form per call, with type-aware writes and the page's own validation on submit.</td></tr>
+            <tr><td>observe</td><td><b>Console capture.</b> Page messages plus network and TLS failures arrive as events.</td></tr>
+
+            <tr class="group"><td colspan="2">Network and control</td></tr>
+            <tr><td>intercept</td><td><b>Fail-closed interception.</b> Requests held for allow / deny / respond; unanswered means denied after 5 s.</td></tr>
+            <tr><td>auth</td><td><b>Challenges surfaced.</b> Auth and file-picker events; missing credentials fail closed.</td></tr>
+            <tr><td>proxy</td><td><b>Upstream proxy routing.</b> CONNECT tunnels with basic auth and per-engine rotation; document_status reveals the real HTTP status behind a fake-404 block.</td></tr>
             <tr><td>evidence</td><td><b>Net evidence.</b> Every fetch/XHR recorded in a ring buffer, in every frame.</td></tr>
-            <tr><td>frames</td><td><b>Frame tree.</b> List frames and walk same-origin ones; cross-origin frames report their url only.</td></tr>
-            <tr><td>fill</td><td><b>Form filling.</b> A whole form in one round trip, with type-aware writes.</td></tr>
-            <tr><td>submit</td><td><b>Submit and read the outcome.</b> Runs the page's validation, then reports url, alerts and invalid fields.</td></tr>
-            <tr><td>point</td><td><b>Shared references.</b> Stable refs and numbered screenshot boxes: the agent says "click 7" and the human knows which one that is.</td></tr>
-            <tr><td>proxy</td><td><b>Upstream proxy routing.</b> browser_start(proxy=...) routes all http/https traffic through a CONNECT tunnel (basic auth in the URL, per-engine rotation); document_status reports the main document's real HTTP status so a block serving a fake 404 is distinguishable from a dead page.</td></tr>
-            <tr><td>handoff</td><td><b>Humans take over in a real native window.</b> Start MCP with headed:true; direct mouse and keyboard input keep working while agent mutations are paused. CAPTCHA support still depends on Servo compatibility.</td></tr>
-            <tr><td>term</td><td><b>Browse in your terminal.</b> browserr-term renders real pages inside a pane at native resolution (Sixel / Kitty graphics, engine-side dirty-rectangle patches); every terminal gets a working fallback. Works inside tmux. Same binary, same evidence, no extra install.</td></tr>
-            <tr><td>trust</td><td><b>Fail-closed by design.</b> Persistent profiles, evidence shots, an append-only action log, a credential store and a confirm gate on payment submits.</td></tr>
+            <tr><td>frames</td><td><b>Frame tree.</b> Same-origin frames are walked; cross-origin frames report their url only.</td></tr>
+            <tr><td>files</td><td><b>Downloads.</b> Straight to disk, cookieless by default; opt in to the tab's session for logged-in portals.</td></tr>
+
+            <tr class="group"><td colspan="2">Human handoff and trust</td></tr>
+            <tr><td>point</td><td><b>Shared references.</b> Stable refs and numbered screenshot boxes: the agent says "click e7" and the human sees which one that is.</td></tr>
+            <tr><td>handoff</td><td><b>Humans take over.</b> headed:true opens a real native window; mouse and keyboard keep working while agent mutations are paused.</td></tr>
+            <tr><td>trust</td><td><b>Fail-closed by design.</b> Evidence shots, an append-only action log, a credential store and a confirm gate on payment submits.</td></tr>
+            <tr><td>secure</td><td><b>Token-gated attach.</b> Unauthenticated sockets get nothing — not even events.</td></tr>
+
+            <tr class="group"><td colspan="2">Runtime</td></tr>
+            <tr><td>gpu</td><td><b>Rendering.</b> CPU by default — starts anywhere; --gpu opts into hardware. Screenshots on demand, per tab.</td></tr>
+            <tr><td>compat</td><td><b>SPA-ready.</b> React 18 and Vue 3 render and react; WebGL, IndexedDB, Web Animations and clipboard; shims where Servo omits an API.</td></tr>
+            <tr><td>block</td><td><b>Adblock built in.</b> EasyList-based, refreshed weekly.</td></tr>
+            <tr><td>term</td><td><b>Browse in your terminal.</b> Real pages inside a pane at native resolution (Sixel / Kitty, engine-side dirty rectangles), tmux included.</td></tr>
+            <tr><td>survive</td><td><b>Fast failure, not hangs.</b> A dead engine surfaces instantly; ephemeral profiles give every run a clean slate.</td></tr>
           </tbody>
         </table>
 
@@ -538,7 +589,7 @@
       </div>
       <div class="wrap">
         <dl class="specs stats">
-          <div><dt>Commands</dt><dd>22</dd></div>
+          <div><dt>Commands</dt><dd>24</dd></div>
           <div><dt>MCP tools</dt><dd>45</dd></div>
           <div><dt>Binary</dt><dd>~120 MB</dd></div>
           <div><dt>CDP endpoints</dt><dd>0</dd></div>
@@ -576,13 +627,14 @@
         </div>
         <h2>Where it sits in 2026.</h2>
         <p class="lead">Chromium wrappers are the default; alternative engines are the bet. Browserr's edge is the local, trust-first, human-in-the-loop.</p>
-        <table class="blocks">
+        <div class="tscroll">
+        <table class="blocks compare">
           <thead><tr><th></th><th>Browserr</th><th>Lightpanda</th><th>Obscura</th><th>Chromium headless</th></tr></thead>
           <tbody>
             <tr><td>engine</td><td><b>Servo</b></td><td>own (Zig)</td><td>own (Rust)</td><td>Blink</td></tr>
             <tr><td>js engine</td><td><b>SpiderMonkey</b></td><td>own</td><td>own</td><td>V8</td></tr>
             <tr><td>mcp-native</td><td><b>yes, 45 tools</b></td><td>no</td><td>partial</td><td>via wrappers</td></tr>
-            <tr><td>protocol size</td><td><b>22 commands</b></td><td>CDP-compatible</td><td>own + CDP</td><td>1000+ endpoints</td></tr>
+            <tr><td>protocol size</td><td><b>24 commands</b></td><td>CDP-compatible</td><td>own + CDP</td><td>1000+ endpoints</td></tr>
             <tr><td>footprint</td><td><b>one ~120 MB binary</b></td><td>~16× less than Chromium</td><td>~30 MB</td><td>~200 MB+</td></tr>
             <tr><td>web compat</td><td><b>Servo 0.8 (text, docs, forms, SPAs)</b></td><td>growing</td><td>growing</td><td>full</td></tr>
             <tr><td>human handoff</td><td><b>native window, pause, wait_for_user</b></td><td>headless only</td><td>headless only</td><td>via wrappers</td></tr>
@@ -591,6 +643,7 @@
             <tr><td>network policy</td><td><b>fail-closed, held to a decision</b></td><td>CDP opt-in</td><td>CDP opt-in</td><td>CDP opt-in</td></tr>
           </tbody>
         </table>
+        </div>
       </div>
     </section>
 
@@ -610,11 +663,14 @@
             <h4>Any MCP client</h4>
             <p>No download, no paths. The engine is fetched and sha256-verified on
                first run; later starts are instant and never depend on a live GitHub API call.</p>
+            <div class="codebox">
             <pre>{
   "mcpServers": {
     "browserr": { "command": "uvx", "args": ["browserr-mcp"] }
   }
 }</pre>
+            <button class="copy" type="button" aria-label="Copy config">Copy</button>
+            </div>
             <p>Package: <a href="https://pypi.org/project/browserr-mcp/">browserr-mcp on PyPI</a>.
                Or prefer an archive:</p>
           </div>
@@ -632,7 +688,7 @@
             <a href="https://github.com/Omodaka9375/browserr/releases/latest" class="btn-primary">↓ Download for Windows</a>
             <div class="os-meta">
               <span>Format <b>.zip</b></span>
-              <span>Contents <b>engine.exe · libEGL.dll · libGLESv2.dll · driver.py · browserr_mcp.py</b></span>
+              <span>Contents <b>engine.exe · libEGL.dll · libGLESv2.dll · driver.py · driver_js.py · annotate.py · browserr_mcp.py</b></span>
               <span>Requires <b>Python 3.10+ (GPU optional)</b></span>
             </div>
           </div>
@@ -647,7 +703,7 @@
             </div>
             <div class="os-meta">
               <span>Format <b>.tar.gz</b></span>
-              <span>Contents <b>engine · driver.py · browserr_mcp.py</b></span>
+              <span>Contents <b>engine · driver.py · driver_js.py · annotate.py · browserr_mcp.py</b></span>
               <span>Requires <b>libegl1 libgbm1 mesa-dri (CPU ok) · Python 3.10+</b></span>
             </div>
           </div>
@@ -659,7 +715,7 @@
             <a href="https://github.com/Omodaka9375/browserr/releases/latest" class="btn-primary">↓ Download for macOS</a>
             <div class="os-meta">
               <span>Format <b>.tar.gz</b></span>
-              <span>Contents <b>engine · driver.py · browserr_mcp.py</b></span>
+              <span>Contents <b>engine · driver.py · driver_js.py · annotate.py · browserr_mcp.py</b></span>
               <span>Requires <b>macOS 13+ (arm64) · Python 3.10+</b></span>
             </div>
           </div>
@@ -668,8 +724,11 @@
           <div class="os-card">
             <h4>Android (Termux, ARM64)</h4>
             <p>Runs headless on Android 10+ inside Termux — no APK, no root. pip installs the same browserr-mcp package; the bootstrap detects Termux and fetches the android engine.</p>
+            <div class="codebox">
             <pre>pkg install python
 pip install browserr-mcp</pre>
+            <button class="copy" type="button" aria-label="Copy commands">Copy</button>
+            </div>
             <div class="os-meta">
               <span>Requires <b>Android 10+ (API 29) · 64-bit</b></span>
               <span>Limits <b>headless only · no audio</b></span>
@@ -742,7 +801,7 @@ pip install browserr-mcp</pre>
     /* ───────────────────────────  Protocol marquee  ──────────────────── */
     const COMMANDS = [
       'navigate', 'back', 'forward', 'new_tab', 'activate', 'close_tab',
-      'input', 'wheel', 'key', 'eval', 'screenshot', 'zoom', 'ping',
+      'input', 'wheel', 'key', 'eval', 'screenshot', 'frame', 'zoom', 'ping',
       'download', 'resize', 'intercept', 'request', 'auth', 'files',
       'frames', 'pause', 'resume', 'handoff',
     ];
@@ -751,6 +810,30 @@ pip install browserr-mcp</pre>
       const chips = COMMANDS.map((c) => '<span class="chip">' + c + '</span>').join('');
       // Duplicate for a seamless -50% loop.
       track.innerHTML = chips + chips;
+    }
+
+    /* ─────────────────────────  Copy buttons  ─────────────────────────── */
+    for (const btn of document.querySelectorAll('.codebox .copy')) {
+      btn.addEventListener('click', async () => {
+        const pre = btn.parentElement.querySelector('pre');
+        if (!pre) return;
+        const text = pre.innerText;
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch (e) {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand('copy'); } catch (e2) { /* ignore */ }
+          ta.remove();
+        }
+        btn.dataset.done = '1';
+        btn.textContent = 'Copied';
+        setTimeout(() => { btn.dataset.done = '0'; btn.textContent = 'Copy'; }, 1600);
+      });
     }
 
     /* ───────────────────────────  OS tabs  ────────────────────────────── */
@@ -828,7 +911,8 @@ pip install browserr-mcp</pre>
         const lines = [
           { icon: '→', name: 'browser_navigate', arg: 'example.com' },
           { icon: '☰', name: 'browser_read_structure', arg: '', diff: true },
-          { icon: '⌖', name: 'browser_click_element', arg: '#go' },
+          { icon: '⌖', name: 'browser_click_ref', arg: 'e7' },
+          { icon: '⛨', name: 'browser_evidence', arg: 'annotated' },
         ];
         const toolEls = lines.map((l) => {
           const row = document.createElement('div');
@@ -837,7 +921,7 @@ pip install browserr-mcp</pre>
             '<div class="t-row"><span class="t-chip">' + l.icon + '</span>' +
             '<span><span class="t-name">' + l.name + '</span> <span class="t-arg">' + esc(l.arg) + '</span></span></div>' +
             (l.diff
-              ? '<div class="t-diff"><div class="t-add">{ "buttons": [ "More information..." ] }</div><div class="t-add">{ "inputs": [ "#q" ] }</div></div>'
+              ? '<div class="t-diff"><div class="t-add">{ "links": [ { "ref": "e7", "label": "More information..." } ] }</div><div class="t-add">{ "inputs": [ { "ref": "e9", "name": "q" } ] }</div></div>'
               : '');
           frag.appendChild(row);
           return row;
@@ -845,7 +929,7 @@ pip install browserr-mcp</pre>
         const result = document.createElement('div');
         result.className = 't-line t-ok';
         result.style.display = 'none';
-        result.textContent = '✓ click dispatched, focus: true';
+        result.textContent = '✓ clicked e7 · evidence/mcp-evidence/step-3.png';
         frag.appendChild(result);
 
         const end = document.createElement('div');

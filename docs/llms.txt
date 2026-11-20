@@ -8,17 +8,18 @@
 
 Browserr drives real pages - navigation, reading, forms, clicks, downloads,
 interception - with an evidence trail: every action is logged and every
-screenshot is written to disk before the result is returned. Version 0.8.x.
+screenshot is written to disk before the result is returned. Version 0.9.x.
 
 ## Docs
 
 - [Install](https://github.com/Omodaka9375/browserr#install): Prebuilt binaries for Windows x64, Linux x64/ARM64, macOS ARM64, Android ARM64 (Termux).
-- [Protocol](https://github.com/Omodaka9375/browserr#protocol): The 22-command JSON-lines-over-TCP protocol, every command and event documented.
-- [MCP server](https://github.com/Omodaka9375/browserr#mcp-server): The 45 tools; every tool accepts a named engine session.
+- [Protocol](https://github.com/Omodaka9375/browserr#protocol): The 24-command JSON-lines-over-TCP protocol, every command and event documented.
+- [MCP tools](https://github.com/Omodaka9375/browserr#mcp-tools): The 45 tools grouped by job; every tool accepts a named engine session.
+- [Platforms](https://github.com/Omodaka9375/browserr#platforms): Asset, headless/native support and requirements per platform.
 - [Profiles](https://github.com/Omodaka9375/browserr#profiles): Persistent profiles keep logins and storage across sessions.
 - [Security notes](https://github.com/Omodaka9375/browserr#security-notes): The trust model: evidence directory, action log, confirm gates for payments, fail-closed interception.
 - [Known limitations](https://github.com/Omodaka9375/browserr#known-limitations): What Browserr does not do yet.
-- [Tests](https://github.com/Omodaka9375/browserr#tests): The 45-test suite and how to run it.
+- [Tests](https://github.com/Omodaka9375/browserr#tests): The 45 test files and how to run the suite.
 - [Android (Termux)](https://github.com/Omodaka9375/browserr#android-termux): Headless on Android 10+ via pip inside Termux; no APK, no root.
 
 ## Optional
