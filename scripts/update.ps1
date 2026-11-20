@@ -47,8 +47,10 @@ $engineVersion = Get-EngineVersion $engine
 $running = Get-Process engine -ErrorAction SilentlyContinue |
     Where-Object { $_.Path -and $_.Path -ieq $engine }
 if ($running) {
-    Write-Error ("engine is running (pid {0}); stop it first - a running " +
-                 "executable cannot be replaced on Windows" -f $running.Id)
+    # NOTE the extra parentheses: `"a" + "b" -f $x` binds -f to the SECOND
+    # string only, so the message would print a literal {0}.
+    Write-Error (("engine is running (pid {0}); stop it first - a running " +
+                  "executable cannot be replaced on Windows") -f $running.Id)
 }
 
 # --- resolve the release ---------------------------------------------------
@@ -143,8 +145,8 @@ try {
         Write-Error ("new engine did not answer --version; the copied " +
                      "binary is not the expected release; backup is at $backup")
     } elseif ($newVersion -ne $tag) {
-        Write-Error ("updated binary reports {0}, expected {1}; backup is " +
-                     "at {2}" -f $newVersion, $tag, $backup)
+        Write-Error (("updated binary reports {0}, expected {1}; backup is " +
+                      "at {2}") -f $newVersion, $tag, $backup)
     }
     # A failed verify keeps the backup (the Write-Error above exits with
     # $ErrorActionPreference = Stop before this line).

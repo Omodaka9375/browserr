@@ -25,6 +25,15 @@ tag push; asset archives and full diffs live on the
 
 ### Fixed
 
+- **`update.sh` reported failure on every successful update** (shipped in
+  every unix archive): the updater is part of the payload it installs, and
+  bash re-reads a running script by byte offset, so after copying the new
+  `update.sh` over itself it resumed in the middle of the new file, printed
+  a bogus "asset payload had no engine" and exited 1 - with the update
+  already applied. It now re-execs from a private copy first. Windows was
+  unaffected (PowerShell parses the whole script before running).
+- `update.ps1` printed a literal `{0}` instead of the engine pid: in
+  `"a" + "b" -f $x` the `-f` operator binds to the second string only.
 - `wait_ready()` navigation race: `navigate()`, `back()`, and `forward()`
   now stamp the outgoing document with a per-tab generation marker so
   `wait_ready()` never returns ready on the document being left behind.

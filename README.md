@@ -607,7 +607,7 @@ directory deleted on engine exit.
 client. The full list:
 
 <details>
-<summary>45 test files (what each covers)</summary>
+<summary>46 test files (what each covers)</summary>
 
 ```text
 test_driver.py           SDK: eval results, click, typing, screenshot pixels
@@ -642,6 +642,7 @@ test_close.py            tab close must not kill the engine
 test_csp.py              strict-CSP pages: eval fallback, typed errors
 test_bootstrap.py        engine asset names match the release globs
 test_improvements.py     scroll/resize/history, session downloads, nav race
+test_release.py          version consistency, updater manifest, re-exec guard
 test_navigate_quirk.py   navigate fail-last: redirects, slow commits, error pages
 test_proxy.py            upstream CONNECT proxy, basic auth, no-proxy list
 test_sessions.py         named engine sessions, per-session profiles

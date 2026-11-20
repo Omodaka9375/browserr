@@ -11,9 +11,9 @@ root="$PWD"
 GPULESS=0
 [ "${1:-}" = "--gpuless" ] && GPULESS=1
 
-SDK_TESTS="test_driver test_agent test_elements test_structure test_watchdog test_features test_mcp test_scroll test_bind test_attach test_hardening test_intercept test_auth test_filepicker test_net test_frames test_form test_flow test_annotate test_handoff test_trust test_software_render test_compat test_proxy test_mcp_logic test_bootstrap test_sessions test_useragent test_useragent_mcp test_navigate_quirk test_csp test_improvements"
+SDK_TESTS="test_driver test_agent test_elements test_structure test_watchdog test_features test_mcp test_scroll test_bind test_attach test_hardening test_intercept test_auth test_filepicker test_net test_frames test_form test_flow test_annotate test_handoff test_trust test_software_render test_compat test_proxy test_mcp_logic test_bootstrap test_sessions test_useragent test_useragent_mcp test_navigate_quirk test_csp test_improvements test_release"
 RAW_TESTS="test_input test_cursor_zoom test_close"
-GPULESS_TESTS="test_bind test_mcp_logic test_bootstrap"
+GPULESS_TESTS="test_bind test_mcp_logic test_bootstrap test_release"
 # Terminal client tests: protocol-level, need frame capture (skipped in
 # GPU-less mode).
 TERM_TESTS="test_term test_native_frame test_native_interaction test_frame_pixels test_tab_flow test_login_flow"

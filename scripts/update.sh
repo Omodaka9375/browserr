@@ -9,7 +9,30 @@
 # Usage: ./update.sh [tag]     (default: latest release)
 set -eu
 
-here="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# bash reads a script incrementally BY BYTE OFFSET, so a script that copies
+# the release payload over itself (update.sh IS in the payload) resumes
+# reading the middle of the NEW file after that copy and misparses: a fully
+# successful update then exits 1 with a bogus "asset payload had no engine".
+# Re-exec from a private copy so the installed update.sh is free to be
+# replaced. (update.ps1 is immune: PowerShell parses the whole script first.)
+if [ -z "${BROWSERR_UPDATE_HOME:-}" ]; then
+    BROWSERR_UPDATE_HOME="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+    export BROWSERR_UPDATE_HOME
+    copy="$(mktemp "${TMPDIR:-/tmp}/browserr-update-XXXXXX")"
+    cp -- "$0" "$copy"
+    BROWSERR_UPDATE_TMP_SCRIPT="$copy"
+    export BROWSERR_UPDATE_TMP_SCRIPT
+    exec bash "$copy" "$@"
+fi
+
+tmp=""
+cleanup() {
+    [ -n "$tmp" ] && rm -rf "$tmp"
+    [ -n "${BROWSERR_UPDATE_TMP_SCRIPT:-}" ] && rm -f -- "$BROWSERR_UPDATE_TMP_SCRIPT"
+}
+trap cleanup EXIT
+
+here="$BROWSERR_UPDATE_HOME"
 repo="Omodaka9375/browserr"
 exe="$here/engine"
 [ -f "$exe" ] || { echo "no engine next to this script; run update from inside the unpack" >&2; exit 1; }
@@ -55,7 +78,6 @@ esac
 echo "updating $version -> $tag"
 
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
 curl -fsSL -H "User-Agent: browserr-update" -o "$tmp/$asset" "$url" 2>/dev/null \
     || wget -qO "$tmp/$asset" --header="User-Agent: browserr-update" "$url"
 
