@@ -8,7 +8,7 @@
 
 Browserr drives real pages - navigation, reading, forms, clicks, downloads,
 interception - with an evidence trail: every action is logged and every
-screenshot is written to disk before the result is returned. Version 0.9.x.
+screenshot is written to disk before the result is returned. Version 1.0.0.
 
 ## Docs
 

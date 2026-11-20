@@ -4,9 +4,9 @@ name: pypi
 # so a PyPI hiccup cannot fail the engine release matrix (and vice versa):
 # the assets come from release.yml, the wheel comes from here.
 #
-# Auth: PyPI Trusted Publishing (OIDC), no token in the repo. One-time setup
-# on PyPI: project browserr-mcp -> Publishing -> add a GitHub publisher for
-# Omodaka9375/browserr, workflow "pypi.yml", environment "pypi".
+# Auth: the PYPI_TOKEN repository secret (the same token the previous
+# releases were uploaded with). Trusted Publishing (OIDC) needs a one-time
+# PyPI-side setup that is not done; the token is the established path.
 
 on:
   push:
@@ -23,9 +23,8 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-24.04
-    environment: pypi
     permissions:
-      id-token: write   # OIDC for Trusted Publishing
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,6 +60,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
+          password: ${{ secrets.PYPI_TOKEN }}
 
       - name: Verify the release is installable from PyPI
         # PyPI's index is eventually consistent; retry briefly instead of
