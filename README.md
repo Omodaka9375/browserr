@@ -375,33 +375,6 @@ Package a distributable (builds into `dist\` and zips it):
 powershell -File scripts\package.ps1
 ```
 
-### Cut a release
-
-The version lives in six files, so it is bumped by script, never by hand:
-
-```powershell
-python scripts\bump.py 1.0.0     # rewrite every carrier
-python scripts\bump.py --check   # verify they agree (also runs in the gate)
-```
-
-Then rename the `[Unreleased]` CHANGELOG section to the new version and tag:
-
-```powershell
-git commit -am "release: 1.0.0"; git push
-git tag v1.0.0; git push origin v1.0.0
-```
-
-Pushing the tag starts two workflows: `release.yml` builds, tests and
-publishes the five platform assets to the GitHub release, and `pypi.yml`
-publishes the wheel to PyPI over OIDC (Trusted Publishing - one-time setup
-on PyPI: add a GitHub publisher for this repo, workflow `pypi.yml`,
-environment `pypi`), then confirms the version is actually installable
-before going green.
-
-Note for 0.9.x users: their `update.sh` reports a bogus failure after a
-successful update (fixed in 1.0.0). The update still applied - run
-`./update.sh` once more and it reports "already up to date".
-
 ## Architecture
 
 ```text
