@@ -508,8 +508,15 @@ class Driver:
                         self._cond.notify_all()
                 elif magic == EVT1:
                     payload = self._read_exact(a)
+                    try:
+                        # strict=False: engines up to 1.0.0 put a page's
+                        # raw control characters inside event strings.
+                        event = json.loads(payload, strict=False)
+                    except ValueError:
+                        # One unreadable event must not end the reader:
+                        # every later wait would then hang until timeout.
+                        continue
                     with self._cond:
-                        event = json.loads(payload)
                         self._event_seq += 1
                         event["_driver_seq"] = self._event_seq
                         self.events.append(event)

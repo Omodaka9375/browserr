@@ -1161,6 +1161,14 @@ fn map_key(name: &str, text: &str, mods: u8, down: bool) -> Option<servo::InputE
     Some(servo::InputEvent::Keyboard(servo::KeyboardEvent::new(ev)))
 }
 
+/// `s` as a JSON string literal, quotes included. Event payloads are built
+/// with `format!`, and a title, console message or URL can carry any
+/// character: a raw tab or other control character inside a hand-escaped
+/// string is invalid JSON and the driver cannot parse the event.
+fn json_str(s: &str) -> String {
+    serde_json::Value::from(s).to_string()
+}
+
 fn send_event(out: &mut impl Write, id: u64, json: &str) {
     let bytes = json.as_bytes();
     let mut frame = Vec::with_capacity(20 + bytes.len());
@@ -2187,18 +2195,19 @@ fn main() {
                                         &mut out,
                                         event_id,
                                         &format!(
-                                            "{{\"ev\":\"url\",\"tab\":{tab_id},\"url\":\"{u}\"}}"
+                                            "{{\"ev\":\"url\",\"tab\":{tab_id},\"url\":{}}}",
+                                            json_str(u)
                                         ),
                                     );
                                 }
                                 if let Some(t) = &tab.last_title {
                                     event_id += 1;
-                                    let esc = t.replace('\\', "\\\\").replace('"', "\\\"");
                                     send_event(
                                         &mut out,
                                         event_id,
                                         &format!(
-                                            "{{\"ev\":\"title\",\"tab\":{tab_id},\"title\":\"{esc}\"}}"
+                                            "{{\"ev\":\"title\",\"tab\":{tab_id},\"title\":{}}}",
+                                            json_str(t)
                                         ),
                                     );
                                 }
@@ -2658,12 +2667,12 @@ fn main() {
                                 event_id += 1;
                                 let payload = match result {
                                     Ok(n) => format!(
-                                        "{{\"ev\":\"download\",\"tab\":{tab_id},\"id\":{req},\"path\":\"{}\",\"ok\":true,\"bytes\":{n}}}",
-                                        path.replace('\\', "\\\\").replace('"', "\\\"")
+                                        "{{\"ev\":\"download\",\"tab\":{tab_id},\"id\":{req},\"path\":{},\"ok\":true,\"bytes\":{n}}}",
+                                        json_str(path)
                                     ),
                                     Err(e) => format!(
-                                        "{{\"ev\":\"download\",\"tab\":{tab_id},\"id\":{req},\"ok\":false,\"error\":\"{}\"}}",
-                                        e.replace('\\', "\\\\").replace('"', "\\\"")
+                                        "{{\"ev\":\"download\",\"tab\":{tab_id},\"id\":{req},\"ok\":false,\"error\":{}}}",
+                                        json_str(&e)
                                     ),
                                 };
                                 send_event(&mut out, event_id, &payload);
@@ -2965,7 +2974,11 @@ fn main() {
                     send_event(
                         &mut out,
                         event_id,
-                        &format!("{{\"ev\":\"url\",\"tab\":{},\"url\":\"{url}\"}}", u.tab),
+                        &format!(
+                            "{{\"ev\":\"url\",\"tab\":{},\"url\":{}}}",
+                            u.tab,
+                            json_str(url)
+                        ),
                     );
                 }
                 if let Some(title) = &u.title {
@@ -2974,11 +2987,14 @@ fn main() {
                     {
                         window.set_title(title);
                     }
-                    let esc = title.replace('\\', "\\\\").replace('"', "\\\"");
                     send_event(
                         &mut out,
                         event_id,
-                        &format!("{{\"ev\":\"title\",\"tab\":{},\"title\":\"{esc}\"}}", u.tab),
+                        &format!(
+                            "{{\"ev\":\"title\",\"tab\":{},\"title\":{}}}",
+                            u.tab,
+                            json_str(title)
+                        ),
                     );
                 }
                 if let Some((b, f)) = &u.history {
@@ -3012,45 +3028,40 @@ fn main() {
                     );
                 }
                 if let Some((level, message)) = &u.console {
-                    let esc = message
-                        .replace('\\', "\\\\")
-                        .replace('"', "\\\"")
-                        .replace('\n', "\\n")
-                        .replace('\r', "\\r");
                     send_event(
                         &mut out,
                         event_id,
                         &format!(
-                            "{{\"ev\":\"console\",\"tab\":{},\"level\":\"{}\",\"message\":\"{esc}\"}}",
-                            u.tab, level
+                            "{{\"ev\":\"console\",\"tab\":{},\"level\":\"{}\",\"message\":{}}}",
+                            u.tab,
+                            level,
+                            json_str(message)
                         ),
                     );
                 }
                 if let Some((id, method, url, main)) = &u.intercept {
-                    let esc = url
-                        .replace('\\', "\\\\")
-                        .replace('"', "\\\"")
-                        .replace('\n', "\\n");
                     send_event(
                         &mut out,
                         event_id,
                         &format!(
-                            "{{\"ev\":\"request\",\"tab\":{},\"id\":{},\"method\":\"{method}\",\"url\":\"{esc}\",\"main\":{}}}",
-                            u.tab, id, main
+                            "{{\"ev\":\"request\",\"tab\":{},\"id\":{},\"method\":\"{method}\",\"url\":{},\"main\":{}}}",
+                            u.tab,
+                            id,
+                            json_str(url),
+                            main
                         ),
                     );
                 }
                 if let Some((id, url, proxy)) = &u.auth {
-                    let esc = url
-                        .replace('\\', "\\\\")
-                        .replace('"', "\\\"")
-                        .replace('\n', "\\n");
                     send_event(
                         &mut out,
                         event_id,
                         &format!(
-                            "{{\"ev\":\"auth\",\"tab\":{},\"id\":{},\"url\":\"{esc}\",\"proxy\":{}}}",
-                            u.tab, id, proxy
+                            "{{\"ev\":\"auth\",\"tab\":{},\"id\":{},\"url\":{},\"proxy\":{}}}",
+                            u.tab,
+                            id,
+                            json_str(url),
+                            proxy
                         ),
                     );
                 }
