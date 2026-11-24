@@ -393,6 +393,7 @@ class Driver:
         self.width = None
         self.height = None
         self.dead = False           # set by the reader thread on socket loss
+        self.unreadable_events = 0  # events the reader could not parse
         self._paused = None        # reason string while a human has control
         self._handoff_seen = False
         self._nav_target = {}      # tab -> last navigate() url (for wait_ready)
@@ -508,8 +509,21 @@ class Driver:
                         self._cond.notify_all()
                 elif magic == EVT1:
                     payload = self._read_exact(a)
+                    try:
+                        # strict=False: engines up to 1.0.0 put a page's
+                        # raw control characters inside event strings.
+                        event = json.loads(payload, strict=False)
+                    except ValueError:
+                        # One unreadable event must not end the reader:
+                        # every later wait would then hang until timeout.
+                        # A dropped reply still times out its caller, so
+                        # say that it happened.
+                        self.unreadable_events += 1
+                        sys.stderr.write(
+                            "browserr driver: dropped an unreadable event "
+                            f"({len(payload)} bytes)\n")
+                        continue
                     with self._cond:
-                        event = json.loads(payload)
                         self._event_seq += 1
                         event["_driver_seq"] = self._event_seq
                         self.events.append(event)
