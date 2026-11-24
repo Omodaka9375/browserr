@@ -259,8 +259,10 @@ window.__browserr_doc_probe=function(){
 /// (its rsa dep pins an unpublished der release), so crypto.subtle is
 /// absent from the crates.io build. SPAs lean on two calls: digest
 /// (token/hashing) and randomUUID. This shim provides pure-JS SHA-1 and
-/// SHA-2 digests plus randomUUID, and honestly rejects the rest
-/// (encrypt/sign/deriveKey) with NotSupportedError - a page probing
+/// SHA-2 digests plus randomUUID, raw-key HMAC sign/verify and PBKDF2
+/// deriveBits (request-signing SPAs derive a checksum per API call), and
+/// honestly rejects the rest (encrypt/deriveKey/generateKey) with
+/// NotSupportedError - a page probing
 /// capabilities then falls back, a page that hard-requires AES-GCM fails
 /// the way it would on an old browser, not with a missing object.
 const CRYPTO_SHIM_JS: &str = r#"(function(){
@@ -344,7 +346,7 @@ function sha2core64(msgBytes,H){
   var W=new Array(80);
   for(var b=0;b<blocks;b++){
     var t,t2,t3;
-    for(t=0;t<16;t++)W[t]=[words[b*32+t*2],words[b*32+t*2+1]];
+    for(t=0;t<16;t++)W[t]=[words[b*32+t*2]>>>0,words[b*32+t*2+1]>>>0];
     for(t2=16;t2<80;t2++){
       var s0=xor3(rotr64(W[t2-15],1),rotr64(W[t2-15],8),shr64(W[t2-15],7));
       var s1=xor3(rotr64(W[t2-2],19),rotr64(W[t2-2],61),shr64(W[t2-2],6));
@@ -380,6 +382,39 @@ function wordsToBuf(words){
   return b;
 }
 function reject(alg,op){return Promise.reject(new DOMException("crypto.subtle shim: "+alg+" is not supported for "+op+" (browserr builds servo from crates.io where the subtlecrypto feature cannot resolve)","NotSupportedError"));}
+function algName(alg){return String((alg&&typeof alg==="object"&&alg.name)||alg).toLowerCase().replace(/-/g,"");}
+function hashOf(alg){
+  var n=algName(alg);
+  if(n==="sha1")return{block:64,size:20,run:function(b){return wordsToBuf(sha1core(b));}};
+  if(n==="sha256")return{block:64,size:32,run:function(b){return wordsToBuf(sha256core(b));}};
+  if(n==="sha384")return{block:128,size:48,run:function(b){return wordsToBuf(sha384core(b)).subarray(0,48);}};
+  if(n==="sha512")return{block:128,size:64,run:function(b){return wordsToBuf(sha512core(b));}};
+  return null;
+}
+function concat(a,b){var o=new Uint8Array(a.length+b.length);o.set(a,0);o.set(b,a.length);return o;}
+function hmac(hash,key){
+  if(key.length>hash.block)key=hash.run(key);
+  var inner=new Uint8Array(hash.block),outer=new Uint8Array(hash.block);
+  for(var i=0;i<hash.block;i++){var k=i<key.length?key[i]:0;inner[i]=k^0x36;outer[i]=k^0x5c;}
+  return function(msg){return hash.run(concat(outer,hash.run(concat(inner,msg))));};
+}
+function pbkdf2(hash,secret,salt,iterations,size){
+  var mac=hmac(hash,secret),out=new Uint8Array(size),blocks=Math.ceil(size/hash.size);
+  for(var b=1;b<=blocks;b++){
+    var u=mac(concat(salt,new Uint8Array([(b>>>24)&255,(b>>>16)&255,(b>>>8)&255,b&255])));
+    var t=new Uint8Array(u);
+    for(var i=1;i<iterations;i++){u=mac(u);for(var j=0;j<t.length;j++)t[j]^=u[j];}
+    var at=(b-1)*hash.size;
+    out.set(t.subarray(0,Math.min(hash.size,size-at)),at);
+  }
+  return out;
+}
+var keyBytes=new WeakMap();
+function secretOf(key,name){
+  var held=keyBytes.get(key);
+  if(!held||held.name!==name)throw new DOMException("crypto.subtle shim: key is not a "+name+" key","InvalidAccessError");
+  return held;
+}
 var subtle={
   digest:function(alg,data){
     var name=String((alg&&typeof alg==="object"&&alg.name)||alg).toLowerCase().replace(/-/g,"");
@@ -397,11 +432,47 @@ var subtle={
   },
   encrypt:function(alg){return reject(String(alg),"encrypt");},
   decrypt:function(alg){return reject(String(alg),"decrypt");},
-  sign:function(alg){return reject(String(alg),"sign");},
-  verify:function(alg){return reject(String(alg),"verify");},
-  deriveKey:function(alg){return reject(String(alg),"deriveKey");},
-  deriveBits:function(alg){return reject(String(alg),"deriveBits");},
-  importKey:function(alg){return reject(String(alg),"importKey");},
+  sign:function(alg,key,data){
+    if(algName(alg)!=="hmac")return reject(String((alg&&alg.name)||alg),"sign");
+    try{var held=secretOf(key,"HMAC");return Promise.resolve(hmac(held.hash,held.bytes)(toBytes(data)).slice().buffer);}
+    catch(e){return Promise.reject(e);}
+  },
+  verify:function(alg,key,signature,data){
+    if(algName(alg)!=="hmac")return reject(String((alg&&alg.name)||alg),"verify");
+    try{
+      var held=secretOf(key,"HMAC"),want=hmac(held.hash,held.bytes)(toBytes(data)),got=toBytes(signature);
+      var diff=want.length^got.length;
+      for(var i=0;i<want.length&&i<got.length;i++)diff|=want[i]^got[i];
+      return Promise.resolve(diff===0);
+    }catch(e){return Promise.reject(e);}
+  },
+  deriveKey:function(alg){return reject(String((alg&&alg.name)||alg),"deriveKey");},
+  deriveBits:function(alg,key,length){
+    if(algName(alg)!=="pbkdf2")return reject(String((alg&&alg.name)||alg),"deriveBits");
+    try{
+      var hash=hashOf(alg.hash);
+      if(!hash)return reject(String((alg.hash&&alg.hash.name)||alg.hash),"deriveBits");
+      if(!(length>0)||length%8!==0||!(alg.iterations>0))throw new DOMException("crypto.subtle shim: PBKDF2 needs a positive iteration count and a length in whole bytes","OperationError");
+      return Promise.resolve(pbkdf2(hash,secretOf(key,"PBKDF2").bytes,toBytes(alg.salt),alg.iterations,length/8).buffer);
+    }catch(e){return Promise.reject(e);}
+  },
+  importKey:function(format,keyData,alg,extractable,usages){
+    var name=algName(alg);
+    if(format!=="raw"||(name!=="pbkdf2"&&name!=="hmac"))return reject(String((alg&&alg.name)||alg)+" ("+format+")","importKey");
+    try{
+      var held={name:name==="hmac"?"HMAC":"PBKDF2",bytes:toBytes(keyData).slice()};
+      var algorithm={name:held.name};
+      if(name==="hmac"){
+        held.hash=hashOf(alg.hash);
+        if(!held.hash)return reject(String((alg.hash&&alg.hash.name)||alg.hash),"importKey");
+        algorithm.hash={name:String((alg.hash&&alg.hash.name)||alg.hash).toUpperCase()};
+        algorithm.length=held.bytes.length*8;
+      }
+      var key={type:"secret",extractable:name==="hmac"&&!!extractable,algorithm:algorithm,usages:Array.prototype.slice.call(usages||[])};
+      keyBytes.set(key,held);
+      return Promise.resolve(key);
+    }catch(e){return Promise.reject(e);}
+  },
   exportKey:function(){return reject("key","exportKey");},
   generateKey:function(alg){return reject(String(alg),"generateKey");},
   wrapKey:function(){return reject("key","wrapKey");},

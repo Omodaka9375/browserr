@@ -6,6 +6,36 @@ scheme is [SemVer](https://semver.org/). Releases are published by CI on
 tag push; asset archives and full diffs live on the
 [releases page](https://github.com/Omodaka9375/browserr/releases).
 
+## [Unreleased]
+
+### Added
+
+- `crypto.subtle` stand-in: `importKey("raw", ...)` for PBKDF2 and HMAC,
+  PBKDF2 `deriveBits`, and HMAC `sign` / `verify`, over SHA-1/256/384/512.
+  Single-page apps that sign each API request with a PBKDF2-derived
+  checksum rendered an empty shell because key import rejected.
+  Everything the stand-in cannot do (AES, key generation, non-raw
+  formats) still rejects with `NotSupportedError`.
+  `tests/test_crypto_shim.py` checks every result against `hashlib` /
+  `hmac`.
+
+### Fixed
+
+- **A page could kill the driver's reader thread.** Event JSON was built
+  with `format!` and escaped only quotes, backslashes and (for some
+  events) newlines, so a console message containing a tab, or a title or
+  URL containing any other control character, was invalid JSON. The
+  driver's reader raised on it and exited without marking the engine
+  dead, and every later `eval_js` / `wait_ready` / `ping` hung until its
+  timeout. The engine now encodes those strings with `serde_json`; the
+  driver parses events leniently and skips one it cannot read, so it also
+  works against engines up to 1.0.0. `tests/test_event_json.py`.
+- **`crypto.subtle.digest` returned wrong SHA-384 and SHA-512 hashes for
+  most inputs.** The 64-bit core read message words as signed 32-bit
+  values, which broke its carry test whenever a word had its top bit set
+  (267 of the 301 lengths 0..300 for a simple byte pattern; short ASCII
+  such as "abc" happened to pass).
+
 ## [1.0.0] - 2026-11-20
 
 ### Added
