@@ -393,6 +393,7 @@ class Driver:
         self.width = None
         self.height = None
         self.dead = False           # set by the reader thread on socket loss
+        self.unreadable_events = 0  # events the reader could not parse
         self._paused = None        # reason string while a human has control
         self._handoff_seen = False
         self._nav_target = {}      # tab -> last navigate() url (for wait_ready)
@@ -515,6 +516,12 @@ class Driver:
                     except ValueError:
                         # One unreadable event must not end the reader:
                         # every later wait would then hang until timeout.
+                        # A dropped reply still times out its caller, so
+                        # say that it happened.
+                        self.unreadable_events += 1
+                        sys.stderr.write(
+                            "browserr driver: dropped an unreadable event "
+                            f"({len(payload)} bytes)\n")
                         continue
                     with self._cond:
                         self._event_seq += 1
