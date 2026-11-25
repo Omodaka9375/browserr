@@ -14,7 +14,8 @@ impl servo::ServoDelegate for ServoAdblockDelegate {
         if let Some(engine) = &self.adblock
             && adblock_matches(engine, &load)
         {
-            eprintln!("engine: adblock blocked {}", load.request().url);
+            let safe = load.request().url.as_str().split('?').next().unwrap_or("");
+            eprintln!("engine: adblock blocked {safe}");
             let response_url = load.request().url.clone().into_url();
             load.intercept(servo::WebResourceResponse::new(response_url))
                 .cancel();

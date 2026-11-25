@@ -600,7 +600,7 @@ class Driver:
         token = f"nav-{self._alloc_id()}"
         try:
             got = self.eval_js(
-                f"window.__browserr_navgen = {json.dumps(token)}",
+                f"(window.__browserr_int.navgen = {json.dumps(token)})",
                 tab, 2.0)
             self._nav_marker[tab] = str(got) if got == token else None
         except (TimeoutError, EvalError, EngineDeadError):
@@ -677,8 +677,8 @@ class Driver:
             try:
                 state = self.eval_js(
                     "location.href + '\\n' + document.readyState + '\\n' + "
-                    "(window.__browserr_navgen === undefined ? '-' "
-                    ": window.__browserr_navgen)",
+                    "((window.__browserr_int && window.__browserr_int.navgen !== undefined) "
+                    "? window.__browserr_int.navgen : '-')",
                     tab, timeout=1.5)
                 href, _, rest = (state or "").partition("\n")
                 ready, _, gen = rest.partition("\n")
@@ -706,7 +706,6 @@ class Driver:
         await promises (a thenable serializes as {}). Promises should
         resolve to plain JSON values; complex objects serialize only their
         enumerable properties."""
-        slot = self._alloc_id()
         # The engine receives the raw script; it wraps and parks itself.
         # No page-side code from this process ever touches page globals.
         req = self._alloc_id()

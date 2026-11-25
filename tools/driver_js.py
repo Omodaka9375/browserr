@@ -220,13 +220,13 @@ STRUCTURE_JS = r"""(() => {
     try {
         if (window.__browserr_int === undefined) {
             Object.defineProperty(window, '__browserr_int',
-                {value: Object.freeze({refs: refs}),
+                {value: {evals: {}, refs: refs},
                  configurable: false, writable: false, enumerable: false});
         } else {
             window.__browserr_int.refs = refs;
         }
     } catch (_) {
-        window.__browserr_int = {refs: refs};
+        window.__browserr_int = {evals: {}, refs: refs};
     }
     let seq = 0;
     const ref = (el) => {
@@ -497,9 +497,9 @@ SUBMIT_FORM_JS = r"""(() => {
     if (!(window.__browserr_int)) {
         try {
             Object.defineProperty(window, '__browserr_int',
-                {value: Object.freeze({}),
+                {value: {evals: {}},
                  configurable: false, writable: false, enumerable: false});
-        } catch (_) { window.__browserr_int = {}; }
+        } catch (_) { window.__browserr_int = {evals: {}}; }
     }
     window.__browserr_int.submit_seen = 0;
     form.addEventListener('submit', function () {

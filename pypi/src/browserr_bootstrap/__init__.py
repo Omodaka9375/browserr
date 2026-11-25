@@ -176,36 +176,72 @@ def _newest_installed() -> str | None:
 
 
 def _safe_member_name(raw: str) -> str:
-    """Normalize one archive path and reject anything that escapes the
-    destination directory (absolute paths, `..`)."""
-    p = os.path.normpath(raw.replace("/", os.sep).replace("\\", os.sep))
-    if os.path.isabs(p) or p == ".." or p.startswith(".." + os.sep):
+    """Validate one archive member path and reject anything that escapes the
+    destination directory (absolute paths, drive prefixes, `..`, NUL).
+    Preserves a trailing `/` so zip directory entries stay directories."""
+    if not raw or "\x00" in raw:
+        raise SystemExit(f"browserr-mcp: archive member invalid: {raw!r}")
+    if raw.startswith(("/", "\\")) or os.path.splitdrive(raw)[0]:
         raise SystemExit(f"browserr-mcp: archive member escapes dest: {raw!r}")
-    return p
+    parts = [p for p in raw.replace("\\", "/").split("/") if p not in ("", ".")]
+    if any(p == ".." for p in parts) or any(os.path.splitdrive(p)[0] for p in parts):
+        raise SystemExit(f"browserr-mcp: archive member escapes dest: {raw!r}")
+    norm = "/".join(parts)
+    if not norm:
+        return "."
+    return norm + ("/" if raw.endswith(("/", "\\")) else "")
+
+
+def _check_under_dest(dest_real: str, rel: str) -> str:
+    target = os.path.realpath(os.path.join(dest_real, rel))
+    if target != dest_real and not target.startswith(dest_real + os.sep):
+        raise SystemExit(f"browserr-mcp: archive member escapes dest: {rel!r}")
+    return target
 
 
 def _unpack(path: str, dest: str) -> None:
+    os.makedirs(dest, exist_ok=True)
+    dest_real = os.path.realpath(dest)
     if path.endswith(".zip"):
         with zipfile.ZipFile(path) as z:
-            for info in z.infolist():
+            members = z.infolist()
+            for info in members:
+                if stat.S_ISLNK(info.external_attr >> 16):
+                    raise SystemExit(
+                        f"browserr-mcp: refusing symlink in archive: {info.filename!r}")
                 safe = _safe_member_name(info.filename)
+                _check_under_dest(dest_real, safe)
                 info.filename = safe
+            for info in members:
+                if info.filename == ".":
+                    continue
                 z.extract(info, dest)
-            for info in z.infolist():
-                if info.external_attr >> 28 == 0o3:
-                    target = os.path.join(dest, _safe_member_name(info.filename))
+            for info in members:
+                if info.external_attr >> 28 == 0o3 and not info.is_dir():
+                    target = _check_under_dest(dest_real, info.filename)
                     if os.path.exists(target):
                         os.chmod(target, os.stat(target).st_mode | stat.S_IXUSR)
     else:
         import tarfile
         with tarfile.open(path) as t:
-            for m in t.getmembers():
+            members = t.getmembers()
+            for m in members:
+                if not (m.isfile() or m.isdir()):
+                    raise SystemExit(
+                        f"browserr-mcp: refusing non-file entry in archive: {m.name!r}")
                 safe = _safe_member_name(m.name)
-                m.name = safe
-                t.extract(m, dest)
-            for m in t.getmembers():
+                _check_under_dest(dest_real, safe)
+                m.name = safe.rstrip("/") or "."
+            for m in members:
+                if m.name == ".":
+                    continue
+                if sys.version_info >= (3, 12):
+                    t.extract(m, dest, filter="data")
+                else:
+                    t.extract(m, dest)
+            for m in members:
                 if m.mode & 0o111 and m.isfile():
-                    target = os.path.join(dest, _safe_member_name(m.name))
+                    target = _check_under_dest(dest_real, m.name)
                     if os.path.exists(target):
                         os.chmod(target, os.stat(target).st_mode | stat.S_IXUSR)
 

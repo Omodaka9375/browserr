@@ -1051,13 +1051,13 @@ def call_tool(name, args):
             raise McpError("browser_download: path is required")
         if not (url.startswith("http://") or url.startswith("https://")):
             raise McpError("browser_download: url must be http(s)")
-        if os.path.isabs(path) is False and ".." in path.split(os.sep):
+        if not os.path.isabs(path) and ".." in re.split(r"[/\\]", path):
             # Relative paths must not climb out via .. (absolute paths stay
             # allowed - the agent is the operator and owns this machine).
             raise McpError("browser_download: path must not climb out with ..")
         max_bytes = args.get("max_bytes")
-        if max_bytes is not None and not isinstance(max_bytes, int):
-            raise McpError("browser_download: max_bytes must be an integer")
+        if max_bytes is not None and (isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0):
+            raise McpError("browser_download: max_bytes must be a positive integer")
         if max_bytes is not None and max_bytes > (512 << 20):
             raise McpError("browser_download: max_bytes too large")
         if args.get("use_session"):

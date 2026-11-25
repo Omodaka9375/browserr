@@ -885,29 +885,30 @@ impl servo::WebViewDelegate for FrameDelegate {
         let method = load.request().method.as_str().to_string();
         // Hold the load itself: alive = held (drop would pass through).
         let id = INTERCEPT_ID.fetch_add(1, Ordering::SeqCst);
-        let full = PENDING_LOADS.with(|m| {
-            let mut m = m.borrow_mut();
-            if m.len() >= 32 {
-                // Cap held requests: extra holds would keep net-pool workers
-                // blocked indefinitely. Deny-by-default by dropping the load
-                // (same fail-closed semantics as a 5s timeout).
-                eprintln!("engine: too many held requests, denying");
-                true
-            } else {
-                m.insert(
-                    id,
-                    PendingLoad {
-                        since: std::time::Instant::now(),
-                        load,
-                    },
-                );
-                false
-            }
-        });
+        let full = PENDING_LOADS.with(|m| m.borrow().len() >= 32);
         if full {
-            eprintln!("engine: intercept over capacity; allowing the load through unheld");
+            // Cap held requests: extra holds would keep net-pool workers
+            // blocked indefinitely. Fail closed with a synthetic 403
+            // (same semantics as the 5s timeout; dropping load would allow
+            // the request through unheld).
+            eprintln!("engine: intercept over capacity, denying (id {id})");
+            let response_url = load.request().url.clone().into_url();
+            let mut response = servo::WebResourceResponse::new(response_url);
+            response.status_code = http::StatusCode::FORBIDDEN;
+            let mut held = load.intercept(response);
+            held.send_body_data(b"blocked (capacity)".to_vec());
+            held.finish();
             return;
         }
+        PENDING_LOADS.with(|m| {
+            m.borrow_mut().insert(
+                id,
+                PendingLoad {
+                    since: std::time::Instant::now(),
+                    load,
+                },
+            );
+        });
         self.shared.updates.lock().unwrap().push(Update {
             tab: self.tab,
             url: None,

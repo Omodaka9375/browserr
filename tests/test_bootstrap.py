@@ -74,4 +74,67 @@ for _, expected, termux in [(c[0], c[2], c[3]) for c in CASES]:
     assert any(glob_match(g, expected) for g, _ in GLOBS), \
         f"{expected} matches no release glob"
 print("release-glob contract OK")
+
+# _unpack must preserve nested directory entries (zip and tar) and reject
+# path traversal / symlinks.
+import io
+import shutil
+import tarfile
+import tempfile
+import zipfile
+
+tmp = tempfile.mkdtemp(prefix="browserr-test-unpack-")
+try:
+    # 1) Nested zip with explicit directory entry
+    zp = os.path.join(tmp, "ok.zip")
+    with zipfile.ZipFile(zp, "w") as z:
+        z.writestr("sub/", "")
+        z.writestr("sub/nested/hello.txt", "hi")
+    out_z = os.path.join(tmp, "out-z")
+    bs._unpack(zp, out_z)
+    with open(os.path.join(out_z, "sub", "nested", "hello.txt")) as f:
+        assert f.read() == "hi"
+    print("zip nested-dir unpack OK")
+
+    # 2) Nested tar.gz with explicit directory entry
+    tp = os.path.join(tmp, "ok.tar.gz")
+    with tarfile.open(tp, "w:gz") as t:
+        d = tarfile.TarInfo("sub/")
+        d.type = tarfile.DIRTYPE
+        t.addfile(d)
+        f = tarfile.TarInfo("sub/hello.txt")
+        data = b"hi"
+        f.size = len(data)
+        t.addfile(f, io.BytesIO(data))
+    out_t = os.path.join(tmp, "out-t")
+    bs._unpack(tp, out_t)
+    with open(os.path.join(out_t, "sub", "hello.txt"), "rb") as f:
+        assert f.read() == b"hi"
+    print("tar nested-dir unpack OK")
+
+    # 3) Path traversal rejected in both zip and tar
+    for bad in ("../escape.txt", "/abs.txt", "sub/../../escape.txt"):
+        try:
+            bs._safe_member_name(bad)
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError(f"should have rejected {bad!r}")
+
+    # 4) Symlink in tar rejected
+    tp_sym = os.path.join(tmp, "sym.tar.gz")
+    with tarfile.open(tp_sym, "w:gz") as t:
+        s = tarfile.TarInfo("link")
+        s.type = tarfile.SYMTYPE
+        s.linkname = "/etc/passwd"
+        t.addfile(s)
+    try:
+        bs._unpack(tp_sym, os.path.join(tmp, "out-sym"))
+    except SystemExit:
+        print("tar symlink rejected OK")
+    else:
+        raise AssertionError("symlink in tar should have been rejected")
+finally:
+    shutil.rmtree(tmp, ignore_errors=True)
+
 print("ALL OK")
