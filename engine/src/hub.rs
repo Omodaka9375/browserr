@@ -107,15 +107,27 @@ impl DriverHub {
 
     /// Queue a validated driver command line for the main loop to drain.
     fn push(&self, line: &str) {
-        self.queue
-            .lock()
-            .unwrap()
-            .push_back(format!("{DRIVER_PREFIX}{line}"));
+        let mut q = self.queue.lock().unwrap();
+        if q.len() >= 1024 {
+            // A runaway or hostile driver flooding queued commands would
+            // otherwise balloon memory. Dropping the command (rather than
+            // blocking) keeps the main loop responsive; the driver is never
+            // allowed to crowd out legitimate commands.
+            eprintln!("engine: driver queue full, dropping command");
+            return;
+        }
+        q.push_back(format!("{DRIVER_PREFIX}{line}"));
     }
 
     fn add_client(&self, stream: &std::net::TcpStream) {
         if let Ok(clone) = stream.try_clone() {
             let mut clients = self.clients.lock().unwrap();
+            if clients.len() >= 16 {
+                // Cap the number of attached drivers; each one write-broadcasts
+                // every event, so an unbounded client set is a slow-main-loop DoS.
+                eprintln!("engine: driver client cap reached, ignoring");
+                return;
+            }
             clients.push(clone);
             eprintln!("engine: driver attached ({} open)", clients.len());
         }
@@ -154,6 +166,21 @@ pub(crate) fn start_driver_listener(port: u16, token: Option<String>) {
             std::thread::spawn(move || driver_client_loop(stream, hub, token));
         }
     });
+}
+
+/// Constant-time string comparison for the driver token. Avoids a
+/// timing side channel that could narrow the token byte-by-byte.
+fn token_eq_const_time(a: &str, b: &str) -> bool {
+    let an = a.as_bytes();
+    let bn = b.as_bytes();
+    if an.len() != bn.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in an.iter().zip(bn.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 /// Read JSON command lines from one driver, validate, and queue the
@@ -195,7 +222,7 @@ fn driver_client_loop(stream: std::net::TcpStream, hub: &DriverHub, token: Optio
             let ok = cmd == "auth"
                 && v["token"]
                     .as_str()
-                    .map(|t| t == token.as_deref().unwrap_or(""))
+                    .map(|t| token_eq_const_time(t, token.as_deref().unwrap_or("")))
                     .unwrap_or(false);
             if ok {
                 authed = true;
@@ -264,11 +291,13 @@ pub(crate) fn cleanup_ephemeral(dir: &Option<std::path::PathBuf>) {
         #[cfg(windows)]
         {
             let pid = std::process::id();
+            // Escape single quotes for the PowerShell single-quoted literal.
+            let safe_path = d.display().to_string().replace('\'', "''");
             let script = format!(
                 "$p = Get-Process -Id {pid} -ErrorAction SilentlyContinue; \
                  if ($p) {{ Wait-Process -Id {pid} -ErrorAction SilentlyContinue }}; \
                  Remove-Item -LiteralPath '{}' -Recurse -Force -ErrorAction SilentlyContinue",
-                d.display()
+                safe_path
             );
             let _ = std::process::Command::new("powershell")
                 .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])

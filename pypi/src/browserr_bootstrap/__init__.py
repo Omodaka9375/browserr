@@ -175,22 +175,37 @@ def _newest_installed() -> str | None:
     return best
 
 
+def _safe_member_name(raw: str) -> str:
+    """Normalize one archive path and reject anything that escapes the
+    destination directory (absolute paths, `..`)."""
+    p = os.path.normpath(raw.replace("/", os.sep).replace("\\", os.sep))
+    if os.path.isabs(p) or p == ".." or p.startswith(".." + os.sep):
+        raise SystemExit(f"browserr-mcp: archive member escapes dest: {raw!r}")
+    return p
+
+
 def _unpack(path: str, dest: str) -> None:
     if path.endswith(".zip"):
         with zipfile.ZipFile(path) as z:
-            z.extractall(dest)
+            for info in z.infolist():
+                safe = _safe_member_name(info.filename)
+                info.filename = safe
+                z.extract(info, dest)
             for info in z.infolist():
                 if info.external_attr >> 28 == 0o3:
-                    target = os.path.join(dest, info.filename)
+                    target = os.path.join(dest, _safe_member_name(info.filename))
                     if os.path.exists(target):
                         os.chmod(target, os.stat(target).st_mode | stat.S_IXUSR)
     else:
         import tarfile
         with tarfile.open(path) as t:
-            t.extractall(dest)
+            for m in t.getmembers():
+                safe = _safe_member_name(m.name)
+                m.name = safe
+                t.extract(m, dest)
             for m in t.getmembers():
                 if m.mode & 0o111 and m.isfile():
-                    target = os.path.join(dest, m.name)
+                    target = os.path.join(dest, _safe_member_name(m.name))
                     if os.path.exists(target):
                         os.chmod(target, os.stat(target).st_mode | stat.S_IXUSR)
 

@@ -453,6 +453,8 @@ var subtle={
       var hash=hashOf(alg.hash);
       if(!hash)return reject(String((alg.hash&&alg.hash.name)||alg.hash),"deriveBits");
       if(!(length>0)||length%8!==0||!(alg.iterations>0))throw new DOMException("crypto.subtle shim: PBKDF2 needs a positive iteration count and a length in whole bytes","OperationError");
+      if(alg.iterations>1000000)throw new DOMException("crypto.subtle shim: PBKDF2 iteration count over 1,000,000 (DoS guard)","OperationError");
+      if(length>1048576)throw new DOMException("crypto.subtle shim: PBKDF2 deriveBits over 1 MiB (DoS guard)","OperationError");
       return Promise.resolve(pbkdf2(hash,secretOf(key,"PBKDF2").bytes,toBytes(alg.salt),alg.iterations,length/8).buffer);
     }catch(e){return Promise.reject(e);}
   },
@@ -885,15 +887,29 @@ impl servo::WebViewDelegate for FrameDelegate {
         let method = load.request().method.as_str().to_string();
         // Hold the load itself: alive = held (drop would pass through).
         let id = INTERCEPT_ID.fetch_add(1, Ordering::SeqCst);
-        PENDING_LOADS.with(|m| {
-            m.borrow_mut().insert(
-                id,
-                PendingLoad {
-                    since: std::time::Instant::now(),
-                    load,
-                },
-            )
+        let full = PENDING_LOADS.with(|m| {
+            let mut m = m.borrow_mut();
+            if m.len() >= 32 {
+                // Cap held requests: extra holds would keep net-pool workers
+                // blocked indefinitely. Deny-by-default by dropping the load
+                // (same fail-closed semantics as a 5s timeout).
+                eprintln!("engine: too many held requests, denying");
+                true
+            } else {
+                m.insert(
+                    id,
+                    PendingLoad {
+                        since: std::time::Instant::now(),
+                        load,
+                    },
+                );
+                false
+            }
         });
+        if full {
+            eprintln!("engine: intercept over capacity; allowing the load through unheld");
+            return;
+        }
         self.shared.updates.lock().unwrap().push(Update {
             tab: self.tab,
             url: None,
@@ -2774,7 +2790,14 @@ fn main() {
                                     continue;
                                 };
                                 eprintln!("engine: request decision (id {req})");
-                                ANSWERS.with(|a| a.borrow_mut().insert(req, v.clone()));
+                                ANSWERS.with(|a| {
+                                    let mut m = a.borrow_mut();
+                                    if m.len() >= 256 {
+                                        eprintln!("engine: request answer map full, dropping");
+                                        return;
+                                    }
+                                    m.insert(req, v.clone());
+                                });
                                 shared.pump.kick();
                             }
                             Some("auth") => {
@@ -2788,7 +2811,14 @@ fn main() {
                                     // Missing credentials = fail closed.
                                     _ => None,
                                 };
-                                AUTH_ANSWERS.with(|a| a.borrow_mut().insert(req, creds));
+                                AUTH_ANSWERS.with(|a| {
+                                    let mut m = a.borrow_mut();
+                                    if m.len() >= 64 {
+                                        eprintln!("engine: auth answer map full, dropping");
+                                        return;
+                                    }
+                                    m.insert(req, creds);
+                                });
                                 shared.pump.kick();
                             }
                             Some("files") => {
@@ -2803,7 +2833,14 @@ fn main() {
                                         .map(std::path::PathBuf::from)
                                         .collect::<Vec<_>>()
                                 });
-                                FILE_ANSWERS.with(|a| a.borrow_mut().insert(req, paths));
+                                FILE_ANSWERS.with(|a| {
+                                    let mut m = a.borrow_mut();
+                                    if m.len() >= 64 {
+                                        eprintln!("engine: file answer map full, dropping");
+                                        return;
+                                    }
+                                    m.insert(req, paths);
+                                });
                                 shared.pump.kick();
                             }
                             Some("resize") => {

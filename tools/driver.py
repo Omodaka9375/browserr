@@ -375,6 +375,7 @@ class Driver:
         self.events = []            # all EVT1 events, newest last
         self.shots = []             # (w, h, bgra) screenshots, newest last
         self.native_frames = []     # FRM2 patches: (id, rect, format, flags, data)
+        self.native_frame_total_bytes = 0
         self._next_id = 1
         self._id_lock = threading.Lock()  # MCP fast-lane threads allocate
         # eval/ping ids concurrently; a race could duplicate an id and make
@@ -466,6 +467,8 @@ class Driver:
             raise EngineDeadError(f"send failed: {e}")
 
     def _read_exact(self, n: int) -> bytes:
+        if n < 0 or n > 96 * 1024 * 1024:
+            raise ConnectionError(f"frame payload implausible size: {n}")
         buf = b""
         while len(buf) < n:
             chunk = self.sock.recv(n - len(buf))
@@ -497,8 +500,16 @@ class Driver:
                     self._read_exact(8)  # frame id (diagnostic only)
                     payload = self._read_exact(a)
                     with self._cond:
-                        self.native_frames.append((hdr[4:12], (x, y, w, h),
-                                                   fmt, flags, payload))
+                        # Cap total native-frame bytes: a hostile/chatty
+                        # engine could otherwise grow this indefinitely.
+                        if self.native_frame_total_bytes + len(payload) > 256 * 1024 * 1024:
+                            self.native_frames.clear()
+                            self.native_frame_total_bytes = 0
+                            self.unreadable_events += 1
+                        else:
+                            self.native_frame_total_bytes += len(payload)
+                            self.native_frames.append((hdr[4:12], (x, y, w, h),
+                                                       fmt, flags, payload))
                         self._cond.notify_all()
                 elif magic == FRM1:            # live frame: skip
                     self._read_exact(a * b * 4)
@@ -527,6 +538,11 @@ class Driver:
                         self._event_seq += 1
                         event["_driver_seq"] = self._event_seq
                         self.events.append(event)
+                        if len(self.events) > 2000:
+                            # Cap the event log: a wedged/chatty engine or
+                            # a hostile loop would otherwise grow this
+                            # list without bound.
+                            del self.events[:len(self.events) - 2000]
                         self._cond.notify_all()
                 else:
                     self._mark_dead()

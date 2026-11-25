@@ -11,7 +11,16 @@ use std::sync::Arc;
 /// Follows up to 5 redirects; caps the body at `max_bytes`.
 pub(crate) fn http_get(url: &str, max_bytes: u64) -> Result<Vec<u8>, String> {
     let mut current = url::Url::parse(url).map_err(|e| e.to_string())?;
+    if current.scheme() != "http" && current.scheme() != "https" {
+        return Err(format!("unsupported scheme: {}", current.scheme()));
+    }
     for _ in 0..6 {
+        // Redirect-hop: re-validate scheme and require an http host before
+        // connecting (the join() below can otherwise turn a Location into
+        // any scheme, and a relative Location can point at loopback).
+        if current.scheme() != "http" && current.scheme() != "https" {
+            return Err(format!("redirect scheme rejected: {}", current.scheme()));
+        }
         let host = current.host_str().ok_or("no host")?.to_string();
         let mut path = current.path().to_string();
         if path.is_empty() {
@@ -95,11 +104,26 @@ fn read_response(
     let mut first = true;
     loop {
         let mut line = Vec::new();
-        reader
-            .read_until(b'\n', &mut line)
-            .map_err(|e| format!("header read: {e}"))?;
-        if line.is_empty() {
-            return Err("connection closed in headers".into());
+        // Width-bounded read: a hostile server can claim an endless header
+        // line without ever sending a newline; cap what we buffer before
+        // checking. We stop at the first newline after MAX_HEADER_LINE
+        // bytes or when the stream closes; either way the line must be
+        // newline-terminated (and therefore bounded).
+        loop {
+            let mut b = [0u8; 1];
+            let n = reader
+                .read(&mut b)
+                .map_err(|e| format!("header read: {e}"))?;
+            if n == 0 {
+                return Err("connection closed in headers".into());
+            }
+            line.push(b[0]);
+            if b[0] == b'\n' {
+                break;
+            }
+            if line.len() > (64 << 10) {
+                return Err("headers too large".into());
+            }
         }
         let trimmed = String::from_utf8_lossy(&line);
         let trimmed = trimmed.trim_end();
@@ -124,9 +148,6 @@ fn read_response(
             content_len = v.trim().parse().ok();
         } else if lower.starts_with("transfer-encoding:") && lower.contains("chunked") {
             chunked = true;
-        }
-        if line.len() > (64 << 10) {
-            return Err("headers too large".into());
         }
     }
 

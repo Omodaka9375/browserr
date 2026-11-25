@@ -1043,13 +1043,28 @@ def call_tool(name, args):
         msgs = d.console(level=args.get("level"))
         return {"messages": msgs[-200:]}
     if name == "browser_download":
+        url = args.get("url")
+        path = args.get("path")
+        if not isinstance(url, str) or not url.strip():
+            raise McpError("browser_download: url is required")
+        if not isinstance(path, str) or not path.strip():
+            raise McpError("browser_download: path is required")
+        if not (url.startswith("http://") or url.startswith("https://")):
+            raise McpError("browser_download: url must be http(s)")
+        if os.path.isabs(path) is False and ".." in path.split(os.sep):
+            # Relative paths must not climb out via .. (absolute paths stay
+            # allowed - the agent is the operator and owns this machine).
+            raise McpError("browser_download: path must not climb out with ..")
+        max_bytes = args.get("max_bytes")
+        if max_bytes is not None and not isinstance(max_bytes, int):
+            raise McpError("browser_download: max_bytes must be an integer")
+        if max_bytes is not None and max_bytes > (512 << 20):
+            raise McpError("browser_download: max_bytes too large")
         if args.get("use_session"):
-            n = d.download_session(args["url"], args["path"],
-                                   max_bytes=args.get("max_bytes"))
+            n = d.download_session(url, path, max_bytes=max_bytes)
         else:
-            n = d.download(args["url"], args["path"],
-                           max_bytes=args.get("max_bytes"))
-        return {"path": args["path"], "bytes": n}
+            n = d.download(url, path, max_bytes=max_bytes)
+        return {"path": path, "bytes": n}
     if name == "browser_intercept":
         d.intercept(args["on"])
         return {"intercept": args["on"]}
@@ -1217,7 +1232,12 @@ def main():
     attach_port = None
     argv = sys.argv[1:]
     if "--port" in argv:
-        attach_port = int(argv[argv.index("--port") + 1])
+        try:
+            attach_port = int(argv[argv.index("--port") + 1])
+            if not (0 < attach_port < 65536):
+                raise ValueError("out of range")
+        except (IndexError, ValueError) as e:
+            raise SystemExit(f"browserr-mcp: --port requires an integer port: {e}")
     STATE.attach_port = attach_port  # docs only; start decides
     worker = threading.Thread(target=_tool_worker, daemon=True)
     worker.start()
