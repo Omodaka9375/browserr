@@ -45,7 +45,8 @@ $sdk_tests = @(
     "test_software_render", "test_compat", "test_proxy",
     "test_sessions", "test_useragent", "test_useragent_mcp",
     "test_navigate_quirk", "test_csp", "test_event_json",
-    "test_crypto_shim", "test_improvements"
+    "test_crypto_shim", "test_adblock_websocket",
+    "test_improvements"
 )
 if (-not $gpuless -and $env:CI -ne "true") { $sdk_tests += "test_headed" }
 # Always run the render-free regression tests.
