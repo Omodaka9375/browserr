@@ -6,14 +6,14 @@ scheme is [SemVer](https://semver.org/). Releases are published by CI on
 tag push; asset archives and full diffs live on the
 [releases page](https://github.com/Omodaka9375/browserr/releases).
 
-## [Unreleased]
+## [1.0.2] - 2026-11-25
 
 ### Changed
 
-- **The driver no longer writes anything onto `window`.** The four page
+- **The driver no longer writes anything onto `window`.** The page
   globals it used to create (`__browserr_evals`, `__browserr_net`,
-  `__browserr_doc_probe`, `__browserr_refs`, plus the submit-seen flag)
-  all moved into one hidden, non-enumerable holder
+  `__browserr_doc_probe`, `__browserr_refs`, `__browserr_navgen`, plus
+  the submit-seen flag) all moved into one hidden, non-enumerable holder
   (`window.__browserr_int`): invisible to `for-in`, `Object.keys` and
   `JSON.stringify`, so page code and page scrapers cannot see or trip
   over driver state.
@@ -26,6 +26,13 @@ tag push; asset archives and full diffs live on the
   the wrapper sees no completion value.
 - The Python-side adapter, its parking slots and the `_eval_direct` CSP
   fallback were deleted; `eval_js` is one path now.
+- **Security hardening across engine, driver, MCP server, and bootstrap:**
+  removed legacy `pwcapture` password scraping, stripped query strings
+  from engine and action-log URLs, added constant-time token compare,
+  input/queue/event-log/PBKDF2 bounds, fail-closed intercept capacity
+  denial, safe zip/tar unpack (rejecting path traversal and symlinks),
+  strict `browser_download` path/size checks, and optional in-tree
+  release checksum pinning (`checksums/`).
 
 ### Fixed
 
