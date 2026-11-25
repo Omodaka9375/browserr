@@ -1,0 +1,9 @@
+# Auto-generated from the GitHub release API.
+# Bump this file when a new tag is cut.
+# The bootstrap verifies downloads against this when it exists.
+
+0d6d305a14d2c4c240754503faebb7662a326cae979b3266335149bc3d5e2de7  browserr-1.0.2-android-arm64.tar.gz
+a889affbeb253552971ca86fe37ee0b45f345d964f633ffdcca76de95bba2dfd  browserr-1.0.2-linux-arm64.tar.gz
+faba3692543f81f44eb95b43dd104ba4ac578bcd82d6ad0b535d058d185120c6  browserr-1.0.2-linux-x64.tar.gz
+ca0768cf1a203acdc62d1a2060636622ba310e72970b4db32f9eca40bcebca81  browserr-1.0.2-macos-arm64.tar.gz
+b4151761b03edb9aec041e226282c3169c3cb7dec2fb18fd55321a7850cecda7  browserr-1.0.2-windows-x64.zip

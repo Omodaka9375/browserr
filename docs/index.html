@@ -685,7 +685,7 @@
           <div class="os-card">
             <h4>Windows x64</h4>
             <p>Download the zip, unpack anywhere, and point your agent at the MCP server. CPU rendering works out of the box; pass --gpu for hardware rendering.</p>
-            <a href="https://github.com/Omodaka9375/browserr/releases/latest" class="btn-primary">↓ Download for Windows</a>
+            <a id="dl-windows-x64" href="https://github.com/Omodaka9375/browserr/releases/latest" class="btn-primary">↓ Download for Windows</a>
             <div class="os-meta">
               <span>Format <b>.zip</b></span>
               <span>Contents <b>engine.exe · libEGL.dll · libGLESv2.dll · driver.py · driver_js.py · annotate.py · browserr_mcp.py</b></span>
@@ -712,7 +712,7 @@
           <div class="os-card">
             <h4>macOS (Apple Silicon)</h4>
             <p>Download the tarball, unpack anywhere, and point your agent at the MCP server. Works headless out of the box.</p>
-            <a href="https://github.com/Omodaka9375/browserr/releases/latest" class="btn-primary">↓ Download for macOS</a>
+            <a id="dl-macos-arm64" href="https://github.com/Omodaka9375/browserr/releases/latest" class="btn-primary">↓ Download for macOS</a>
             <div class="os-meta">
               <span>Format <b>.tar.gz</b></span>
               <span>Contents <b>engine · driver.py · driver_js.py · annotate.py · browserr_mcp.py</b></span>
@@ -873,15 +873,16 @@ pip install browserr-mcp</pre>
           const a = (j.assets || []).find((x) => x.name.includes(frag));
           return a ? a.browser_download_url : null;
         };
-        for (const [id, frag] of [['dl-linux-x64', 'linux-x64'], ['dl-linux-arm64', 'linux-arm64']]) {
+        for (const [id, frag] of [
+          ['dl-windows-x64', 'windows-x64'],
+          ['dl-linux-x64', 'linux-x64'],
+          ['dl-linux-arm64', 'linux-arm64'],
+          ['dl-macos-arm64', 'macos-arm64'],
+        ]) {
           const el = document.getElementById(id);
           const u = assetUrl(frag);
           if (el && u) el.href = u;
         }
-        // Windows and macOS buttons: direct asset when available.
-        const win = document.querySelector('a[href*="releases/latest"]');
-        const winAsset = assetUrl('windows-x64');
-        if (win && winAsset && win.textContent.includes('Windows')) win.href = winAsset;
       } catch (e) { /* keep static fallback */ }
     })();
 

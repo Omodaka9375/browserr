@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bump or verify the Browserr version across every carrier.
 
-The version lives in six places; a bump that misses one ships an engine
+The version lives in seven places; a bump that misses one ships an engine
 whose --version disagrees with the wheel, and the MCP server then warns
 about a "stale engine" forever. This script owns that list so a release
 cannot half-happen.
@@ -44,6 +44,9 @@ CARRIERS = [
     ("docs/index.html",
      r'id="heroVersion">v([0-9]+\.[0-9]+\.[0-9]+)<', 1,
      "landing page version fallback"),
+    ("docs/llms.txt",
+     r'Version ([0-9]+\.[0-9]+\.[0-9]+)\.', 1,
+     "llms.txt version"),
 ]
 
 
