@@ -425,8 +425,7 @@ EVT1 + id + len + 0  -> JSON events
 SHT1 + id + w + h    -> w*h*4 BGRA pixels (screenshot answer, automation only)
 ```
 
-Events: `url`, `title`, `history`, `cursor`, `favicon`, `pwcapture`,
-`evalresult`, `pong`, `console` (page messages; Servo also routes network
+Events: `url`, `title`, `history`, `cursor`, `favicon`, `evalresult`, `pong`, `console` (page messages; Servo also routes network
 and TLS load errors there), `download` (ok/bytes/error), `request` (held
 interception decision), `auth` (challenge), `filepicker` (picker opened).
 Only the active tab is painted; switching tabs re-sends that tab's
@@ -653,7 +652,7 @@ test_term.py             terminal client render path (Sixel/Kitty + fallback)
 test_native_frame.py     native compressed frame patches (FRM2)
 test_frame_pixels.py     frame pixel correctness against the page
 test_native_interaction.py native pointer/keyboard forwarding
-test_login_flow.py       login form flow with password capture
+test_login_flow.py       login form flow via terminal keys
 test_https.py            engine TLS client against the real EasyList endpoint
 test_thin.py             release build smoke test
 ```

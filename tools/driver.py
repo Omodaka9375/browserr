@@ -1519,12 +1519,20 @@ class Driver:
         return {"path": path, "entries": entries[-max(1, min(limit, 1000)):]}
 
     def _log_action(self, kind: str, **fields) -> None:
-        """Append one JSON line to the action log (best effort; never raises)."""
+        """Append one JSON line to the action log (best effort; never raises).
+
+        URL values are logged with their query string and fragment stripped:
+        query strings carry session-ish tokens that must not outlive the
+        call in an append-only file.
+        """
         if not self.action_log_path:
             return
         try:
             line = {"t": round(time.time(), 3), "kind": kind}
-            line.update(fields)
+            for key, value in fields.items():
+                if isinstance(value, str) and (value.startswith("http://") or value.startswith("https://")):
+                    value = value.split("?", 1)[0].split("#", 1)[0]
+                line[key] = value
             with self._log_lock:
                 with open(self.action_log_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(line, default=str) + "\n")

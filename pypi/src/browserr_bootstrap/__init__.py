@@ -210,6 +210,38 @@ def _unpack(path: str, dest: str) -> None:
                         os.chmod(target, os.stat(target).st_mode | stat.S_IXUSR)
 
 
+def _load_pinned_digest(tag: str, asset_name: str) -> str | None:
+    """Read checksums/<tag>.sha256 shipped with the wheel (if any) and return
+    the digest for `asset_name`. Compares against the API digest as an
+    independent in-tree pin: the API digest is signed by nobody, only TLS.
+    """
+    try:
+        pkg_root = os.path.dirname(__file__)
+        # The wheel ships only __init__.py; the pinned file ships in the
+        # repo (checksums/) which is not packaged. Look next to the package
+        # (repo checkout) then next to cwd.
+        candidates = [
+            os.path.join(pkg_root, "..", "..", "..", "checksums", f"v{tag}.sha256"),
+            os.path.join(pkg_root, "..", "..", "checksums", f"v{tag}.sha256"),
+            os.path.join("checksums", f"v{tag}.sha256"),
+        ]
+        for cand in candidates:
+            cand = os.path.normpath(cand)
+            if not os.path.isfile(cand):
+                continue
+            with open(cand, encoding="utf-8") as f:
+                for raw in f:
+                    raw = raw.strip()
+                    if not raw or raw.startswith("#"):
+                        continue
+                    parts = raw.split()
+                    if len(parts) == 2 and parts[1] == asset_name:
+                        return parts[0].lower()
+    except OSError:
+        return None
+    return None
+
+
 def _download(tag: str, release: dict, dest: str) -> str:
     """Download+verify the platform asset of `tag` into `dest`; return dest."""
     asset_name = _platform_asset(tag)
@@ -226,6 +258,14 @@ def _download(tag: str, release: dict, dest: str) -> str:
         raise SystemExit("browserr-mcp: refusing implausibly large asset")
 
     expected = (asset.get("digest") or "").removeprefix("sha256:").lower()
+    # Belt-and-braces: check the in-tree pinned file (checksums/<tag>.sha256)
+    # if present. The API digest is still required, but the pinned file is
+    # the independent root of trust the update script actually ships.
+    pinned = _load_pinned_digest(tag, asset_name)
+    if pinned and pinned != expected:
+        raise SystemExit(
+            f"browserr-mcp: pinned digest mismatch for {asset_name}: "
+            f"pinned {pinned} vs API {expected}")
     if not expected:
         raise SystemExit(
             "browserr-mcp: release asset carries no sha256 digest; refusing "

@@ -129,8 +129,6 @@ struct Update {
     url: Option<String>,
     title: Option<String>,
     history: Option<(bool, bool)>,
-    /// Captured login data (JSON {u,p,o}) from a submitted password form.
-    pw: Option<String>,
     /// Decoded favicon: (page origin, width, height, RGBA bytes).
     icon: Option<(String, u32, u32, Vec<u8>)>,
     /// Page-requested cursor shape (servo's Debug name, lowercase).
@@ -147,34 +145,6 @@ struct Update {
     /// File picker awaiting a file list: (id, allow_multiple).
     filepicker: Option<(u64, bool)>,
 }
-
-/// Runs on load complete: if the page has a password field, capture its
-/// (username, password) into sessionStorage when the form is submitted.
-/// sessionStorage is origin-scoped, so the data never leaks to other sites.
-const PW_INSTALL_JS: &str = r#"(function(){try{
-if(!document.querySelector('input[type=password]')) return 0;
-if(window.__browserr_pw) return 1;
-window.__browserr_pw=1;
-addEventListener('submit',function(){
-  try{
-    var pw=document.querySelector('input[type=password]');
-    var form=pw.closest('form')||document;
-    var re=/(user|email|login|account)/i; var u='';
-    for(const t of form.querySelectorAll('input')){
-      if(t.type==='password')continue;
-      var k=(t.name||'')+' '+(t.id||'')+' '+(t.type||'')+' '+(t.autocomplete||'');
-      if((!t.type||t.type==='text'||t.type==='email')&&re.test(k)){u=t.value;break;}
-    }
-    sessionStorage.setItem('browserr',JSON.stringify({u:u,p:pw.value,o:location.origin}));
-  }catch(e){}
-},true);
-}catch(e){}})()"#;
-
-/// Runs after every navigation: read and clear a pending capture.
-const PW_READ_JS: &str = r#"(function(){try{
-var d=sessionStorage.getItem('browserr');
-if(d){sessionStorage.removeItem('browserr');return d;}
-}catch(e){} return '';})()"#;
 
 /// Returns JSON {icon, origin}: the page's favicon url (or '') and its origin.
 const FAVICON_JS: &str = r#"(function(){try{
@@ -635,33 +605,6 @@ struct FrameDelegate {
 }
 
 impl FrameDelegate {
-    /// Eval a password-capture script; a string result is reported to the chrome.
-    fn eval_pw(&self, webview: servo::WebView, script: &'static str) {
-        let shared = self.shared.clone();
-        let tab = self.tab;
-        webview.evaluate_javascript(script, move |result| {
-            if let Ok(servo::JSValue::String(data)) = result
-                && !data.is_empty()
-            {
-                shared.updates.lock().unwrap().push(Update {
-                    tab,
-                    url: None,
-                    title: None,
-                    history: None,
-                    pw: Some(data),
-                    icon: None,
-                    cursor: None,
-                    eval: None,
-                    console: None,
-                    intercept: None,
-                    auth: None,
-                    filepicker: None,
-                });
-                shared.pump.kick();
-            }
-        });
-    }
-
     /// Eval the favicon lookup; fetch + decode the icon off-thread if new.
     fn eval_favicon(&self, webview: servo::WebView) {
         let shared = self.shared.clone();
@@ -686,7 +629,6 @@ impl FrameDelegate {
                     url: None,
                     title: None,
                     history: None,
-                    pw: None,
                     icon: Some((origin, 16, 16, rgba)),
                     cursor: None,
                     eval: None,
@@ -708,7 +650,6 @@ impl FrameDelegate {
                         url: None,
                         title: None,
                         history: None,
-                        pw: None,
                         icon: Some((origin, w, h, rgba)),
                         cursor: None,
                         eval: None,
@@ -732,14 +673,14 @@ impl servo::WebViewDelegate for FrameDelegate {
         }
     }
 
-    fn notify_url_changed(&self, webview: servo::WebView, url: url::Url) {
-        eprintln!("engine: url changed (tab {}) {url}", self.tab);
+    fn notify_url_changed(&self, _webview: servo::WebView, url: url::Url) {
+        let safe_url = url.as_str().split('?').next().unwrap_or("");
+        eprintln!("engine: url changed (tab {}) {safe_url}", self.tab);
         self.shared.updates.lock().unwrap().push(Update {
             tab: self.tab,
             url: Some(url.to_string()),
             title: None,
             history: None,
-            pw: None,
             icon: None,
             cursor: None,
             eval: None,
@@ -748,8 +689,6 @@ impl servo::WebViewDelegate for FrameDelegate {
             auth: None,
             filepicker: None,
         });
-        // Pick up a capture that a submitted form left behind.
-        self.eval_pw(webview, PW_READ_JS);
         self.shared.pump.kick();
     }
 
@@ -758,9 +697,7 @@ impl servo::WebViewDelegate for FrameDelegate {
             self.shared.started.lock().unwrap().insert(self.tab);
             self.shared.pump.kick();
         } else if matches!(status, servo::LoadStatus::Complete) {
-            // Page is ready: arm the submit capture if it has a password field,
-            // and look up the favicon.
-            self.eval_pw(webview.clone(), PW_INSTALL_JS);
+            // Page is ready: look up the favicon.
             self.eval_favicon(webview);
         }
     }
@@ -784,7 +721,6 @@ impl servo::WebViewDelegate for FrameDelegate {
             url: None,
             title: None,
             history: None,
-            pw: None,
             icon: None,
             cursor: None,
             eval: None,
@@ -803,7 +739,6 @@ impl servo::WebViewDelegate for FrameDelegate {
             url: None,
             title: None,
             history: None,
-            pw: None,
             icon: None,
             cursor: Some(name),
             eval: None,
@@ -821,7 +756,6 @@ impl servo::WebViewDelegate for FrameDelegate {
             url: None,
             title,
             history: None,
-            pw: None,
             icon: None,
             cursor: None,
             eval: None,
@@ -846,7 +780,6 @@ impl servo::WebViewDelegate for FrameDelegate {
             url: None,
             title: None,
             history: Some((back, forward)),
-            pw: None,
             icon: None,
             cursor: None,
             eval: None,
@@ -863,7 +796,8 @@ impl servo::WebViewDelegate for FrameDelegate {
         if let Some(engine) = &self.adblock
             && adblock_matches(engine, &load)
         {
-            eprintln!("engine: adblock blocked {}", load.request().url);
+            let safe = load.request().url.as_str().split('?').next().unwrap_or("");
+            eprintln!("engine: adblock blocked {safe}");
             let response_url = load.request().url.clone().into_url();
             load.intercept(servo::WebResourceResponse::new(response_url))
                 .cancel();
@@ -915,7 +849,6 @@ impl servo::WebViewDelegate for FrameDelegate {
             url: None,
             title: None,
             history: None,
-            pw: None,
             icon: None,
             cursor: None,
             eval: None,
@@ -965,7 +898,6 @@ impl servo::WebViewDelegate for FrameDelegate {
             url: None,
             title: None,
             history: None,
-            pw: None,
             icon: None,
             cursor: None,
             eval: None,
@@ -999,7 +931,6 @@ impl servo::WebViewDelegate for FrameDelegate {
             url: None,
             title: None,
             history: None,
-            pw: None,
             icon: None,
             cursor: None,
             eval: None,
@@ -2384,7 +2315,6 @@ fn main() {
                                                     url: None,
                                                     title: None,
                                                     history: None,
-                                                    pw: None,
                                                     icon: None,
                                                     cursor: None,
                                                     eval: Some((req, value)),
@@ -2712,7 +2642,6 @@ fn main() {
                                                 url: None,
                                                 title: None,
                                                 history: None,
-                                                pw: None,
                                                 icon: None,
                                                 cursor: None,
                                                 eval: Some((req, value)),
@@ -2735,7 +2664,8 @@ fn main() {
                                 let url = v["url"].as_str().unwrap_or("");
                                 let path = v["path"].as_str().unwrap_or("");
                                 let max = v["max_bytes"].as_u64().unwrap_or(64 << 20);
-                                eprintln!("engine: download {url} -> {path}");
+                                let safe_url = url.split('?').next().unwrap_or("");
+                                eprintln!("engine: download {safe_url} -> {path}");
                                 let result = if url.is_empty() || path.is_empty() {
                                     Err("missing url or path".to_string())
                                 } else {
@@ -2884,7 +2814,8 @@ fn main() {
             if let Some(u) = tab.pending.clone() {
                 if !tab.pending_sent {
                     shared.started.lock().unwrap().remove(id);
-                    eprintln!("engine: load (tab {id}) {u}");
+                    let safe_u = u.as_str().split('?').next().unwrap_or("");
+                    eprintln!("engine: load (tab {id}) {safe_u}");
                     tab.webview.load(u);
                     tab.pending_sent = true;
                     tab.pending_deadline =
@@ -3180,17 +3111,6 @@ fn main() {
                         &format!(
                             "{{\"ev\":\"filepicker\",\"tab\":{},\"id\":{},\"multiple\":{}}}",
                             u.tab, id, multiple
-                        ),
-                    );
-                }
-                if let Some(data) = &u.pw {
-                    // data is already valid JSON ({u,p,o}); embed it directly.
-                    send_event(
-                        &mut out,
-                        event_id,
-                        &format!(
-                            "{{\"ev\":\"pwcapture\",\"tab\":{},\"data\":{}}}",
-                            u.tab, data
                         ),
                     );
                 }
