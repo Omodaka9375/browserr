@@ -2,8 +2,10 @@
 
 The 0.9.1 regression: eval routed everything through page-side eval(),
 which such sites forbid, and the error leaked as a raw __error dict that
-crashed internal callers. eval_js must fall back to the engine's direct
-path (CSP-exempt) and raise typed EvalError, never return __error dicts.
+crashed internal callers. Since the engine now wraps every driver script
+in its own CSP-exempt injected wrapper (EVAL_WRAPPER_JS), page-side
+eval() is never used at all: strict-CSP pages get the full experience,
+including promise awaiting, with no fallback and no leaked dicts.
 """
 import http.server
 import os
@@ -74,13 +76,19 @@ except EvalError:
 else:
     raise AssertionError("expected EvalError on CSP page")
 
-# 5) The engine does not await promises on the direct path: an async IIFE
-#    serializes as {} (0.8.2 semantics) instead of crashing or leaking.
+# 5) Promises are awaited on CSP pages too now (the wrapper is
+#    CSP-exempt): an async IIFE resolves to its value, not {}.
 v = d.eval_js("(async () => 42)()")
-assert v == {} or v is None, v
-print("async IIFE on CSP page is honest {} OK")
+assert v == 42, v
+print("async IIFE awaited on CSP page OK")
 
-# 6) Non-CSP sanity: the adapter path still awaits promises.
+# 5b) The driver leaves no enumerable window globals behind.
+leaked = d.eval_js("JSON.stringify(Object.keys(window).filter("
+                   "k => k.startsWith('__browserr')))")
+assert leaked == "[]", leaked
+print("no enumerable __browserr globals OK")
+
+# 6) Non-CSP sanity: the wrapper path still awaits promises.
 d.navigate("about:blank")
 d.wait_ready()
 v = d.eval_js("(async () => 7)()")

@@ -599,7 +599,7 @@ class Driver:
         """
         token = f"nav-{self._alloc_id()}"
         try:
-            got = self._eval_direct(
+            got = self.eval_js(
                 f"window.__browserr_navgen = {json.dumps(token)}",
                 tab, 2.0)
             self._nav_marker[tab] = str(got) if got == token else None
@@ -696,50 +696,40 @@ class Driver:
     def eval_js(self, js: str, tab: int = 0, timeout=10.0):
         """Evaluate JS in the page and return the (JSON-friendly) result.
 
-        Servo's evaluate_javascript does NOT await promises - a bare
-        async IIFE resolves to the Promise object, which serializes as {}.
-        The script is therefore run through a page-side adapter: if the
-        completion value is a thenable, it is parked in a window slot and
-        polled until it settles; the resolved value (or the error string)
-        is returned instead of {}. Page-side eval() keeps completion-value
-        semantics, so statement scripts behave exactly as before. Promises
-        should resolve to plain JSON values; complex objects still
-        serialize only their enumerable properties."""
+        The ENGINE wraps every driver script in its own injected wrapper
+        (EVAL_WRAPPER_JS in the engine): no page-side eval() is used, so
+        strict-CSP sites (no unsafe-eval) cannot block the call, and
+        thenable results are parked in the engine's hidden, non-enumerable
+        window slot (window.__browserr_int.evals) and polled here until
+        they settle. Statement scripts (no completion value) are retried
+        raw by the engine automatically; on the raw path servo does not
+        await promises (a thenable serializes as {}). Promises should
+        resolve to plain JSON values; complex objects serialize only their
+        enumerable properties."""
         slot = self._alloc_id()
-        adapter = (
-            "(function(){var __r=eval(" + json.dumps(js) + ");"
-            "if(__r&&typeof __r.then==='function'){"
-            "window.__browserr_evals=window.__browserr_evals||{};"
-            "var s={p:1,v:null,e:null};"
-            "window.__browserr_evals[" + str(slot) + "]=s;"
-            "__r.then(function(v){s.p=0;s.v=v;},"
-            "function(e){s.p=0;s.e=String(e);});"
-            "return {__pending:" + str(slot) + "};}"
-            "return __r;})()")
+        # The engine receives the raw script; it wraps and parks itself.
+        # No page-side code from this process ever touches page globals.
         req = self._alloc_id()
-        self.cmd({"cmd": "eval", "tab": tab, "js": adapter, "id": req})
+        self.cmd({"cmd": "eval", "tab": tab, "js": js, "id": req})
         ev = self.wait_for(
             lambda e: e.get("ev") == "evalresult" and e.get("id") == req, timeout)
         value = ev.get("value")
         if isinstance(value, dict) and "__error" in value:
-            err = str(value["__error"])
-            # Page-side eval() is forbidden by strict CSP (nonce-based
-            # script-src, no unsafe-eval). The engine's own eval path is
-            # embedder-injected and NOT subject to page CSP: fall back to
-            # it (0.8.2 semantics - promises serialize as {} instead of
-            # being awaited) rather than breaking every eval on the site.
-            if "blocked by CSP" in err or "unsafe-eval" in err:
-                return self._eval_direct(js, tab, timeout)
-            raise EvalError(err)
+            raise EvalError(str(value["__error"]))
         if not (isinstance(value, dict) and "__pending" in value):
+            # Either the wrapper returned {__value:..} (already JSON), or
+            # the engine retried raw and returned the direct value.
+            if isinstance(value, dict) and "__value" in value:
+                return value["__value"]
             return value
-        # The script returned a promise: poll its parking slot until it
-        # settles (each poll is a tiny sync eval).
-        poll = ("(function(){var s=(window.__browserr_evals||{})["
-                + str(slot) + "];"
+        # The wrapper parked a promise: poll its slot until it settles
+        # (each poll is a tiny sync eval through the engine).
+        slot = value["__pending"]
+        poll = ("(function(){var s=window.__browserr_int&&"
+                "window.__browserr_int.evals[" + str(slot) + "];"
                 "if(!s||s.p){return null;}"
-                "delete window.__browserr_evals[" + str(slot) + "];"
-                "return s.e!==null?{__error:s.e}:s.v;})()")
+                "delete window.__browserr_int.evals[" + str(slot) + "];"
+                "return s.e!==null?{__error:s.e}:{__value:s.v};})()")
         deadline = time.time() + timeout
         while True:
             req = self._alloc_id()
@@ -752,31 +742,20 @@ class Driver:
                 pass  # page busy; keep polling until the deadline
             else:
                 r = ev.get("value")
+                if isinstance(r, str):
+                    try:
+                        r = json.loads(r)
+                    except (ValueError, TypeError):
+                        r = None
                 if isinstance(r, dict) and "__error" in r:
                     # the parked promise rejected
                     raise EvalError(str(r["__error"]))
+                if isinstance(r, dict) and "__value" in r:
+                    return r["__value"]
                 if r is not None:
                     return r
             if time.time() >= deadline:
                 raise TimeoutError("eval promise did not settle in time")
-
-    def _eval_direct(self, js: str, tab: int, timeout: float):
-        """Evaluate via the engine's own path with no page-side adapter.
-
-        Embedder-injected scripts bypass page CSP, so this works on
-        CSP-strict sites where eval() is forbidden. Servo does not
-        await promises on this path: a thenable result serializes as {}
-        (0.8.2 semantics). Used as the CSP fallback by eval_js.
-        """
-        req = self._alloc_id()
-        self.cmd({"cmd": "eval", "tab": tab, "js": js, "id": req})
-        ev = self.wait_for(
-            lambda e: e.get("ev") == "evalresult" and e.get("id") == req,
-            timeout)
-        value = ev.get("value")
-        if isinstance(value, dict) and "__error" in value:
-            raise EvalError(str(value["__error"]))
-        return value
 
     def screenshot(self, tab: int = 0, timeout=10.0):
         """Paint the tab and return (w, h, bgra bytes)."""
@@ -1013,6 +992,8 @@ class Driver:
                     timeout=1.0)
                 outstanding = None  # answered: safe to poll again
                 rect = ev.get("value")
+                if isinstance(rect, dict) and "__value" in rect:
+                    rect = rect["__value"]
                 if rect and rect.get("w", 0) > 0 and rect.get("h", 0) > 0:
                     return rect
             except TimeoutError:
@@ -1126,9 +1107,9 @@ class Driver:
 
     def net_evidence(self, limit=200, tab: int = 0, timeout=10.0):
         """Recent page network activity (fetch/XHR) from the ring buffer
-        the document-start user script keeps on window.__browserr_net.
+        the document-start user script keeps in the hidden window.__browserr_int holder.
         Runs in every frame; this reads the top frame's ring."""
-        js = ("JSON.stringify((window.__browserr_net||[]).slice(-%d))" % limit)
+        js = ("JSON.stringify(((window.__browserr_int||{}).net||[]).slice(-%d))" % limit)
         raw = self.eval_js(js, tab, timeout)
         if isinstance(raw, str):
             return json.loads(raw)
@@ -1145,7 +1126,9 @@ class Driver:
         (None, None) when the probe cannot run (non-http page, network
         error, timeout)."""
         marker = len(self.net_evidence(limit=500, tab=tab))
-        r = self.eval_js("window.__browserr_doc_probe&&window.__browserr_doc_probe()", tab)
+        r = self.eval_js(
+            "(window.__browserr_int&&window.__browserr_int.probe)"
+            "&&window.__browserr_int.probe()", tab)
         if r != "probe-started":
             return (None, None)
         deadline = time.time() + timeout
@@ -1375,7 +1358,7 @@ class Driver:
         """Block until no fetch/XHR has started for `quiet_ms`. The net
         evidence ring is the clock (no clock skew with the page). Returns
         True when idle, False on timeout."""
-        js = ("(() => { const r = window.__browserr_net || []; "
+        js = ("(() => { const r = (window.__browserr_int || {}).net || []; "
               "const last = r.length ? r[r.length - 1].t : 0; "
               "return Date.now() - last; })()")
         deadline = time.time() + timeout
@@ -1632,7 +1615,7 @@ class Driver:
         deadline = time.time() + 2.0
         while time.time() < deadline:
             try:
-                seen = self.eval_js("window.__browserr_submit_seen", tab, timeout=1.0)
+                seen = self.eval_js("(window.__browserr_int||{}).submit_seen", tab, timeout=1.0)
             except TimeoutError:
                 break
             if seen:
@@ -1644,9 +1627,9 @@ class Driver:
 
     def net_evidence(self, limit=200, tab: int = 0, timeout=10.0):
         """Recent page network activity (fetch/XHR) from the ring buffer
-        the document-start user script keeps on window.__browserr_net.
+        the document-start user script keeps in the hidden window.__browserr_int holder.
         Runs in every frame; this reads the top frame's ring."""
-        js = ("JSON.stringify((window.__browserr_net||[]).slice(-%d))" % limit)
+        js = ("JSON.stringify(((window.__browserr_int||{}).net||[]).slice(-%d))" % limit)
         raw = self.eval_js(js, tab, timeout)
         if isinstance(raw, str):
             return json.loads(raw)

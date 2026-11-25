@@ -140,6 +140,8 @@ try:
             ev = wait_event(lambda e: e.get("ev") == "evalresult"
                             and e.get("id") == 1000, timeout=3.0)
             phase = ev.get("value")
+            if isinstance(phase, dict) and "__value" in phase:
+                phase = phase["__value"]
         except SystemExit:
             raise
         if phase == "loaded":

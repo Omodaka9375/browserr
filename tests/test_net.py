@@ -1,6 +1,7 @@
 """Net evidence smoke test (acts as the chrome).
 
-Loads a page that fetch()es and XHRs, then reads window.__browserr_net
+Loads a page that fetch()es and XHRs, then reads the net ring from the
+engine's hidden window.__browserr_int holder
 (the document-start user script's ring buffer) via eval.
 """
 
@@ -118,6 +119,10 @@ def eval_poll(js, timeout=15.0):
             ev = wait_event(lambda e: e.get("ev") == "evalresult"
                             and e.get("id") == rid, timeout=3.0)
             last = ev.get("value")
+            if isinstance(last, dict) and "__value" in last:
+                # The engine wraps every eval: the script's completion value
+                # arrives as {__value: ...}. Unwrap it here.
+                last = last["__value"]
             if last is not None:
                 return last
         except SystemExit:
@@ -148,7 +153,7 @@ try:
     cmd(s, {"cmd": "navigate", "tab": 0, "url": "http://127.0.0.1:8131/net-test.html"})
     time.sleep(4)
 
-    ring = eval_poll("JSON.stringify(window.__browserr_net||[])")
+    ring = eval_poll("JSON.stringify((window.__browserr_int||{}).net||[])")
     entries = json.loads(ring) if isinstance(ring, str) else ring
     kinds = {e.get("kind") for e in entries}
     urls = {e.get("url") for e in entries}
@@ -159,7 +164,7 @@ try:
     # completion entries arrive async; poll until done entries show up
     t0 = time.time()
     while time.time() - t0 < 10:
-        ring = eval_poll("JSON.stringify(window.__browserr_net||[])")
+        ring = eval_poll("JSON.stringify((window.__browserr_int||{}).net||[])")
         entries = json.loads(ring) if isinstance(ring, str) else ring
         kinds = {e.get("kind") for e in entries}
         if "fetch-done" in kinds and "xhr-done" in kinds:

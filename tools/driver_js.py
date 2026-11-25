@@ -215,7 +215,19 @@ STRUCTURE_JS = r"""(() => {
     // Fresh refs each read: a ref from an older page resolves to
     // nothing, so callers get a clean 'not found'.
     const refs = {};
-    window.__browserr_refs = refs;
+    // Hidden, non-enumerable holder (set up by the engine's document-start
+    // user script): page code cannot see driver refs via for-in/JSON.
+    try {
+        if (window.__browserr_int === undefined) {
+            Object.defineProperty(window, '__browserr_int',
+                {value: Object.freeze({refs: refs}),
+                 configurable: false, writable: false, enumerable: false});
+        } else {
+            window.__browserr_int.refs = refs;
+        }
+    } catch (_) {
+        window.__browserr_int = {refs: refs};
+    }
     let seq = 0;
     const ref = (el) => {
         seq += 1;
@@ -343,7 +355,7 @@ STRUCTURE_JS = r"""(() => {
 REF_RECT_JS = r"""(() => {
     // Resolve a stable ref from the last read_structure() to a click
     // point. Stale refs (page navigated since) resolve to null.
-    const el = (window.__browserr_refs || {})[%s];
+    const el = ((window.__browserr_int || {}).refs || {})[%s];
     if (!el || !el.isConnected) return null;
     el.scrollIntoView({block: 'center', inline: 'center'});
     const r = el.getBoundingClientRect();
@@ -357,7 +369,7 @@ SET_FIELD_JS = r"""(() => {
     // paths fire input + change + blur so frameworks and validators run.
     const key = %s, value = %s;
     const el = /^e\d+$/.test(key)
-        ? (window.__browserr_refs || {})[key]
+        ? ((window.__browserr_int || {}).refs || {})[key]
         : document.querySelector(key);
     if (!el || !el.isConnected) return {ok: false, error: 'not found: ' + key};
     if (el.focus) { try { el.focus(); } catch (_) {} }
@@ -400,7 +412,7 @@ FILL_FORM_JS = r"""(() => {
     // stable ref ('e7') or a CSS selector to the value to write; the
     // write is type-aware, same rules as set_field.
     const plan = %s;
-    const refs = window.__browserr_refs || {};
+    const refs = (window.__browserr_int || {}).refs || {};
     const resolve = (key) => /^e\d+$/.test(key)
         ? refs[key] : document.querySelector(key);
     const apply = (el, value) => {
@@ -459,7 +471,7 @@ SUBMIT_FORM_JS = r"""(() => {
     // available; otherwise a submit event and, if not prevented,
     // form.submit(). Never cancels a main-frame navigation.
     const key = %s;
-    const refs = window.__browserr_refs || {};
+    const refs = (window.__browserr_int || {}).refs || {};
     const pick = (k) => /^e\d+$/.test(k)
         ? refs[k] : document.querySelector(k);
     let el = key ? pick(key) : null;
@@ -482,9 +494,16 @@ SUBMIT_FORM_JS = r"""(() => {
     const submitter = (el && (el.tagName === 'BUTTON' || el.tagName === 'INPUT')) ? el : null;
     // Mark that the submit event was seen, so the caller can wait for
     // the dispatch to drain (the click path is asynchronous).
-    window.__browserr_submit_seen = 0;
+    if (!(window.__browserr_int)) {
+        try {
+            Object.defineProperty(window, '__browserr_int',
+                {value: Object.freeze({}),
+                 configurable: false, writable: false, enumerable: false});
+        } catch (_) { window.__browserr_int = {}; }
+    }
+    window.__browserr_int.submit_seen = 0;
     form.addEventListener('submit', function () {
-        window.__browserr_submit_seen = 1;
+        window.__browserr_int.submit_seen = 1;
     }, true);
     // Dispatch the submit event ourselves, then submit natively if the
     // page did not prevent it. servo 0.8's requestSubmit (and a click on

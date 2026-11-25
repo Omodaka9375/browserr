@@ -121,7 +121,8 @@ that follow from owning the whole stack:
 
 - Fail-closed interception: requests are held for an allow / deny /
   respond decision; unanswered requests deny after 5 s
-- Net evidence: every `fetch`/XHR recorded in a ring buffer, in every frame
+- Net evidence: every `fetch`/XHR recorded in a ring buffer, in every frame;
+  kept in a hidden, non-enumerable window holder so pages cannot see it
 - Auth challenges surface as events; wrong or missing credentials fail
   closed
 - Frame tree listing (cross-origin frames report their url only)
@@ -638,7 +639,7 @@ test_mcp_logic.py        handoff transition and answered-event regressions
 test_input.py            raw-socket input forwarding
 test_cursor_zoom.py      cursor events + zoom via devicePixelRatio
 test_close.py            tab close must not kill the engine
-test_csp.py              strict-CSP pages: eval fallback, typed errors
+test_csp.py              strict-CSP pages: promise await, typed errors
 test_bootstrap.py        engine asset names match the release globs
 test_improvements.py     scroll/resize/history, session downloads, nav race
 test_release.py          version consistency, updater manifest, re-exec guard

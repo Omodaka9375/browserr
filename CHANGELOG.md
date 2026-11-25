@@ -8,6 +8,25 @@ tag push; asset archives and full diffs live on the
 
 ## [Unreleased]
 
+### Changed
+
+- **The driver no longer writes anything onto `window`.** The four page
+  globals it used to create (`__browserr_evals`, `__browserr_net`,
+  `__browserr_doc_probe`, `__browserr_refs`, plus the submit-seen flag)
+  all moved into one hidden, non-enumerable holder
+  (`window.__browserr_int`): invisible to `for-in`, `Object.keys` and
+  `JSON.stringify`, so page code and page scrapers cannot see or trip
+  over driver state.
+- **eval works on strict-CSP pages with promise awaiting.** Every driver
+  script is now wrapped by the ENGINE's own injected wrapper instead of a
+  page-side `eval()` adapter: the whole call is embedder-injected and
+  CSP-exempt, so nonce-based CSP sites (no `unsafe-eval`) no longer fall
+  back to the promise-less direct path - async IIFEs resolve to their
+  values there too. Statement scripts are retried raw by the engine when
+  the wrapper sees no completion value.
+- The Python-side adapter, its parking slots and the `_eval_direct` CSP
+  fallback were deleted; `eval_js` is one path now.
+
 ### Fixed
 
 - **`$websocket` filter rules never matched.** A WebSocket handshake

@@ -47,7 +47,7 @@
 //! (empty = cancel). {"cmd":"frames","id":N} answers {"ev":"evalresult",
 //! "id":N,"value":<frame tree JSON>} (same-origin walking; cross-origin
 //! frames report url only). Net evidence: a document-start user script in
-//! every frame wraps fetch/XHR into window.__browserr_net (ring, 200
+//! every frame wraps fetch/XHR into a ring buffer (200
 //! entries); agents poll it via eval.
 use servo::RenderingContext;
 use std::cell::RefCell;
@@ -146,6 +146,47 @@ struct Update {
     filepicker: Option<(u64, bool)>,
 }
 
+/// Eval wrapper for the automation driver, composed by the ENGINE: the
+/// driver's script TEXT is spliced into the wrapper as an expression
+/// (`(script)`) and the whole thing is injected through servo's own eval
+/// path, which never calls page eval(). That matters twice: the injected
+/// script is compile-exempt from page CSP, and there is no eval() call for
+/// CSP's unsafe-eval check to block - strict-CSP pages get the full
+/// experience. Thenable completion values are parked in the HIDDEN,
+/// non-enumerable window.__browserr_int holder (invisible to for-in,
+/// Object.keys, JSON.stringify) and the driver polls the slot with tiny
+/// sync evals. If the spliced script is a STATEMENT list rather than an
+/// expression, the composed script fails to COMPILE (nothing executed) and
+/// the engine falls back to the raw script: servo's own path handles
+/// statement lists with completion-value semantics, but does not await
+/// promises there (a thenable serializes as {}).
+fn compose_eval_wrapper(slot: u64, js: &str) -> String {
+    format!(
+        r#"(function(){{
+if(window.__browserr_int===undefined){{
+  var store={{evals:{{}}}};
+  try{{
+    Object.defineProperty(window,'__browserr_int',{{value:store,configurable:false,writable:false,enumerable:false}});
+  }}catch(_){{
+    window.__browserr_int=store;
+  }}
+}}
+try{{
+  var __r=({js});
+  if(__r&&typeof __r.then==='function'){{
+    var s={{p:1,v:null,e:null}};
+    window.__browserr_int.evals[{slot}]=s;
+    __r.then(function(v){{s.p=0;s.v=v;}},function(e){{s.p=0;s.e=String(e&&e.message?e.message:e);}});
+    return JSON.stringify({{__pending:{slot}}});
+  }}
+  return JSON.stringify({{__value:__r}});
+}}catch(e){{
+  return JSON.stringify({{__error:String(e&&e.message?e.message:e)}});
+}}
+}})()"#
+    )
+}
+
 /// Returns JSON {icon, origin}: the page's favicon url (or '') and its origin.
 const FAVICON_JS: &str = r#"(function(){try{
 var l=document.querySelector('link[rel~="icon"]')||document.querySelector('link[rel="shortcut icon"]');
@@ -154,12 +195,27 @@ return JSON.stringify({icon:l?l.href:'',origin:location.origin});
 
 /// Net evidence (document-start user script, injected in EVERY frame via
 /// the UserContentManager): wraps fetch() and XMLHttpRequest into a ring
-/// buffer on window.__browserr_net. Runs before page scripts, so pages
-/// cannot evade it by grabbing references first. Polled via eval:
-/// window.__browserr_net.slice(-N).
+/// buffer. The ring and the document-status probe live in a HIDDEN,
+/// non-enumerable holder (window.__browserr_int) instead of plain window
+/// globals: page code cannot see them via for-in, Object.keys or
+/// JSON.stringify, and the driver reads them through the same engine-side
+/// eval wrapper as everything else. Runs before page scripts, so pages
+/// cannot evade it by grabbing references first. The holder is NOT frozen:
+/// the driver (and only the driver, via engine-injected scripts) adds
+/// slots (evals, refs, submit_seen) to it later; freezing would make
+/// those writes silently fail in sloppy-mode pages.
 const NET_EVIDENCE_JS: &str = r#"(function(){
-if(window.__browserr_net) return;
-var ring=[];
+if(window.__browserr_int===undefined){
+  var store={evals:{},net:[],probe:null};
+  try{
+    Object.defineProperty(window,'__browserr_int',{value:store,configurable:false,writable:false,enumerable:false});
+  }catch(_){
+    window.__browserr_int=store;
+  }
+}
+var H=window.__browserr_int;
+if(!H.net){H.net=[];}
+var ring=H.net;
 function push(kind,url,extra){
   try{
     var e={kind:kind,url:String(url),t:Date.now()};
@@ -168,7 +224,6 @@ function push(kind,url,extra){
     if(ring.length>200){ring.splice(0,ring.length-200);}
   }catch(_){}
 }
-window.__browserr_net=ring;
 var of=window.fetch;
 if(of){
   window.fetch=function(input,init){
@@ -203,7 +258,7 @@ if(window.XMLHttpRequest){
 // distinguishes a served page (200) from a served fake-404 (404) from a
 // network error (probe-error) - the block-vs-dead question - using the
 // same cookies/session as the original walk.
-window.__browserr_doc_probe=function(){
+H.probe=function(){
   var u;
   try{u=String(location.href);}catch(_){return 'no-location';}
   if(location.protocol!=='http:'&&location.protocol!=='https:'){
@@ -219,11 +274,6 @@ window.__browserr_doc_probe=function(){
 };
 })()"#;
 
-/// Returns JSON for the page's frame tree (tier-1 frame control):
-/// same-origin frames are walked via contentDocument (cross-origin frames
-/// only report their url/origin from the parent's perspective; servo 0.8
-/// has no cross-frame JS entry point). Top level:
-///   {url, origin, children:[{name, url, same_origin, children:[...]}]}
 /// crypto.subtle shim (document-start user script, every frame).
 /// servo 0.8's subtlecrypto cargo feature cannot resolve from crates.io
 /// (its rsa dep pins an unpublished der release), so crypto.subtle is
@@ -596,6 +646,20 @@ thread_local! {
     /// Held file pickers awaiting driver file lists. Drop = cancel.
     static FILE_HOLDS: RefCell<HashMap<u64, FileHold>> =
         RefCell::new(HashMap::new());
+    /// Deferred raw-eval retries: an eval callback that wants to re-run its
+    /// script raw CANNOT call evaluate_javascript re-entrantly (servo drains
+    /// evaluation results while holding the evaluator RefCell, so a nested
+    /// borrow panics). The retry is queued here and drained by the main loop
+    /// right after spin_event_loop returns.
+    static DEFERRED_EVALS: RefCell<Vec<DeferredEval>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A queued raw re-run for an eval whose composed wrapper could not produce
+/// a completion value (statement list / compile failure).
+struct DeferredEval {
+    tab_id: u64,
+    js: String,
+    req: u64,
 }
 
 struct FrameDelegate {
@@ -990,6 +1054,78 @@ fn jsvalue_to_json(
         Ok(v) => conv(v),
         Err(e) => serde_json::json!({ "__error": format!("{e:?}") }),
     }
+}
+
+/// Driver eval plumbing: run the engine-composed wrapper, parse its JSON
+/// report, and hand the driver ONE envelope: {__error:..} (queued as a
+/// deferred raw re-run when the composed script could not compile - a
+/// statement list has no completion value), {__pending:slot} (promise
+/// parked; the driver polls window.__browserr_int.evals[slot]), or the
+/// script's own completion value (the __value envelope is unwrapped here).
+fn run_wrapped_eval(
+    webview: servo::WebView,
+    wrapped: String,
+    raw: String,
+    req: u64,
+    tab_id: u64,
+    shared: std::sync::Arc<Shared>,
+) {
+    webview.evaluate_javascript(wrapped, move |result| {
+        let value = jsvalue_to_json(result);
+        // The wrapper always returns a JSON string. Anything else is an
+        // engine-level failure (WebViewNotReady etc.) - report it as an
+        // error so the driver raises EvalError instead of hanging.
+        let parsed: serde_json::Value = match &value {
+            serde_json::Value::String(s) => {
+                serde_json::from_str(s).unwrap_or(serde_json::json!({ "__error": s.clone() }))
+            }
+            other => serde_json::json!({ "__error": other.to_string() }),
+        };
+        if parsed.get("__error").is_some() {
+            // The composed script produced no completion value (statement
+            // list) or failed to compile: queue a RAW re-run for the main
+            // loop. Calling evaluate_javascript here would nest inside the
+            // evaluator's RefCell borrow and panic (servo drains evaluation
+            // results under borrow_mut).
+            DEFERRED_EVALS.with(|q| {
+                let mut q = q.borrow_mut();
+                if q.len() < 64 {
+                    q.push(DeferredEval {
+                        tab_id,
+                        js: raw,
+                        req,
+                    });
+                }
+            });
+            return;
+        }
+        let final_value = if parsed.get("__pending").is_some() {
+            // Promise parked: hand the slot to the driver, it polls.
+            parsed
+        } else if let Some(err) = parsed.get("__error") {
+            serde_json::json!({ "__error": err.as_str().unwrap_or("eval failed") })
+        } else if let Some(v) = parsed.get("__value") {
+            // Unwrap the wrapper envelope: the driver sees the script's own
+            // completion value, same shape as the old page-side adapter.
+            v.clone()
+        } else {
+            parsed
+        };
+        shared.updates.lock().unwrap().push(Update {
+            tab: tab_id,
+            url: None,
+            title: None,
+            history: None,
+            icon: None,
+            cursor: None,
+            eval: Some((req, final_value)),
+            console: None,
+            intercept: None,
+            auth: None,
+            filepicker: None,
+        });
+        shared.pump.kick();
+    });
 }
 
 /// Linux: the GL context is created through EGL even for CPU (llvmpipe)
@@ -2305,26 +2441,18 @@ fn main() {
                                 {
                                     eprintln!("engine: eval (tab {tab_id})");
                                     if let Some(req) = v["id"].as_u64() {
-                                        let shared = shared.clone();
-                                        tab.webview.evaluate_javascript(
+                                        // Route through the engine-composed
+                                        // wrapper: promise parking + CSP
+                                        // safety (no page eval() anywhere).
+                                        let slot = INTERCEPT_ID.fetch_add(1, Ordering::SeqCst);
+                                        let wrapped = compose_eval_wrapper(slot, js);
+                                        run_wrapped_eval(
+                                            tab.webview.clone(),
+                                            wrapped,
                                             js.to_string(),
-                                            move |result| {
-                                                let value = jsvalue_to_json(result);
-                                                shared.updates.lock().unwrap().push(Update {
-                                                    tab: tab_id,
-                                                    url: None,
-                                                    title: None,
-                                                    history: None,
-                                                    icon: None,
-                                                    cursor: None,
-                                                    eval: Some((req, value)),
-                                                    console: None,
-                                                    intercept: None,
-                                                    auth: None,
-                                                    filepicker: None,
-                                                });
-                                                shared.pump.kick();
-                                            },
+                                            req,
+                                            tab_id,
+                                            shared.clone(),
                                         );
                                     } else {
                                         tab.webview.evaluate_javascript(js.to_string(), |_| {});
@@ -2984,6 +3112,33 @@ fn main() {
         });
 
         servo.spin_event_loop();
+
+        // Drain deferred raw evals (queued by eval callbacks during the
+        // spin; running them here is safe - the evaluator is not borrowed).
+        let deferred: Vec<DeferredEval> =
+            DEFERRED_EVALS.with(|q| q.borrow_mut().drain(..).collect());
+        for d in deferred {
+            if let Some(tab) = tabs.get(&d.tab_id) {
+                let shared2 = shared.clone();
+                tab.webview.evaluate_javascript(d.js, move |result| {
+                    let value = jsvalue_to_json(result);
+                    shared2.updates.lock().unwrap().push(Update {
+                        tab: d.tab_id,
+                        url: None,
+                        title: None,
+                        history: None,
+                        icon: None,
+                        cursor: None,
+                        eval: Some((d.req, value)),
+                        console: None,
+                        intercept: None,
+                        auth: None,
+                        filepicker: None,
+                    });
+                    shared2.pump.kick();
+                });
+            }
+        }
 
         tick += 1;
         if tick.is_multiple_of(60) {

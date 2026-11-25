@@ -116,7 +116,7 @@ try:
     out = d.read_outcome()
     assert any("Missing:" in a for a in out["alerts"]), (
         res, out, d.eval_js("document.getElementById('err').textContent"),
-        d.eval_js("window.__browserr_submit_seen"))
+        d.eval_js("(window.__browserr_int||{}).submit_seen"))
     assert "form-flow.html" in out["url"], out["url"]
     names = {f["name"] for f in out["invalid_fields"]}
     assert {"email", "zip"} <= names, out["invalid_fields"]
