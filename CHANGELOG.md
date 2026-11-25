@@ -6,6 +6,18 @@ scheme is [SemVer](https://semver.org/). Releases are published by CI on
 tag push; asset archives and full diffs live on the
 [releases page](https://github.com/Omodaka9375/browserr/releases).
 
+## [Unreleased]
+
+### Fixed
+
+- **`$websocket` filter rules never matched.** A WebSocket handshake
+  reaches the request hook as an http(s) fetch with no destination, so
+  the filter list classified it as `other`, the same as fetch() and XHR.
+  The hook now reads the handshake's `Upgrade: websocket` header and
+  checks it as a `websocket` request, so EasyList's `$websocket` rules
+  apply and `*$websocket` blocks every socket a page opens.
+  `tests/test_adblock_websocket.py`.
+
 ## [1.0.1] - 2026-11-24
 
 ### Added

@@ -34,12 +34,27 @@ pub(crate) fn adblock_matches(
         return false;
     }
     let url = load.request().url.to_string();
-    let req_type = format!("{:?}", load.request().destination).to_lowercase();
+    let req_type = request_type(load.request());
     let method = load.request().method.as_str();
     let Ok(req) = ::adblock::request::Request::new(&url, "", &req_type, method) else {
         return false;
     };
     engine.check_network_request(&req).should_block()
+}
+
+/// The EasyList request type of a load. A WebSocket handshake reaches the
+/// embedder as an http(s) fetch with no destination, the same as fetch()
+/// and XHR, so it is told apart by its `Upgrade: websocket` header.
+fn request_type(request: &servo::WebResourceRequest) -> String {
+    let is_websocket = request
+        .headers
+        .get(http::header::UPGRADE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
+    if is_websocket {
+        return "websocket".to_string();
+    }
+    format!("{:?}", request.destination).to_lowercase()
 }
 
 const EASYLIST_URL: &str = "https://easylist.to/easylist/easylist.txt";
